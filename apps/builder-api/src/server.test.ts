@@ -35,6 +35,10 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(flows.statusCode, 200);
   assert.equal(flows.json().flows[0].id, "reference-interview");
 
+  const adapters = await app.inject({ method: "GET", url: "/llm-adapters" });
+  assert.equal(adapters.statusCode, 200);
+  assert.ok(adapters.json().adapters.some((adapter: { id: string; status: string }) => adapter.id === "openrouter" && adapter.status === "supported"));
+
   const loaded = await app.inject({ method: "GET", url: "/flows/reference-interview" });
   assert.equal(loaded.statusCode, 200);
   assert.equal(loaded.json().flow.id, "reference-interview");

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod, metadados visuais, manifestos de agrupamento e análise estruturada de flow; o `codegen-langgraph` gera runtimes Python LangGraph + FastAPI a partir de flows, bundles por manifesto e apps FastAPI compartilhados para manifestos multiagente.
+Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod, metadados visuais, manifestos de agrupamento, catálogo de adapters LLM e análise estruturada de flow; o `codegen-langgraph` gera runtimes Python LangGraph + FastAPI a partir de flows, bundles por manifesto e apps FastAPI compartilhados para manifestos multiagente.
 
 ---
 
@@ -24,6 +24,7 @@ packages/
 |------|-------|------------|
 | Alterar formato do flow | `flow-spec/src/index.ts` | `../docs/adr/0014-flow-spec-canonico-em-zod-typescript.md` |
 | Alterar análise estruturada de flow | `flow-spec/src/index.ts` | `../flows/CONTEXT.md` |
+| Alterar catálogo de adapters LLM | `flow-spec/src/index.ts` e `codegen-langgraph/src/pythonRuntimeTemplates.ts` | `../docs/adr/0010-cliente-llm-com-adaptador-selecionado-no-codegen.md` |
 | Alterar formato do manifesto | `flow-spec/src/index.ts` | `../docs/adr/0001-separar-fluxo-de-agente-e-manifesto-de-agrupamento.md` |
 | Validar flow via CLI | `flow-spec/src/cli.ts` | `flow-spec/src/index.ts` |
 | Alterar geração de runtime | `codegen-langgraph/src/index.ts` e `codegen-langgraph/src/pythonRuntimeTemplates.ts` | `../flows/CONTEXT.md` |

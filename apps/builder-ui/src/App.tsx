@@ -44,6 +44,7 @@ import {
   generateRuntimeManifest,
   importFlowWorkspace,
   listFlows,
+  listLlmAdapters,
   listSandboxes,
   loadFlow,
   loadPromptAsset,
@@ -71,6 +72,7 @@ import type {
   FlowSummary,
   FlowWorkspaceExport,
   GenerateResult,
+  LlmAdapterCatalogItem,
   LoadedFlow,
   LoadedRuntimeManifest,
   MessageView,
@@ -130,6 +132,7 @@ export default function App() {
   const [schemaContent, setSchemaContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
   const [schemaDirty, setSchemaDirty] = useState(false);
+  const [llmAdapters, setLlmAdapters] = useState<LlmAdapterCatalogItem[]>([]);
   const [status, setStatus] = useState<StatusState>({
     kind: "idle",
     message: "Builder API aguardando ação.",
@@ -156,6 +159,18 @@ export default function App() {
   useEffect(() => {
     void refreshFlows();
   }, [refreshFlows]);
+
+  useEffect(() => {
+    async function run() {
+      try {
+        const result = await listLlmAdapters();
+        setLlmAdapters(result.adapters);
+      } catch (error) {
+        setStatus({ kind: "error", message: errorMessage(error) });
+      }
+    }
+    void run();
+  }, []);
 
   const refreshRuntimeManifest = useCallback(async (silent = false) => {
     if (!silent) {
@@ -382,6 +397,33 @@ export default function App() {
     updateDraft((flow) => ({ ...flow, [key]: value }));
   }
 
+  function updateFlowLlmAdapter(adapterId: string) {
+    updateDraft((flow) => {
+      const adapter = llmAdapters.find((item) => item.id === adapterId);
+      return {
+        ...flow,
+        llm: {
+          ...flow.llm,
+          adapter: adapterId,
+          model: adapter?.defaultModel || flow.llm.model,
+          apiKeyEnv: adapter?.apiKeyEnv ?? flow.llm.apiKeyEnv,
+          baseUrlEnv: adapter?.baseUrlEnv ?? flow.llm.baseUrlEnv,
+          mockEnv: adapter?.mockEnv ?? flow.llm.mockEnv,
+        },
+      };
+    });
+  }
+
+  function updateFlowLlmField(key: keyof AgentFlow["llm"], value: string) {
+    updateDraft((flow) => ({
+      ...flow,
+      llm: {
+        ...flow.llm,
+        [key]: value.trim() ? value : undefined,
+      },
+    }));
+  }
+
   function updateNodeField(nodeId: string, key: keyof FlowNode, value: string) {
     updateDraft((flow) => ({
       ...flow,
@@ -392,6 +434,46 @@ export default function App() {
         return {
           ...node,
           [key]: value.trim() ? value : undefined,
+        };
+      }),
+    }));
+  }
+
+  function updateNodeLlmAdapter(nodeId: string, adapterId: string) {
+    updateDraft((flow) => {
+      const adapter = llmAdapters.find((item) => item.id === adapterId);
+      return {
+        ...flow,
+        nodes: flow.nodes.map((node) => {
+          if (node.id !== nodeId) {
+            return node;
+          }
+          return {
+            ...node,
+            llm: {
+              ...(node.llm ?? {}),
+              adapter: adapterId,
+              model: adapter?.defaultModel ?? String(node.llm?.model ?? flow.llm.model),
+            },
+          };
+        }),
+      };
+    });
+  }
+
+  function updateNodeLlmField(nodeId: string, key: "model", value: string) {
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        return {
+          ...node,
+          llm: {
+            ...(node.llm ?? { adapter: flow.llm.adapter }),
+            [key]: value.trim() ? value : undefined,
+          },
         };
       }),
     }));
@@ -1148,8 +1230,13 @@ export default function App() {
               <NodeInspector
                 flow={draftFlow}
                 node={selectedNode}
+                llmAdapters={llmAdapters}
                 onFlowFieldChange={updateFlowField}
+                onFlowLlmAdapterChange={updateFlowLlmAdapter}
+                onFlowLlmFieldChange={updateFlowLlmField}
                 onNodeFieldChange={updateNodeField}
+                onNodeLlmAdapterChange={updateNodeLlmAdapter}
+                onNodeLlmFieldChange={updateNodeLlmField}
                 onNodeIdChange={handleNodeIdChange}
                 onNodeTypeChange={handleNodeTypeChange}
                 onDeleteNode={handleDeleteNode}
@@ -1233,16 +1320,26 @@ export default function App() {
 function NodeInspector({
   flow,
   node,
+  llmAdapters,
   onFlowFieldChange,
+  onFlowLlmAdapterChange,
+  onFlowLlmFieldChange,
   onNodeFieldChange,
+  onNodeLlmAdapterChange,
+  onNodeLlmFieldChange,
   onNodeIdChange,
   onNodeTypeChange,
   onDeleteNode,
 }: {
   flow: AgentFlow | null;
   node: FlowNode | null;
+  llmAdapters: LlmAdapterCatalogItem[];
   onFlowFieldChange: <K extends keyof Pick<AgentFlow, "name" | "version">>(key: K, value: AgentFlow[K]) => void;
+  onFlowLlmAdapterChange: (adapterId: string) => void;
+  onFlowLlmFieldChange: (key: keyof AgentFlow["llm"], value: string) => void;
   onNodeFieldChange: (nodeId: string, key: keyof FlowNode, value: string) => void;
+  onNodeLlmAdapterChange: (nodeId: string, adapterId: string) => void;
+  onNodeLlmFieldChange: (nodeId: string, key: "model", value: string) => void;
   onNodeIdChange: (currentId: string, nextValue: string) => void;
   onNodeTypeChange: (nodeId: string, type: string) => void;
   onDeleteNode: (nodeId: string) => void;
@@ -1255,6 +1352,9 @@ function NodeInspector({
       </div>
     );
   }
+  const adapterOptions = llmAdapterOptions(llmAdapters, flow.llm.adapter);
+  const nodeAdapterOptions = llmAdapterOptions(llmAdapters, String(node.llm?.adapter ?? flow.llm.adapter));
+  const isLlmNode = node.type === "llm_prompt" || node.type === "llm_structured";
   return (
     <div className="inspector-body">
       <div className="edit-group">
@@ -1265,6 +1365,33 @@ function NodeInspector({
         <label>
           <span>Versão</span>
           <input value={flow.version} onChange={(event) => onFlowFieldChange("version", event.target.value)} />
+        </label>
+        <label>
+          <span>Adapter LLM</span>
+          <select value={flow.llm.adapter} onChange={(event) => onFlowLlmAdapterChange(event.target.value)}>
+            {adapterOptions.map((adapter) => (
+              <option value={adapter.id} key={adapter.id} disabled={adapter.status !== "supported"}>
+                {adapter.label}
+                {adapter.status !== "supported" ? " (planejado)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Modelo LLM</span>
+          <input value={flow.llm.model} onChange={(event) => onFlowLlmFieldChange("model", event.target.value)} />
+        </label>
+        <label>
+          <span>API key env</span>
+          <input value={flow.llm.apiKeyEnv ?? ""} onChange={(event) => onFlowLlmFieldChange("apiKeyEnv", event.target.value)} />
+        </label>
+        <label>
+          <span>Base URL env</span>
+          <input value={flow.llm.baseUrlEnv ?? ""} onChange={(event) => onFlowLlmFieldChange("baseUrlEnv", event.target.value)} />
+        </label>
+        <label>
+          <span>Mock env</span>
+          <input value={flow.llm.mockEnv ?? ""} onChange={(event) => onFlowLlmFieldChange("mockEnv", event.target.value)} />
         </label>
       </div>
       <div className="node-title">
@@ -1324,6 +1451,31 @@ function NodeInspector({
               ))}
             </select>
           </label>
+          {isLlmNode ? (
+            <>
+              <label>
+                <span>Adapter do nó</span>
+                <select
+                  value={String(node.llm?.adapter ?? flow.llm.adapter)}
+                  onChange={(event) => onNodeLlmAdapterChange(node.id, event.target.value)}
+                >
+                  {nodeAdapterOptions.map((adapter) => (
+                    <option value={adapter.id} key={adapter.id} disabled={adapter.status !== "supported"}>
+                      {adapter.label}
+                      {adapter.status !== "supported" ? " (planejado)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Modelo do nó</span>
+                <input
+                  value={String(node.llm?.model ?? flow.llm.model)}
+                  onChange={(event) => onNodeLlmFieldChange(node.id, "model", event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
           <label>
             <span>Handler</span>
             <input value={node.handler ?? ""} onChange={(event) => onNodeFieldChange(node.id, "handler", event.target.value)} />
@@ -2027,6 +2179,30 @@ function parseSandboxPort(value: string): number | undefined {
     throw new Error("Porta do sandbox deve ser um inteiro entre 1024 e 65535.");
   }
   return port;
+}
+
+function llmAdapterOptions(adapters: LlmAdapterCatalogItem[], selectedAdapter: string): LlmAdapterCatalogItem[] {
+  const selected = selectedAdapter.trim();
+  if (!selected) {
+    return adapters;
+  }
+  if (adapters.some((adapter) => adapter.id === selected)) {
+    return adapters;
+  }
+  return [
+    ...adapters,
+    {
+      id: selected,
+      label: selected,
+      status: "supported",
+      protocol: "openai-responses",
+      defaultModel: "",
+      apiKeyEnv: "OPENAI_API_KEY",
+      baseUrlEnv: "OPENAI_BASE_URL",
+      mockEnv: "MOCK_LLM",
+      notes: "Adapter carregado a partir do flow atual.",
+    },
+  ];
 }
 
 function isFlowWorkspaceExport(value: unknown): value is FlowWorkspaceExport {

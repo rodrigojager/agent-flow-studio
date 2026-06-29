@@ -1,4 +1,4 @@
-import type { AgentFlow } from "@agent-flow-builder/flow-spec";
+import { findLlmAdapter, isSupportedLlmAdapter, type AgentFlow } from "@agent-flow-builder/flow-spec";
 
 export interface RuntimeFile {
   relativePath: string;
@@ -14,6 +14,8 @@ interface RuntimeNodeConfig {
   stage?: string;
   handler?: string;
   promptFile?: string;
+  llmAdapter?: string;
+  llmModel?: string;
 }
 
 interface RuntimeRouteCondition {
@@ -71,8 +73,14 @@ function assertSupportedRuntime(flow: AgentFlow): void {
     throw new Error(`Contrato não suportado pelo gerador: ${flow.api.contract}`);
   }
   const adapter = flow.llm.adapter.toLowerCase();
-  if (!["openai", "openai-compatible", "openrouter"].includes(adapter)) {
+  if (!isSupportedLlmAdapter(adapter)) {
     throw new Error(`Adaptador LLM ainda não suportado pelo gerador Python: ${flow.llm.adapter}`);
+  }
+  for (const node of flow.nodes) {
+    const nodeAdapter = node.llm?.adapter?.toLowerCase();
+    if (nodeAdapter && !isSupportedLlmAdapter(nodeAdapter)) {
+      throw new Error(`Adaptador LLM do nó ${node.id} ainda não suportado pelo gerador Python: ${node.llm?.adapter}`);
+    }
   }
 }
 
@@ -149,6 +157,8 @@ function runtimeNodeConfig(flow: AgentFlow, node: FlowNode, defaultPromptPath: s
     stage: node.stage,
     handler: node.handler,
     promptFile: basename(prompt?.path ?? defaultPromptPath),
+    llmAdapter: node.llm?.adapter,
+    llmModel: node.llm?.model,
   };
 }
 
@@ -973,7 +983,7 @@ class SafetyGate:
 
 function renderLlm(flow: AgentFlow): string {
   const adapter = flow.llm.adapter.toLowerCase();
-  const defaultBaseUrl = adapter === "openrouter" ? "https://openrouter.ai/api/v1" : "";
+  const defaultBaseUrl = findLlmAdapter(adapter)?.defaultBaseUrl ?? "";
   return `import json
 import time
 from dataclasses import dataclass
@@ -1004,7 +1014,11 @@ class LLMClient:
         user_message: str,
         context: dict[str, Any],
         recent_messages: list[dict[str, str]],
+        adapter: str | None = None,
+        model: str | None = None,
     ) -> LLMResult:
+        selected_adapter = (adapter or self.settings.llm_adapter).strip()
+        selected_model = (model or self.settings.openai_model).strip()
         if self.settings.mock_llm:
             return LLMResult(
                 text=(
@@ -1012,12 +1026,13 @@ class LLMClient:
                     f"Você disse: {user_message}"
                 ),
                 provider="mock",
-                model="mock",
+                model=selected_model or "mock",
                 attempts=1,
             )
 
         client_kwargs: dict[str, Any] = {"api_key": self.settings.openai_api_key}
-        base_url = self.settings.openai_base_url.strip() or ${pyString(defaultBaseUrl)}
+        default_base_urls = {"openrouter": "https://openrouter.ai/api/v1"}
+        base_url = self.settings.openai_base_url.strip() or default_base_urls.get(selected_adapter.lower(), ${pyString(defaultBaseUrl)})
         if base_url:
             client_kwargs["base_url"] = base_url
         client = OpenAI(**client_kwargs)
@@ -1039,13 +1054,13 @@ class LLMClient:
         for attempt in range(1, max_attempts + 1):
             try:
                 response = client.responses.create(
-                    model=self.settings.openai_model,
+                    model=selected_model,
                     input=messages,
                 )
                 return LLMResult(
                     text=(response.output_text or "").strip() or "Sem resposta do modelo.",
-                    provider=self.settings.llm_adapter,
-                    model=self.settings.openai_model,
+                    provider=selected_adapter,
+                    model=selected_model,
                     attempts=attempt,
                 )
             except Exception as exc:
@@ -1251,6 +1266,8 @@ def build_graph(
                     "node_id": node_id,
                 },
                 recent_messages=state.get("recent_messages", []),
+                adapter=config.get("llmAdapter"),
+                model=config.get("llmModel"),
             )
             return mark_node(state, node_id, {
                 "assistant_message": {"code": "ECHO", "text": result.text},

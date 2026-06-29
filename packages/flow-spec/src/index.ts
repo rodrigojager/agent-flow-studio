@@ -32,6 +32,96 @@ export const LlmConfigSchema = z.object({
   mockEnv: z.string().min(1).optional(),
 });
 
+export type LlmAdapterStatus = "supported" | "planned";
+
+export interface LlmAdapterCatalogItem {
+  id: string;
+  label: string;
+  status: LlmAdapterStatus;
+  protocol: "openai-responses";
+  defaultModel: string;
+  apiKeyEnv: string;
+  baseUrlEnv?: string;
+  mockEnv: string;
+  defaultBaseUrl?: string;
+  notes: string;
+}
+
+export const LLM_ADAPTER_CATALOG: LlmAdapterCatalogItem[] = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    status: "supported",
+    protocol: "openai-responses",
+    defaultModel: "gpt-4.1-mini",
+    apiKeyEnv: "OPENAI_API_KEY",
+    baseUrlEnv: "OPENAI_BASE_URL",
+    mockEnv: "MOCK_LLM",
+    notes: "Adaptador padrão para a API da OpenAI.",
+  },
+  {
+    id: "openai-compatible",
+    label: "OpenAI-compatible",
+    status: "supported",
+    protocol: "openai-responses",
+    defaultModel: "gpt-4.1-mini",
+    apiKeyEnv: "OPENAI_API_KEY",
+    baseUrlEnv: "OPENAI_BASE_URL",
+    mockEnv: "MOCK_LLM",
+    notes: "Gateway compatível com o SDK OpenAI, configurado por base URL.",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    status: "supported",
+    protocol: "openai-responses",
+    defaultModel: "openai/gpt-4.1-mini",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrlEnv: "OPENROUTER_BASE_URL",
+    mockEnv: "MOCK_LLM",
+    defaultBaseUrl: "https://openrouter.ai/api/v1",
+    notes: "Gateway OpenRouter usando protocolo compatível com OpenAI.",
+  },
+  {
+    id: "opencode-go",
+    label: "opencode Go",
+    status: "planned",
+    protocol: "openai-responses",
+    defaultModel: "default",
+    apiKeyEnv: "OPENCODE_GO_API_KEY",
+    baseUrlEnv: "OPENCODE_GO_BASE_URL",
+    mockEnv: "MOCK_LLM",
+    notes: "Entrada planejada no catálogo; ainda não é emitida pelo codegen Python.",
+  },
+  {
+    id: "opencode-zen",
+    label: "opencode Zen",
+    status: "planned",
+    protocol: "openai-responses",
+    defaultModel: "default",
+    apiKeyEnv: "OPENCODE_ZEN_API_KEY",
+    baseUrlEnv: "OPENCODE_ZEN_BASE_URL",
+    mockEnv: "MOCK_LLM",
+    notes: "Entrada planejada no catálogo; ainda não é emitida pelo codegen Python.",
+  },
+];
+
+export function llmAdapterCatalog(): LlmAdapterCatalogItem[] {
+  return LLM_ADAPTER_CATALOG.map((adapter) => ({ ...adapter }));
+}
+
+export function findLlmAdapter(adapterId: string): LlmAdapterCatalogItem | undefined {
+  return LLM_ADAPTER_CATALOG.find((adapter) => adapter.id === adapterId.toLowerCase());
+}
+
+export function supportedLlmAdapterIds(): string[] {
+  return LLM_ADAPTER_CATALOG.filter((adapter) => adapter.status === "supported").map((adapter) => adapter.id);
+}
+
+export function isSupportedLlmAdapter(adapterId: string): boolean {
+  return findLlmAdapter(adapterId)?.status === "supported";
+}
+
 export const NodePositionSchema = z.object({
   x: z.number(),
   y: z.number(),
@@ -220,6 +310,8 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
   const nodeCounts = new Map<string, number>();
   const endpointIds = new Set(["start", "end"]);
 
+  validateLlmAdapter(flow.llm.adapter, "llm.adapter", add);
+
   for (const prompt of flow.prompts) {
     if (promptIds.has(prompt.id)) {
       add({
@@ -306,6 +398,18 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
         path: `nodes.${node.id}.outputSchema`,
         nodeId: node.id,
         assetId: node.outputSchema,
+      });
+    }
+    if (node.llm?.adapter) {
+      validateLlmAdapter(node.llm.adapter, `nodes.${node.id}.llm.adapter`, add, node.id);
+    }
+    if (node.llm?.apiKeyEnv || node.llm?.baseUrlEnv || node.llm?.mockEnv) {
+      add({
+        severity: "warning",
+        code: "node_llm_env_override_not_emitted",
+        message: `Nó ${node.id} declara env vars de LLM, mas o runtime gerado carrega credenciais no nível do flow.`,
+        path: `nodes.${node.id}.llm`,
+        nodeId: node.id,
       });
     }
     if (node.type === "safety_gate" && !node.stage) {
@@ -483,6 +587,34 @@ function summarizeAnalysis(flow: AgentFlow, diagnostics: FlowDiagnostic[]): Flow
     warnings: diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length,
     infos: diagnostics.filter((diagnostic) => diagnostic.severity === "info").length,
   };
+}
+
+function validateLlmAdapter(
+  adapterId: string,
+  path: string,
+  add: (diagnostic: FlowDiagnostic) => void,
+  nodeId?: string,
+): void {
+  const adapter = findLlmAdapter(adapterId);
+  if (!adapter) {
+    add({
+      severity: "error",
+      code: "unknown_llm_adapter",
+      message: `Adaptador LLM desconhecido: ${adapterId}.`,
+      path,
+      nodeId,
+    });
+    return;
+  }
+  if (adapter.status !== "supported") {
+    add({
+      severity: "error",
+      code: "planned_llm_adapter",
+      message: `Adaptador LLM ainda não suportado pelo codegen: ${adapterId}.`,
+      path,
+      nodeId,
+    });
+  }
 }
 
 function traverse(start: string, outgoing: Map<string, string[]>): Set<string> {

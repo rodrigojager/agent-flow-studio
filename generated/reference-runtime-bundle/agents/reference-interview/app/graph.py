@@ -10,7 +10,7 @@ from app.safety import SafetyGate
 from app.settings import Settings
 
 
-NODE_CONFIGS = json.loads("[\n  {\n    \"id\": \"start_node\",\n    \"type\": \"start\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"input_safety_check\",\n    \"type\": \"safety_gate\",\n    \"stage\": \"input\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"llm_step\",\n    \"type\": \"llm_prompt\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"output_safety_check\",\n    \"type\": \"safety_gate\",\n    \"stage\": \"output\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"deterministic_gate\",\n    \"type\": \"code\",\n    \"handler\": \"deterministic_gate\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"finish_node\",\n    \"type\": \"end\",\n    \"promptFile\": \"system.md\"\n  }\n]")
+NODE_CONFIGS = json.loads("[\n  {\n    \"id\": \"start_node\",\n    \"type\": \"start\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"input_safety_check\",\n    \"type\": \"safety_gate\",\n    \"stage\": \"input\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"llm_step\",\n    \"type\": \"llm_prompt\",\n    \"promptFile\": \"system.md\",\n    \"llmAdapter\": \"openai\",\n    \"llmModel\": \"gpt-4.1-mini\"\n  },\n  {\n    \"id\": \"output_safety_check\",\n    \"type\": \"safety_gate\",\n    \"stage\": \"output\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"deterministic_gate\",\n    \"type\": \"code\",\n    \"handler\": \"deterministic_gate\",\n    \"promptFile\": \"system.md\"\n  },\n  {\n    \"id\": \"finish_node\",\n    \"type\": \"end\",\n    \"promptFile\": \"system.md\"\n  }\n]")
 NODE_CONFIG_BY_ID = {item["id"]: item for item in NODE_CONFIGS}
 RAW_ACTION_ROUTE_MAP = json.loads("{\n  \"start\": \"start_node\",\n  \"turn\": \"input_safety_check\",\n  \"finish\": \"finish_node\"\n}")
 DEFAULT_ACTION_ROUTE = "start_node"
@@ -187,6 +187,8 @@ def build_graph(
                     "node_id": node_id,
                 },
                 recent_messages=state.get("recent_messages", []),
+                adapter=config.get("llmAdapter"),
+                model=config.get("llmModel"),
             )
             return mark_node(state, node_id, {
                 "assistant_message": {"code": "ECHO", "text": result.text},

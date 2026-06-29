@@ -15,12 +15,13 @@
 - Persistência pública com SQLAlchemy.
 - Checkpointer LangGraph com fallback in-memory para testes e opção Postgres para ambiente real.
 - Cache quente Redis com fallback in-memory.
-- LLMClient OpenAI/OpenAI-compatible com mock determinístico.
+- LLMClient OpenAI/OpenAI-compatible/OpenRouter com mock determinístico.
 - Safety Gate simples de entrada e saída.
 - API key simples por header.
 - Dockerfile, Docker Compose, `.env.example` e migration SQL do baseline.
 - Flow de referência em `flows/reference-interview/agent.flow.json`.
 - Flow Spec inicial em Zod/TypeScript.
+- Flow Spec expõe catálogo canônico de adapters LLM com OpenAI, OpenAI-compatible, OpenRouter e entradas planejadas para opencode Go/Zen.
 - Codegen em TypeScript gerando runtime Python executável em `generated/reference-interview-runtime/`.
 - Validação mínima de equivalência do baseline: o runtime manual e o runtime gerado exercitam o mesmo contrato `/sessions`, idempotência, transcript, eventos, safety e fluxo LangGraph de referência.
 - Verificação automatizada de paridade estrutural em `tools/verify_runtime_parity.py`, comparando flow spec, OpenAPI, schemas principais, metadata e cenários normalizados entre baseline manual e runtime gerado.
@@ -30,13 +31,16 @@
 - Flow Spec expõe análise estruturada de flows com diagnósticos de grafo, referências, nós, arestas e compatibilidade inicial de codegen.
 - Builder API lê e salva prompts Markdown e schemas JSON referenciados pelo flow, com validação de path dentro do diretório do flow e validação JSON para schemas.
 - Builder API retorna validação visual rica com diagnósticos estruturados, contagem de erros/avisos e checagem de assets referenciados.
+- Builder API expõe catálogo de adapters LLM via `/llm-adapters`.
 - Builder API exporta e importa pacotes JSON versionados de workspace de flow, contendo `agent.flow.json`, prompts e schemas referenciados, com proteção contra conflito e path traversal.
 - Builder UI possui aba `Arquivos` para editar prompts e schemas referenciados pelo flow antes de validar, gerar ou iniciar sandbox.
 - Builder UI permite exportar e importar workspace de flow pela toolbar, salvando alterações pendentes antes de exportar.
 - Builder UI possui aba `Validação` para exibir diagnósticos estruturados e navegar para nós, arestas, prompts ou schemas afetados.
+- Builder UI permite editar adapter/modelo/env vars do LLM padrão do flow e adapter/modelo de nós LLM.
 - Builder UI permite criar, remover, mover, conectar e reconectar nós/arestas no canvas, com posições persistidas no `agent.flow.json`.
 - Flow Spec aceita `position` opcional em nós para preservar layout visual sem afetar o runtime gerado.
 - Codegen LangGraph monta o grafo gerado a partir dos nós e arestas do `agent.flow.json`, com handlers por tipo de nó e eventos baseados nos nós realmente executados.
+- Codegen LangGraph valida adapters LLM pelo catálogo, gera runtime apenas com o adapter selecionado e respeita overrides de adapter/modelo em nós LLM.
 - Codegen possui teste end-to-end com flow simplificado sem `deterministic_gate`, gerando runtime temporário e executando pytest no artefato gerado.
 - Flow Spec define `RuntimeManifest` para agrupamento monoagente ou multiagente, com agentes referenciando `agent.flow.json` por `flowPath`.
 - Codegen gera bundle a partir de `runtime.manifest.json`, com metadados, README e um runtime independente por agente em `generated/reference-runtime-bundle/agents/`.
@@ -76,7 +80,6 @@ Também foi validado localmente:
 - Codegen genérico para recursos avançados e execução real de todos os tipos futuros de nós.
 - Edição visual avançada de prompts/schemas e ergonomia refinada do canvas.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
-- Catálogo real de adapters além do OpenAI/OpenAI-compatible.
 - Safety Harness completo.
 - Jobs pós-finalização com worker.
 - Streaming.

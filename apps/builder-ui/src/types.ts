@@ -71,6 +71,25 @@ export interface AgentFlow {
   edges: FlowEdge[];
 }
 
+export type LlmAdapterStatus = "supported" | "planned";
+
+export interface LlmAdapterCatalogItem {
+  id: string;
+  label: string;
+  status: LlmAdapterStatus;
+  protocol: string;
+  defaultModel: string;
+  apiKeyEnv: string;
+  baseUrlEnv?: string;
+  mockEnv: string;
+  defaultBaseUrl?: string;
+  notes: string;
+}
+
+export interface LlmAdapterCatalogResult {
+  adapters: LlmAdapterCatalogItem[];
+}
+
 export interface LoadedFlow {
   path: string;
   flow: AgentFlow;

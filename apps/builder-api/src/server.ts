@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import fastify, { type FastifyInstance } from "fastify";
-import { agentFlowJsonSchema, runtimeManifestJsonSchema } from "@agent-flow-builder/flow-spec";
+import { agentFlowJsonSchema, llmAdapterCatalog, runtimeManifestJsonSchema } from "@agent-flow-builder/flow-spec";
 import { SandboxManager } from "./sandbox.ts";
 import {
   exportFlowWorkspace,
@@ -93,6 +93,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   }));
 
   app.get("/flow-schema", async () => agentFlowJsonSchema());
+
+  app.get("/llm-adapters", async () => ({
+    adapters: llmAdapterCatalog(),
+  }));
 
   app.get("/runtime-manifest-schema", async () => runtimeManifestJsonSchema());
 

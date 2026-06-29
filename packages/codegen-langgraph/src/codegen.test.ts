@@ -1,5 +1,6 @@
+import { strict as assert } from "node:assert";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -44,10 +45,10 @@ test("generated runtime supports a simple flow without deterministic gate", asyn
       cache: "memory",
     },
     llm: {
-      adapter: "openai",
-      model: "gpt-4.1-mini",
-      apiKeyEnv: "OPENAI_API_KEY",
-      baseUrlEnv: "OPENAI_BASE_URL",
+      adapter: "openrouter",
+      model: "openai/gpt-4.1-mini",
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      baseUrlEnv: "OPENROUTER_BASE_URL",
       mockEnv: "MOCK_LLM",
     },
     state: {
@@ -70,7 +71,7 @@ test("generated runtime supports a simple flow without deterministic gate", asyn
     nodes: [
       { id: "start_node", type: "start" },
       { id: "input_safety_check", type: "safety_gate", stage: "input" },
-      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system", llm: { adapter: "openrouter", model: "openai/gpt-4.1-mini" } },
       { id: "finish_node", type: "end" },
     ],
     edges: [
@@ -86,6 +87,9 @@ test("generated runtime supports a simple flow without deterministic gate", asyn
   };
 
   await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /\\"llmAdapter\\": \\"openrouter\\"/);
+  assert.match(graph, /\\"llmModel\\": \\"openai\/gpt-4\.1-mini\\"/);
   await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
     cwd: outDir,
     timeout: 120000,

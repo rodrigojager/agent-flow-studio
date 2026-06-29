@@ -6,6 +6,7 @@ import type {
   FlowWorkspaceImportResult,
   GenerateResult,
   AgentFlow,
+  LlmAdapterCatalogResult,
   LoadedFlow,
   MessageView,
   LoadedRuntimeManifest,
@@ -30,6 +31,10 @@ export async function listFlows(): Promise<FlowSummary[]> {
 
 export async function loadFlow(flowId: string): Promise<LoadedFlow> {
   return request<LoadedFlow>(`/flows/${encodeURIComponent(flowId)}`);
+}
+
+export async function listLlmAdapters(): Promise<LlmAdapterCatalogResult> {
+  return request<LlmAdapterCatalogResult>("/llm-adapters");
 }
 
 export async function saveFlow(flowId: string, flow: AgentFlow): Promise<LoadedFlow> {
