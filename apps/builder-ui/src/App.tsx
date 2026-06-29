@@ -4,10 +4,18 @@ import {
   Controls,
   MarkerType,
   MiniMap,
+  Position,
   ReactFlow,
   type Edge,
+  type EdgeMouseHandler,
+  type IsValidConnection,
   type Node,
   type NodeMouseHandler,
+  type OnConnect,
+  type OnEdgesDelete,
+  type OnNodeDrag,
+  type OnNodesDelete,
+  type OnReconnect,
 } from "@xyflow/react";
 import {
   AlertCircle,
@@ -49,6 +57,7 @@ import {
 import type {
   AgentFlow,
   EventView,
+  FlowEdge,
   FlowNode,
   FlowSummary,
   GenerateResult,
@@ -68,14 +77,18 @@ interface StatusState {
   message: string;
 }
 
-const palette = [
+const nodeTypeOptions = [
   { type: "start", label: "Start", icon: Play },
   { type: "safety_gate", label: "Safety", icon: ShieldCheck },
   { type: "llm_prompt", label: "LLM", icon: Sparkles },
+  { type: "llm_structured", label: "LLM JSON", icon: FileJson },
   { type: "code", label: "Code", icon: Code2 },
   { type: "switch", label: "Switch", icon: GitBranch },
+  { type: "human_input", label: "Humano", icon: Send },
   { type: "end", label: "End", icon: CircleDot },
-];
+] as const;
+
+const palette = nodeTypeOptions;
 
 export default function App() {
   const [flows, setFlows] = useState<FlowSummary[]>([]);
@@ -84,6 +97,7 @@ export default function App() {
   const [draftFlow, setDraftFlow] = useState<AgentFlow | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [sandbox, setSandbox] = useState<SandboxStatus | null>(null);
   const [runtimeSession, setRuntimeSession] = useState<SessionView | null>(null);
@@ -139,6 +153,7 @@ export default function App() {
         setDraftFlow(loaded.flow);
         setIsDirty(false);
         setSelectedNodeId("start");
+        setSelectedEdgeId("");
         setSelectedPromptId(loaded.flow.prompts[0]?.id ?? "");
         setSelectedSchemaId(loaded.flow.schemas[0]?.id ?? "");
         setPromptContent("");
@@ -160,6 +175,8 @@ export default function App() {
         setLoadedFlow(null);
         setDraftFlow(null);
         setIsDirty(false);
+        setSelectedNodeId("");
+        setSelectedEdgeId("");
         setStatus({ kind: "error", message: errorMessage(error) });
       }
     }
@@ -221,7 +238,10 @@ export default function App() {
     };
   }, [selectedFlowId, selectedSchemaId]);
 
-  const graph = useMemo(() => toReactFlowGraph(draftFlow ?? undefined, selectedNodeId), [draftFlow, selectedNodeId]);
+  const graph = useMemo(
+    () => toReactFlowGraph(draftFlow ?? undefined, selectedNodeId, selectedEdgeId),
+    [draftFlow, selectedNodeId, selectedEdgeId],
+  );
 
   const selectedNode = useMemo(() => {
     if (!draftFlow || !selectedNodeId) {
@@ -237,8 +257,24 @@ export default function App() {
     return draftFlow.nodes.find((node) => node.id === selectedNodeId) ?? null;
   }, [draftFlow, selectedNodeId]);
 
+  const selectedEdgeIndex = useMemo(() => edgeIndexFromId(selectedEdgeId), [selectedEdgeId]);
+
+  const selectedEdge = useMemo(() => {
+    if (!draftFlow || selectedEdgeIndex < 0) {
+      return null;
+    }
+    return draftFlow.edges[selectedEdgeIndex] ?? null;
+  }, [draftFlow, selectedEdgeIndex]);
+
   const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
     setSelectedNodeId(node.id);
+    setSelectedEdgeId("");
+    setInspectorTab("properties");
+  }, []);
+
+  const onEdgeClick: EdgeMouseHandler = useCallback((_event, edge) => {
+    setSelectedNodeId("");
+    setSelectedEdgeId(edge.id);
     setInspectorTab("properties");
   }, []);
 
@@ -248,7 +284,9 @@ export default function App() {
         return current;
       }
       const next = mutator(current);
-      setIsDirty(true);
+      if (next !== current) {
+        setIsDirty(true);
+      }
       return next;
     });
   }
@@ -271,6 +309,194 @@ export default function App() {
       }),
     }));
   }
+
+  function handleAddNode(type: string) {
+    if (!draftFlow) {
+      return;
+    }
+    const node = createDefaultNode(draftFlow, type);
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: [...flow.nodes, node],
+    }));
+    setSelectedNodeId(node.id);
+    setSelectedEdgeId("");
+    setInspectorTab("properties");
+    setStatus({ kind: "ok", message: `Nó ${node.id} criado.` });
+  }
+
+  function handleNodeIdChange(currentId: string, nextValue: string) {
+    const nextId = nextValue.trim();
+    if (isVirtualNodeId(currentId) || nextId === currentId) {
+      return;
+    }
+    if (!isValidNodeId(nextId)) {
+      setStatus({ kind: "error", message: "ID do nó deve usar letras, números, _ ou -." });
+      return;
+    }
+    updateDraft((flow) => {
+      if (flow.nodes.some((node) => node.id === nextId) || isVirtualNodeId(nextId)) {
+        setStatus({ kind: "error", message: `Já existe um nó com ID ${nextId}.` });
+        return flow;
+      }
+      setSelectedNodeId(nextId);
+      setStatus({ kind: "ok", message: `Nó ${currentId} renomeado para ${nextId}.` });
+      return {
+        ...flow,
+        nodes: flow.nodes.map((node) => (node.id === currentId ? { ...node, id: nextId } : node)),
+        edges: flow.edges.map((edge) => ({
+          ...edge,
+          from: edge.from === currentId ? nextId : edge.from,
+          to: edge.to === currentId ? nextId : edge.to,
+        })),
+      };
+    });
+  }
+
+  function handleNodeTypeChange(nodeId: string, type: string) {
+    if (isVirtualNodeId(nodeId)) {
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.map((node) => (node.id === nodeId ? applyNodeTypeDefaults({ ...node, type }, flow) : node)),
+    }));
+  }
+
+  function handleDeleteNode(nodeId: string) {
+    if (isVirtualNodeId(nodeId)) {
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.filter((node) => node.id !== nodeId),
+      edges: flow.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId),
+    }));
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
+    setStatus({ kind: "ok", message: `Nó ${nodeId} removido.` });
+  }
+
+  function handleDeleteEdge(edgeIndex: number) {
+    if (edgeIndex < 0) {
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      edges: flow.edges.filter((_edge, index) => index !== edgeIndex),
+    }));
+    setSelectedEdgeId("");
+    setStatus({ kind: "ok", message: "Aresta removida." });
+  }
+
+  function updateEdgeField(edgeIndex: number, key: keyof FlowEdge, value: string) {
+    updateDraft((flow) => ({
+      ...flow,
+      edges: flow.edges.map((edge, index) => {
+        if (index !== edgeIndex) {
+          return edge;
+        }
+        return {
+          ...edge,
+          [key]: value.trim() ? value : undefined,
+        };
+      }),
+    }));
+  }
+
+  function updateEdgeEndpoint(edgeIndex: number, key: "from" | "to", value: string) {
+    updateDraft((flow) => ({
+      ...flow,
+      edges: flow.edges.map((edge, index) => {
+        if (index !== edgeIndex) {
+          return edge;
+        }
+        const nextEdge = { ...edge, [key]: value };
+        if (!nextEdge.from || !nextEdge.to || nextEdge.from === nextEdge.to) {
+          setStatus({ kind: "error", message: "Aresta precisa ligar dois nós diferentes." });
+          return edge;
+        }
+        setSelectedEdgeId(edgeId(nextEdge, index));
+        return nextEdge;
+      }),
+    }));
+  }
+
+  const handleConnect: OnConnect = useCallback((connection) => {
+    if (!connection.source || !connection.target || connection.source === connection.target) {
+      setStatus({ kind: "error", message: "Aresta precisa ligar dois nós diferentes." });
+      return;
+    }
+    updateDraft((flow) => {
+      if (flow.edges.some((edge) => edge.from === connection.source && edge.to === connection.target && !edge.condition)) {
+        setStatus({ kind: "error", message: "Essa aresta já existe sem condição." });
+        return flow;
+      }
+      setStatus({ kind: "ok", message: `Aresta ${connection.source} -> ${connection.target} criada.` });
+      return {
+        ...flow,
+        edges: [...flow.edges, { from: connection.source!, to: connection.target! }],
+      };
+    });
+  }, []);
+
+  const handleReconnect: OnReconnect = useCallback((oldEdge, connection) => {
+    const edgeIndex = edgeIndexFromId(oldEdge.id);
+    if (edgeIndex < 0 || !connection.source || !connection.target || connection.source === connection.target) {
+      setStatus({ kind: "error", message: "Reconexão inválida." });
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      edges: flow.edges.map((edge, index) =>
+        index === edgeIndex ? { ...edge, from: connection.source!, to: connection.target! } : edge,
+      ),
+    }));
+    setSelectedEdgeId(edgeId({ from: connection.source, to: connection.target }, edgeIndex));
+    setStatus({ kind: "ok", message: `Aresta reconectada para ${connection.source} -> ${connection.target}.` });
+  }, []);
+
+  const handleNodesDelete: OnNodesDelete = useCallback((nodes) => {
+    const nodeIds = nodes.map((node) => node.id).filter((id) => !isVirtualNodeId(id));
+    if (!nodeIds.length) {
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.filter((node) => !nodeIds.includes(node.id)),
+      edges: flow.edges.filter((edge) => !nodeIds.includes(edge.from) && !nodeIds.includes(edge.to)),
+    }));
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
+  }, []);
+
+  const handleEdgesDelete: OnEdgesDelete = useCallback((edges) => {
+    const edgeIndexes = new Set(edges.map((edge) => edgeIndexFromId(edge.id)).filter((index) => index >= 0));
+    if (!edgeIndexes.size) {
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      edges: flow.edges.filter((_edge, index) => !edgeIndexes.has(index)),
+    }));
+    setSelectedEdgeId("");
+  }, []);
+
+  const handleNodeDragStop: OnNodeDrag = useCallback((_event, node) => {
+    if (isVirtualNodeId(node.id)) {
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.map((flowNode) =>
+        flowNode.id === node.id ? { ...flowNode, position: { x: node.position.x, y: node.position.y } } : flowNode,
+      ),
+    }));
+  }, []);
+
+  const isConnectionValid: IsValidConnection = useCallback((connection) => {
+    return Boolean(connection.source && connection.target && connection.source !== connection.target);
+  }, []);
 
   async function handleSaveFlow() {
     if (!selectedFlowId || !draftFlow) {
@@ -552,7 +778,14 @@ export default function App() {
               {palette.map((item) => {
                 const Icon = item.icon;
                 return (
-                  <button type="button" className="palette-item" key={item.type} title={item.type}>
+                  <button
+                    type="button"
+                    className="palette-item"
+                    key={item.type}
+                    title={item.type}
+                    onClick={() => handleAddNode(item.type)}
+                    disabled={!draftFlow}
+                  >
                     <Icon size={18} aria-hidden="true" />
                     <span>{item.label}</span>
                   </button>
@@ -588,9 +821,22 @@ export default function App() {
             minZoom={0.35}
             maxZoom={1.5}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
+            onPaneClick={() => {
+              setSelectedNodeId("");
+              setSelectedEdgeId("");
+            }}
+            onConnect={handleConnect}
+            onReconnect={handleReconnect}
+            onNodesDelete={handleNodesDelete}
+            onEdgesDelete={handleEdgesDelete}
+            onNodeDragStop={handleNodeDragStop}
+            isValidConnection={isConnectionValid}
             nodesDraggable
-            nodesConnectable={false}
+            nodesConnectable
+            edgesReconnectable
             elementsSelectable
+            deleteKeyCode={["Backspace", "Delete"]}
           >
             <Background gap={18} size={1} />
             <MiniMap pannable zoomable nodeStrokeWidth={3} />
@@ -627,12 +873,26 @@ export default function App() {
           </div>
 
           {inspectorTab === "properties" ? (
-            <NodeInspector
-              flow={draftFlow}
-              node={selectedNode}
-              onFlowFieldChange={updateFlowField}
-              onNodeFieldChange={updateNodeField}
-            />
+            selectedEdge ? (
+              <EdgeInspector
+                flow={draftFlow}
+                edge={selectedEdge}
+                edgeIndex={selectedEdgeIndex}
+                onEdgeFieldChange={updateEdgeField}
+                onEdgeEndpointChange={updateEdgeEndpoint}
+                onDeleteEdge={handleDeleteEdge}
+              />
+            ) : (
+              <NodeInspector
+                flow={draftFlow}
+                node={selectedNode}
+                onFlowFieldChange={updateFlowField}
+                onNodeFieldChange={updateNodeField}
+                onNodeIdChange={handleNodeIdChange}
+                onNodeTypeChange={handleNodeTypeChange}
+                onDeleteNode={handleDeleteNode}
+              />
+            )
           ) : inspectorTab === "files" ? (
             <AssetsPanel
               flow={draftFlow}
@@ -689,11 +949,17 @@ function NodeInspector({
   node,
   onFlowFieldChange,
   onNodeFieldChange,
+  onNodeIdChange,
+  onNodeTypeChange,
+  onDeleteNode,
 }: {
   flow: AgentFlow | null;
   node: FlowNode | null;
   onFlowFieldChange: <K extends keyof Pick<AgentFlow, "name" | "version">>(key: K, value: AgentFlow[K]) => void;
   onNodeFieldChange: (nodeId: string, key: keyof FlowNode, value: string) => void;
+  onNodeIdChange: (currentId: string, nextValue: string) => void;
+  onNodeTypeChange: (nodeId: string, type: string) => void;
+  onDeleteNode: (nodeId: string) => void;
 }) {
   if (!flow || !node) {
     return (
@@ -725,6 +991,20 @@ function NodeInspector({
         </dl>
       ) : (
         <div className="edit-group">
+          <label>
+            <span>ID</span>
+            <input value={node.id} onChange={(event) => onNodeIdChange(node.id, event.target.value)} />
+          </label>
+          <label>
+            <span>Tipo</span>
+            <select value={node.type} onChange={(event) => onNodeTypeChange(node.id, event.target.value)}>
+              {nodeTypeOptions.map((option) => (
+                <option value={option.type} key={option.type}>
+                  {option.type}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             <span>Descrição</span>
             <textarea
@@ -771,6 +1051,9 @@ function NodeInspector({
               <option value="context">context</option>
             </select>
           </label>
+          <button type="button" className="command-button danger full-width" onClick={() => onDeleteNode(node.id)}>
+            Remover nó
+          </button>
         </div>
       )}
       {node.promptId ? (
@@ -780,6 +1063,74 @@ function NodeInspector({
         </div>
       ) : null}
       {node.llm ? <pre className="mini-json">{JSON.stringify(node.llm, null, 2)}</pre> : null}
+    </div>
+  );
+}
+
+function EdgeInspector({
+  flow,
+  edge,
+  edgeIndex,
+  onEdgeFieldChange,
+  onEdgeEndpointChange,
+  onDeleteEdge,
+}: {
+  flow: AgentFlow | null;
+  edge: FlowEdge;
+  edgeIndex: number;
+  onEdgeFieldChange: (edgeIndex: number, key: keyof FlowEdge, value: string) => void;
+  onEdgeEndpointChange: (edgeIndex: number, key: "from" | "to", value: string) => void;
+  onDeleteEdge: (edgeIndex: number) => void;
+}) {
+  if (!flow) {
+    return (
+      <div className="empty-state">
+        <AlertCircle size={18} aria-hidden="true" />
+        <span>Nenhuma aresta selecionada.</span>
+      </div>
+    );
+  }
+  const endpoints = ["start", ...flow.nodes.map((node) => node.id), "end"];
+  return (
+    <div className="inspector-body">
+      <div className="node-title">
+        <strong>
+          {edge.from} {"->"} {edge.to}
+        </strong>
+        <span>aresta</span>
+      </div>
+      <div className="edit-group">
+        <label>
+          <span>Origem</span>
+          <select value={edge.from} onChange={(event) => onEdgeEndpointChange(edgeIndex, "from", event.target.value)}>
+            {endpoints.map((endpoint) => (
+              <option value={endpoint} key={endpoint}>
+                {endpoint}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Destino</span>
+          <select value={edge.to} onChange={(event) => onEdgeEndpointChange(edgeIndex, "to", event.target.value)}>
+            {endpoints.map((endpoint) => (
+              <option value={endpoint} key={endpoint}>
+                {endpoint}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Condição</span>
+          <input
+            value={edge.condition ?? ""}
+            onChange={(event) => onEdgeFieldChange(edgeIndex, "condition", event.target.value)}
+          />
+        </label>
+        <button type="button" className="command-button danger full-width" onClick={() => onDeleteEdge(edgeIndex)}>
+          Remover aresta
+        </button>
+      </div>
     </div>
   );
 }
@@ -1008,38 +1359,111 @@ function Field({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function toReactFlowGraph(flow: AgentFlow | undefined, selectedNodeId: string): { nodes: Node[]; edges: Edge[] } {
+function toReactFlowGraph(flow: AgentFlow | undefined, selectedNodeId: string, selectedEdgeId: string): { nodes: Node[]; edges: Edge[] } {
   if (!flow) {
     return { nodes: [], edges: [] };
   }
   const nodeIds = ["start", ...flow.nodes.map((node) => node.id), "end"];
   const nodes: Node[] = nodeIds.map((id, index) => {
     const flowNode = flow.nodes.find((node) => node.id === id);
-    const isVirtual = id === "start" || id === "end";
+    const isVirtual = isVirtualNodeId(id);
     return {
       id,
-      position: {
-        x: index * 230,
-        y: index % 2 === 0 ? 140 : 300,
-      },
+      position: flowNode?.position ?? defaultNodePosition(index),
       data: {
         label: isVirtual ? id.toUpperCase() : id,
         sublabel: flowNode?.type ?? "graph",
       },
       selected: selectedNodeId === id,
       className: `flow-node ${isVirtual ? "virtual" : flowNode?.type ?? ""}`,
+      draggable: !isVirtual,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
     };
   });
 
   const edges: Edge[] = flow.edges.map((edge, index) => ({
-    id: `${edge.from}-${edge.to}-${index}`,
+    id: edgeId(edge, index),
     source: edge.from,
     target: edge.to,
     label: edge.condition,
+    selected: selectedEdgeId === edgeId(edge, index),
     markerEnd: { type: MarkerType.ArrowClosed },
     className: edge.condition ? "conditional-edge" : "plain-edge",
   }));
   return { nodes, edges };
+}
+
+function createDefaultNode(flow: AgentFlow, type: string): FlowNode {
+  const id = uniqueNodeId(flow, type);
+  return applyNodeTypeDefaults(
+    {
+      id,
+      type,
+      position: defaultNodePosition(flow.nodes.length + 1),
+    },
+    flow,
+  );
+}
+
+function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
+  const next: FlowNode = {
+    id: node.id,
+    type: node.type,
+    description: node.description,
+    position: node.position,
+  };
+  if (node.type === "llm_prompt" || node.type === "llm_structured") {
+    next.promptId = node.promptId ?? flow.prompts[0]?.id;
+    next.outputSchema = node.outputSchema;
+    next.llm = node.llm ?? { adapter: flow.llm.adapter, model: flow.llm.model };
+  }
+  if (node.type === "safety_gate") {
+    next.stage = node.stage ?? "input";
+  }
+  if (node.type === "code") {
+    next.handler = node.handler ?? "handler_name";
+  }
+  if (node.type === "switch") {
+    next.handler = node.handler ?? "switch_condition";
+  }
+  return next;
+}
+
+function uniqueNodeId(flow: AgentFlow, type: string): string {
+  const used = new Set(["start", "end", ...flow.nodes.map((node) => node.id)]);
+  const base = type.replace(/[^a-zA-Z0-9_-]/g, "_") || "node";
+  let index = flow.nodes.length + 1;
+  let candidate = `${base}_${index}`;
+  while (used.has(candidate)) {
+    index += 1;
+    candidate = `${base}_${index}`;
+  }
+  return candidate;
+}
+
+function defaultNodePosition(index: number) {
+  return {
+    x: index * 230,
+    y: index % 2 === 0 ? 140 : 300,
+  };
+}
+
+function isVirtualNodeId(id: string): boolean {
+  return id === "start" || id === "end";
+}
+
+function isValidNodeId(id: string): boolean {
+  return /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+function edgeId(edge: Pick<FlowEdge, "from" | "to">, index: number): string {
+  return `edge-${index}-${edge.from}-${edge.to}`;
+}
+
+function edgeIndexFromId(id: string): number {
+  const match = /^edge-(\d+)-/.exec(id);
+  return match ? Number(match[1]) : -1;
 }
 
 function validationMessage(result: ValidationResult): string {

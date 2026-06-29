@@ -28,6 +28,10 @@ export interface FlowNode {
   handler?: string;
   stage?: string;
   llm?: Record<string, unknown>;
+  position?: {
+    x: number;
+    y: number;
+  };
 }
 
 export interface FlowEdge {

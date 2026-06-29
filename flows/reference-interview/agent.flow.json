@@ -51,12 +51,20 @@
     {
       "id": "start_node",
       "type": "start",
-      "description": "Emite a primeira mensagem do agente de referência."
+      "description": "Emite a primeira mensagem do agente de referência.",
+      "position": {
+        "x": 230,
+        "y": 300
+      }
     },
     {
       "id": "input_safety_check",
       "type": "safety_gate",
-      "stage": "input"
+      "stage": "input",
+      "position": {
+        "x": 460,
+        "y": 140
+      }
     },
     {
       "id": "llm_step",
@@ -65,22 +73,38 @@
       "llm": {
         "adapter": "openai",
         "model": "gpt-4.1-mini"
+      },
+      "position": {
+        "x": 690,
+        "y": 300
       }
     },
     {
       "id": "output_safety_check",
       "type": "safety_gate",
-      "stage": "output"
+      "stage": "output",
+      "position": {
+        "x": 920,
+        "y": 140
+      }
     },
     {
       "id": "deterministic_gate",
       "type": "code",
-      "handler": "deterministic_gate"
+      "handler": "deterministic_gate",
+      "position": {
+        "x": 1150,
+        "y": 300
+      }
     },
     {
       "id": "finish_node",
       "type": "end",
-      "description": "Finaliza a sessão manualmente."
+      "description": "Finaliza a sessão manualmente.",
+      "position": {
+        "x": 1380,
+        "y": 140
+      }
     }
   ],
   "edges": [

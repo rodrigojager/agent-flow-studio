@@ -32,6 +32,11 @@ export const LlmConfigSchema = z.object({
   mockEnv: z.string().min(1).optional(),
 });
 
+export const NodePositionSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+});
+
 export const NodeSchema = z
   .object({
     id: z.string().min(1),
@@ -42,6 +47,7 @@ export const NodeSchema = z
     handler: z.string().min(1).optional(),
     stage: z.enum(["input", "output", "context"]).optional(),
     llm: LlmConfigSchema.partial().optional(),
+    position: NodePositionSchema.optional(),
   })
   .passthrough();
 

@@ -141,6 +141,12 @@ button:disabled {
   background: #0d5e52;
 }
 
+.command-button.danger {
+  border-color: #9b2c2c;
+  color: #9b2c2c;
+  background: #fff7f7;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 276px minmax(460px, 1fr) 330px;

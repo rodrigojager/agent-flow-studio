@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod e o `codegen-langgraph` gera o runtime Python LangGraph + FastAPI de referência.
+Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod, incluindo metadados visuais como posição de nós, e o `codegen-langgraph` gera o runtime Python LangGraph + FastAPI de referência.
 
 ---
 

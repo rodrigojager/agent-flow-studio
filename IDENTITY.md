@@ -35,4 +35,4 @@ AGENTES IA/
 
 ## Current Status
 
-Baseline manual, flow spec inicial, Builder API mínima, Builder UI inicial, edição básica persistente de flow/prompts/schemas, sandbox local inicial e codegen Python executável para o agente de referência implementados. Edição visual completa de nós/arestas, sandbox completo, codegen genérico para nós avançados e recursos avançados ainda não foram implementados.
+Baseline manual, flow spec inicial, Builder API mínima, Builder UI inicial, edição persistente de flow/prompts/schemas/nós/arestas, sandbox local inicial e codegen Python executável para o agente de referência implementados. Sandbox completo, codegen genérico para nós avançados, multiagente completo e recursos avançados ainda não foram implementados.
