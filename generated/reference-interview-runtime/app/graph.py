@@ -4,6 +4,7 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, Literal, TypedDict
 from uuid import uuid4
 
@@ -28,6 +29,7 @@ NODE_ROUTE_MAP_RAW = json.loads("{\n  \"input_safety_check\": {\n    \"route_0\"
 NODE_ROUTE_CONDITIONS = json.loads("{\n  \"input_safety_check\": [\n    {\n      \"key\": \"route_0\",\n      \"kind\": \"safety_decision\",\n      \"value\": \"allow\"\n    },\n    {\n      \"key\": \"route_1\",\n      \"kind\": \"safety_blocked\",\n      \"value\": true\n    }\n  ]\n}")
 START_MESSAGE = "Olá! Este é o Agente de Referência. Envie uma mensagem para eu ecoar o fluxo com segurança, LLM e estado."
 CURRENT_DB_SESSION = ContextVar("CURRENT_DB_SESSION", default=None)
+FILES_ROOT = Path(__file__).resolve().parent / "files"
 
 
 @contextmanager
@@ -67,6 +69,8 @@ HTTP_REQUEST_NODE_IDS = _node_ids(node_type="http_request")
 TRANSFORM_JSON_NODE_IDS = _node_ids(node_type="transform_json")
 DATABASE_QUERY_NODE_IDS = _node_ids(node_type="database_query")
 DATABASE_SAVE_NODE_IDS = _node_ids(node_type="database_save")
+FILE_EXTRACT_NODE_IDS = _node_ids(node_type="file_extract")
+RAG_RETRIEVAL_NODE_IDS = _node_ids(node_type="rag_retrieval")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -84,6 +88,8 @@ class ReferenceState(TypedDict, total=False):
     http: dict[str, Any]
     transforms: dict[str, Any]
     database: dict[str, Any]
+    files: dict[str, Any]
+    rag: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -210,6 +216,88 @@ def build_graph(
         updates["database"] = database_results
         if result_path != f"database.{node_id}":
             assign_state_path(updates, state, result_path, result)
+        return mark_node(state, node_id, updates)
+
+    def safe_asset_path(relative_path: str) -> Path:
+        candidate = Path(relative_path or "")
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError("Caminho de arquivo deve ser relativo a app/files e não pode usar '..'.")
+        resolved = (FILES_ROOT / candidate).resolve()
+        root = FILES_ROOT.resolve()
+        if root not in [resolved, *resolved.parents]:
+            raise ValueError("Caminho de arquivo sai de app/files.")
+        return resolved
+
+    def read_asset_text(relative_path: str, max_chars: int) -> dict[str, Any]:
+        path = safe_asset_path(relative_path)
+        if not path.exists() or not path.is_file():
+            return {
+                "ok": False,
+                "source_path": relative_path,
+                "error": "file_not_found",
+            }
+        if path.suffix.lower() == ".pdf":
+            try:
+                from pypdf import PdfReader
+
+                reader = PdfReader(str(path))
+                content = "\n".join(page.extract_text() or "" for page in reader.pages)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "source_path": relative_path,
+                    "error": str(exc),
+                }
+        else:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        content = content[:max_chars]
+        return {
+            "ok": True,
+            "source_path": relative_path,
+            "chars": len(content),
+            "content": content,
+        }
+
+    def chunk_text(content: str, chunk_size: int) -> list[str]:
+        normalized = "\n".join(line.strip() for line in content.splitlines())
+        paragraphs = [part.strip() for part in normalized.split("\n\n") if part.strip()]
+        chunks: list[str] = []
+        current = ""
+        for paragraph in paragraphs or [normalized]:
+            if len(current) + len(paragraph) + 2 <= chunk_size:
+                current = f"{current}\n\n{paragraph}".strip()
+                continue
+            if current:
+                chunks.append(current)
+            while len(paragraph) > chunk_size:
+                chunks.append(paragraph[:chunk_size])
+                paragraph = paragraph[chunk_size:]
+            current = paragraph
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def lexical_score(query: str, text_value: str) -> int:
+        terms = [term for term in query.lower().replace("\n", " ").split(" ") if len(term) >= 3]
+        haystack = text_value.lower()
+        return sum(haystack.count(term) for term in terms)
+
+    def remember_file_result(state: ReferenceState, node_id: str, content_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        file_results = dict(state.get("files") or {})
+        file_results[node_id] = result
+        updates["files"] = file_results
+        if content_path != f"files.{node_id}":
+            assign_state_path(updates, state, content_path, result)
+        return mark_node(state, node_id, updates)
+
+    def remember_rag_result(state: ReferenceState, node_id: str, context_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        rag_results = dict(state.get("rag") or {})
+        rag_results[node_id] = result
+        updates["rag"] = rag_results
+        if context_path != f"rag.{node_id}":
+            assign_state_path(updates, state, context_path, result)
         return mark_node(state, node_id, updates)
 
     def make_start_node(config: dict[str, Any]):
@@ -558,6 +646,82 @@ def build_graph(
 
         return run
 
+    def make_file_extract_node(config: dict[str, Any]):
+        node_id = config["id"]
+        source_path = str(config.get("sourcePath") or "")
+        content_path = str(config.get("contentPath") or f"files.{node_id}")
+        max_chars = int(config.get("maxChars") or 20000)
+
+        def run(state: ReferenceState) -> ReferenceState:
+            try:
+                result_payload = read_asset_text(source_path, max_chars)
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "source_path": source_path,
+                    "error": str(exc),
+                }
+            return remember_file_result(state, node_id, content_path, result_payload)
+
+        return run
+
+    def make_rag_retrieval_node(config: dict[str, Any]):
+        node_id = config["id"]
+        collection_path = str(config.get("collectionPath") or ".")
+        query_path = str(config.get("queryPath") or "user_message")
+        context_path = str(config.get("contextPath") or f"rag.{node_id}")
+        top_k = int(config.get("topK") or 3)
+        chunk_size = int(config.get("chunkSize") or 900)
+        max_chars = int(config.get("maxChars") or 200000)
+
+        def run(state: ReferenceState) -> ReferenceState:
+            query = str(state_path_value(state, query_path) or "")
+            try:
+                root = safe_asset_path(collection_path)
+                if not root.exists():
+                    result_payload = {
+                        "ok": False,
+                        "query": query,
+                        "collection_path": collection_path,
+                        "error": "collection_not_found",
+                    }
+                    return remember_rag_result(state, node_id, context_path, result_payload)
+                files = [root] if root.is_file() else sorted(
+                    path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in {".txt", ".md", ".markdown", ".pdf"}
+                )
+                candidates: list[dict[str, Any]] = []
+                for file_path in files:
+                    relative = file_path.relative_to(FILES_ROOT.resolve()).as_posix()
+                    read_result = read_asset_text(relative, max_chars)
+                    if not read_result.get("ok"):
+                        continue
+                    for index, chunk in enumerate(chunk_text(str(read_result.get("content") or ""), chunk_size)):
+                        candidates.append({
+                            "source_path": relative,
+                            "chunk_index": index,
+                            "score": lexical_score(query, chunk),
+                            "text": chunk,
+                        })
+                candidates.sort(key=lambda item: (-int(item["score"]), item["source_path"], int(item["chunk_index"])))
+                chunks = candidates[:top_k]
+                result_payload = {
+                    "ok": True,
+                    "query": query,
+                    "collection_path": collection_path,
+                    "chunks": chunks,
+                    "chunk_count": len(chunks),
+                }
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "query": query,
+                    "collection_path": collection_path,
+                    "error": str(exc),
+                }
+            return remember_rag_result(state, node_id, context_path, result_payload)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -601,6 +765,10 @@ def build_graph(
             return make_database_query_node(config)
         if node_type == "database_save":
             return make_database_save_node(config)
+        if node_type == "file_extract":
+            return make_file_extract_node(config)
+        if node_type == "rag_retrieval":
+            return make_rag_retrieval_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)

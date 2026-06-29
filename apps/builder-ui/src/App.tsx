@@ -24,11 +24,13 @@ import {
   CircleDot,
   Code2,
   Download,
+  FileText,
   FileJson,
   GitBranch,
   Play,
   Plus,
   RefreshCw,
+  Search,
   Send,
   ShieldCheck,
   Sparkles,
@@ -116,6 +118,8 @@ const nodeTypeOptions = [
   { type: "transform_json", label: "Transform", icon: Boxes },
   { type: "database_query", label: "DB Query", icon: FileJson },
   { type: "database_save", label: "DB Save", icon: Download },
+  { type: "file_extract", label: "Arquivo", icon: FileText },
+  { type: "rag_retrieval", label: "RAG", icon: Search },
   { type: "end", label: "End", icon: CircleDot },
 ] as const;
 
@@ -462,6 +466,22 @@ export default function App() {
         return {
           ...node,
           [key]: value.trim() ? value : undefined,
+        };
+      }),
+    }));
+  }
+
+  function updateNodeNumberField(nodeId: string, key: keyof FlowNode, value: string) {
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const nextValue = Number(value);
+        return {
+          ...node,
+          [key]: value.trim() && Number.isFinite(nextValue) ? nextValue : undefined,
         };
       }),
     }));
@@ -1471,6 +1491,7 @@ export default function App() {
                 onFlowLlmAdapterChange={updateFlowLlmAdapter}
                 onFlowLlmFieldChange={updateFlowLlmField}
                 onNodeFieldChange={updateNodeField}
+                onNodeNumberFieldChange={updateNodeNumberField}
                 onNodeLlmAdapterChange={updateNodeLlmAdapter}
                 onNodeLlmFieldChange={updateNodeLlmField}
                 onNodeIdChange={handleNodeIdChange}
@@ -1574,6 +1595,7 @@ function NodeInspector({
   onFlowLlmAdapterChange,
   onFlowLlmFieldChange,
   onNodeFieldChange,
+  onNodeNumberFieldChange,
   onNodeLlmAdapterChange,
   onNodeLlmFieldChange,
   onNodeIdChange,
@@ -1587,6 +1609,7 @@ function NodeInspector({
   onFlowLlmAdapterChange: (adapterId: string) => void;
   onFlowLlmFieldChange: (key: keyof AgentFlow["llm"], value: string) => void;
   onNodeFieldChange: (nodeId: string, key: keyof FlowNode, value: string) => void;
+  onNodeNumberFieldChange: (nodeId: string, key: keyof FlowNode, value: string) => void;
   onNodeLlmAdapterChange: (nodeId: string, adapterId: string) => void;
   onNodeLlmFieldChange: (nodeId: string, key: "model", value: string) => void;
   onNodeIdChange: (currentId: string, nextValue: string) => void;
@@ -1609,6 +1632,8 @@ function NodeInspector({
   const isTransformNode = node.type === "transform_json";
   const isDatabaseQueryNode = node.type === "database_query";
   const isDatabaseSaveNode = node.type === "database_save";
+  const isFileExtractNode = node.type === "file_extract";
+  const isRagNode = node.type === "rag_retrieval";
   return (
     <div className="inspector-body">
       <div className="edit-group">
@@ -1822,6 +1847,74 @@ function NodeInspector({
               <label>
                 <span>SQL opcional</span>
                 <textarea value={node.query ?? ""} onChange={(event) => onNodeFieldChange(node.id, "query", event.target.value)} rows={3} />
+              </label>
+            </>
+          ) : null}
+          {isFileExtractNode ? (
+            <>
+              <label>
+                <span>Source path</span>
+                <input
+                  value={node.sourcePath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "sourcePath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Content path</span>
+                <input
+                  value={node.contentPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "contentPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Max chars</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={node.maxChars ?? ""}
+                  onChange={(event) => onNodeNumberFieldChange(node.id, "maxChars", event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
+          {isRagNode ? (
+            <>
+              <label>
+                <span>Collection path</span>
+                <input
+                  value={node.collectionPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "collectionPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Query path</span>
+                <input value={node.queryPath ?? ""} onChange={(event) => onNodeFieldChange(node.id, "queryPath", event.target.value)} />
+              </label>
+              <label>
+                <span>Context path</span>
+                <input
+                  value={node.contextPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "contextPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Top K</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={node.topK ?? ""}
+                  onChange={(event) => onNodeNumberFieldChange(node.id, "topK", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Chunk size</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={node.chunkSize ?? ""}
+                  onChange={(event) => onNodeNumberFieldChange(node.id, "chunkSize", event.target.value)}
+                />
               </label>
             </>
           ) : null}
@@ -2628,6 +2721,18 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
     next.dataPath = node.dataPath ?? "assistant_message";
     next.resultPath = node.resultPath ?? `database.${node.id}`;
     next.query = node.query;
+  }
+  if (node.type === "file_extract") {
+    next.sourcePath = node.sourcePath ?? "knowledge.md";
+    next.contentPath = node.contentPath ?? `files.${node.id}`;
+    next.maxChars = node.maxChars ?? 20000;
+  }
+  if (node.type === "rag_retrieval") {
+    next.collectionPath = node.collectionPath ?? ".";
+    next.queryPath = node.queryPath ?? "user_message";
+    next.contextPath = node.contextPath ?? `rag.${node.id}`;
+    next.topK = node.topK ?? 3;
+    next.chunkSize = node.chunkSize ?? 900;
   }
   return next;
 }

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentFlow, RuntimeManifest } from "@agent-flow-builder/flow-spec";
 import { renderPythonMultiAgentBundleFiles } from "./pythonBundleTemplates.ts";
@@ -15,6 +15,7 @@ export async function generateLangGraphRuntime(options: GenerateOptions): Promis
   await rm(outDir, { force: true, recursive: true });
   await mkdir(path.join(outDir, "app", "prompts"), { recursive: true });
   await mkdir(path.join(outDir, "app", "schemas"), { recursive: true });
+  await mkdir(path.join(outDir, "app", "files"), { recursive: true });
   await mkdir(path.join(outDir, ".agent-flow"), { recursive: true });
 
   await writeFile(
@@ -33,10 +34,24 @@ export async function generateLangGraphRuntime(options: GenerateOptions): Promis
     await writeFile(path.join(outDir, "app", "schemas", path.basename(schema.path)), content, "utf-8");
   }
 
+  const filesRoot = path.join(flowRoot, "files");
+  if (await pathExists(filesRoot)) {
+    await cp(filesRoot, path.join(outDir, "app", "files"), { recursive: true, force: true });
+  }
+
   for (const file of renderPythonRuntimeFiles(flow)) {
     const target = path.join(outDir, file.relativePath);
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, file.content, "utf-8");
+  }
+}
+
+async function pathExists(absolutePath: string): Promise<boolean> {
+  try {
+    await access(absolutePath);
+    return true;
+  } catch {
+    return false;
   }
 }
 

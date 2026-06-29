@@ -14,6 +14,8 @@ export const NodeTypeSchema = z.enum([
   "transform_json",
   "database_query",
   "database_save",
+  "file_extract",
+  "rag_retrieval",
 ]);
 
 export const PromptRefSchema = z.object({
@@ -152,6 +154,14 @@ export const NodeSchema = z
     dataPath: z.string().min(1).optional(),
     paramsPath: z.string().min(1).optional(),
     resultPath: z.string().min(1).optional(),
+    sourcePath: z.string().min(1).optional(),
+    contentPath: z.string().min(1).optional(),
+    collectionPath: z.string().min(1).optional(),
+    queryPath: z.string().min(1).optional(),
+    contextPath: z.string().min(1).optional(),
+    topK: z.number().int().positive().max(20).optional(),
+    chunkSize: z.number().int().positive().max(8000).optional(),
+    maxChars: z.number().int().positive().max(1_000_000).optional(),
     maxRows: z.number().int().positive().max(500).optional(),
     timeoutSeconds: z.number().int().positive().max(120).optional(),
     position: NodePositionSchema.optional(),
@@ -554,6 +564,73 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
         });
       }
     }
+    if (node.type === "file_extract") {
+      if (!node.sourcePath) {
+        add({
+          severity: "warning",
+          code: "missing_file_source_path",
+          message: `Nó de arquivo ${node.id} não declara sourcePath.`,
+          path: `nodes.${node.id}.sourcePath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sourcePath && !isSafeRelativePath(node.sourcePath)) {
+        add({
+          severity: "warning",
+          code: "unsafe_file_source_path",
+          message: `sourcePath do nó ${node.id} deve ficar dentro de files/ e não pode usar caminho absoluto ou '..'.`,
+          path: `nodes.${node.id}.sourcePath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.contentPath && !isValidStatePath(node.contentPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_file_content_path",
+          message: `contentPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.contentPath`,
+          nodeId: node.id,
+        });
+      }
+    }
+    if (node.type === "rag_retrieval") {
+      if (!node.collectionPath) {
+        add({
+          severity: "warning",
+          code: "missing_rag_collection_path",
+          message: `Nó RAG ${node.id} não declara collectionPath.`,
+          path: `nodes.${node.id}.collectionPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.collectionPath && !isSafeRelativePath(node.collectionPath)) {
+        add({
+          severity: "warning",
+          code: "unsafe_rag_collection_path",
+          message: `collectionPath do nó ${node.id} deve ficar dentro de files/ e não pode usar caminho absoluto ou '..'.`,
+          path: `nodes.${node.id}.collectionPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.queryPath && !isValidStatePath(node.queryPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_rag_query_path",
+          message: `queryPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.queryPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.contextPath && !isValidStatePath(node.contextPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_rag_context_path",
+          message: `contextPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.contextPath`,
+          nodeId: node.id,
+        });
+      }
+    }
   }
 
   for (const [nodeId, count] of nodeCounts.entries()) {
@@ -738,6 +815,10 @@ function isValidStatePath(value: string): boolean {
 
 function isValidSqlIdentifier(value: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
+
+function isSafeRelativePath(value: string): boolean {
+  return !/^(?:[A-Za-z]:[\\/]|[\\/])/.test(value) && !value.split(/[\\/]+/).includes("..");
 }
 
 function traverse(start: string, outgoing: Map<string, string[]>): Set<string> {

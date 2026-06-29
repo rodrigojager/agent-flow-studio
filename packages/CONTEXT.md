@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod, metadados visuais, manifestos de agrupamento, catálogo de adapters LLM, análise estruturada de flow e nós avançados iniciais; o `codegen-langgraph` gera runtimes Python LangGraph + FastAPI a partir de flows, incluindo nós MVP como LLM, safety, code, switch, human input, `http_request`, `transform_json`, `database_query` e `database_save`, bundles por manifesto e apps FastAPI compartilhados para manifestos multiagente.
+Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod, metadados visuais, manifestos de agrupamento, catálogo de adapters LLM, análise estruturada de flow e nós avançados iniciais; o `codegen-langgraph` gera runtimes Python LangGraph + FastAPI a partir de flows, incluindo nós MVP como LLM, safety, code, switch, human input, `http_request`, `transform_json`, `database_query`, `database_save`, `file_extract` e `rag_retrieval`, bundles por manifesto e apps FastAPI compartilhados para manifestos multiagente.
 
 ---
 
@@ -31,6 +31,7 @@ packages/
 | Alterar execução de nós switch/human_input | `codegen-langgraph/src/pythonRuntimeTemplates.ts` e `codegen-langgraph/src/codegen.test.ts` | `flow-spec/src/index.ts` |
 | Alterar execução de nós HTTP/transform | `flow-spec/src/index.ts`, `codegen-langgraph/src/pythonRuntimeTemplates.ts` e `codegen-langgraph/src/codegen.test.ts` | `../docs/plan.md` |
 | Alterar execução de nós de banco | `flow-spec/src/index.ts`, `codegen-langgraph/src/pythonRuntimeTemplates.ts` e `codegen-langgraph/src/codegen.test.ts` | `../docs/adr/0008-persistencia-dupla-com-checkpointer-e-tabelas-publicas.md` |
+| Alterar execução de nós arquivo/RAG | `codegen-langgraph/src/index.ts`, `flow-spec/src/index.ts`, `codegen-langgraph/src/pythonRuntimeTemplates.ts` e `codegen-langgraph/src/codegen.test.ts` | `../docs/plan.md` |
 | Alterar app multiagente gerado | `codegen-langgraph/src/pythonBundleTemplates.ts` | `../docs/adr/0001-separar-fluxo-de-agente-e-manifesto-de-agrupamento.md` |
 | Alterar testes do codegen | `codegen-langgraph/src/codegen.test.ts` | `codegen-langgraph/src/index.ts` |
 | Alterar CLI de geração | `codegen-langgraph/src/cli.ts` | `codegen-langgraph/src/index.ts` |

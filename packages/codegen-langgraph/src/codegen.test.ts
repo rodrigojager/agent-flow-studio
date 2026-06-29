@@ -391,6 +391,119 @@ def test_database_query_and_save_events(tmp_path):
   });
 });
 
+test("generated runtime executes file extraction and lexical RAG nodes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-rag-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente com RAG");
+  await mkdir(path.join(flowRoot, "files"), { recursive: true });
+  await writeFile(
+    path.join(flowRoot, "files", "knowledge.md"),
+    "# Base de Conhecimento\n\nLangGraph orquestra fluxos stateful com nós e arestas.\n\nFastAPI expõe o agente como API HTTP.",
+    "utf-8",
+  );
+
+  const flow: AgentFlow = {
+    ...simpleFlow("rag-agent", "Agente RAG"),
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      {
+        id: "extract_knowledge",
+        type: "file_extract",
+        sourcePath: "knowledge.md",
+        contentPath: "files.extract_knowledge",
+        maxChars: 20000,
+      },
+      {
+        id: "retrieve_context",
+        type: "rag_retrieval",
+        collectionPath: ".",
+        queryPath: "user_message",
+        contextPath: "rag.retrieve_context",
+        topK: 2,
+        chunkSize: 400,
+      },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "extract_knowledge", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "extract_knowledge", to: "retrieve_context" },
+      { from: "retrieve_context", to: "llm_step" },
+      { from: "llm_step", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  await readFile(path.join(outDir, "app", "files", "knowledge.md"), "utf-8");
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /FILE_EXTRACT_NODE_IDS/);
+  assert.match(graph, /RAG_RETRIEVAL_NODE_IDS/);
+  await writeFile(
+    path.join(outDir, "tests", "test_rag_nodes.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "rag.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_file_extract_and_rag_events(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
+    session_id = create_resp.json()["session"]["session_id"]
+    client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "Como o LangGraph organiza fluxos?"},
+    )
+    assert turn_resp.status_code == 200
+    assert turn_resp.json()["assistant_message"]["code"] == "ECHO"
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    by_type = {item["event_type"]: item for item in events}
+    extracted = by_type["file_extract_completed"]["payload"]["file"]
+    retrieved = by_type["rag_retrieval_completed"]["payload"]["rag"]
+    assert extracted["ok"] is True
+    assert "LangGraph orquestra fluxos" in extracted["content"]
+    assert retrieved["ok"] is True
+    assert retrieved["chunk_count"] >= 1
+    assert "LangGraph" in retrieved["chunks"][0]["text"]
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated multiagent manifest bundle mounts agents in one FastAPI process", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-multi-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

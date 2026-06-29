@@ -10,12 +10,14 @@ from app.graph import (
     CURRENT_DB_SESSION,
     DATABASE_QUERY_NODE_IDS,
     DATABASE_SAVE_NODE_IDS,
+    FILE_EXTRACT_NODE_IDS,
     FINISH_NODE_IDS,
     HUMAN_INPUT_NODE_IDS,
     HTTP_REQUEST_NODE_IDS,
     INPUT_SAFETY_NODE_IDS,
     LLM_NODE_IDS,
     OUTPUT_SAFETY_NODE_IDS,
+    RAG_RETRIEVAL_NODE_IDS,
     START_NODE_IDS,
     SWITCH_NODE_IDS,
     TRANSFORM_JSON_NODE_IDS,
@@ -341,6 +343,14 @@ class ReferenceAgentService:
                 event_type = "database_save_completed"
                 payload["handler"] = "database_save"
                 payload["database"] = (result.get("database") or {}).get(node_id, {})
+            elif node_id in FILE_EXTRACT_NODE_IDS:
+                event_type = "file_extract_completed"
+                payload["handler"] = "file_extract"
+                payload["file"] = (result.get("files") or {}).get(node_id, {})
+            elif node_id in RAG_RETRIEVAL_NODE_IDS:
+                event_type = "rag_retrieval_completed"
+                payload["handler"] = "rag_retrieval"
+                payload["rag"] = (result.get("rag") or {}).get(node_id, {})
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:
