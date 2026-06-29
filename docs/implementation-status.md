@@ -32,6 +32,9 @@
 - Flow Spec aceita `position` opcional em nós para preservar layout visual sem afetar o runtime gerado.
 - Codegen LangGraph monta o grafo gerado a partir dos nós e arestas do `agent.flow.json`, com handlers por tipo de nó e eventos baseados nos nós realmente executados.
 - Codegen possui teste end-to-end com flow simplificado sem `deterministic_gate`, gerando runtime temporário e executando pytest no artefato gerado.
+- Flow Spec define `RuntimeManifest` para agrupamento monoagente ou multiagente, com agentes referenciando `agent.flow.json` por `flowPath`.
+- Codegen gera bundle inicial a partir de `runtime.manifest.json`, com metadados, README e um runtime independente por agente em `generated/reference-runtime-bundle/agents/`.
+- Builder API lê, valida e gera bundles por manifesto via rotas `/runtime-manifest`, `/runtime-manifest/validate` e `/runtime-manifest/generate`.
 - Sandbox local inicial: Builder API inicia/para o runtime gerado, acompanha status/logs, e Builder UI aciona criação de sessão, turnos, finalização, transcript e events.
 
 ## Verificado
@@ -39,9 +42,11 @@
 ```bash
 npm run validate:flow
 npm run codegen:reference
+npm run codegen:manifest
 npm run typecheck
 npm run test:baseline
 npm run test:generated
+npm run test:manifest
 npm run test:builder-api
 npm run test:codegen
 npm run build:builder-ui
@@ -63,7 +68,7 @@ Também foi validado localmente:
 - Teste automatizado de equivalência estrutural mais estrito entre baseline manual, flow spec e runtime gerado.
 - Edição visual avançada de prompts/schemas, validação visual rica, import/export de workspace e ergonomia refinada do canvas.
 - Sandbox visual mais completo, com logs ao vivo, gerenciamento de múltiplos runtimes e seleção de portas.
-- Suporte multiagente completo a partir de `runtime.manifest.json`.
+- Composição multiagente em um único processo FastAPI compartilhado a partir de `runtime.manifest.json`.
 - Catálogo real de adapters além do OpenAI/OpenAI-compatible.
 - Safety Harness completo.
 - Jobs pós-finalização com worker.

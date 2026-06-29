@@ -2,7 +2,7 @@
 
 ## Purpose
 
-API local de desenvolvimento para listar, ler, salvar, validar e gerar flows versionáveis, incluindo prompts e schemas referenciados pelo flow. No MVP, a fonte de verdade continua sendo o filesystem do workspace.
+API local de desenvolvimento para listar, ler, salvar, validar e gerar flows versionáveis, incluindo prompts, schemas e bundles por manifesto. No MVP, a fonte de verdade continua sendo o filesystem do workspace.
 
 ---
 
@@ -29,6 +29,7 @@ builder-api/
 | Alterar salvamento de flows | `src/workspace.ts` | `../../packages/flow-spec/src/index.ts` |
 | Alterar leitura/salvamento de prompts e schemas | `src/workspace.ts` | `src/server.ts` |
 | Alterar geração pelo builder | `src/workspace.ts` | `../../packages/codegen-langgraph/src/index.ts` |
+| Alterar manifesto de runtime | `src/workspace.ts` e `src/server.ts` | `../../runtime.manifest.json` |
 | Alterar sandbox local | `src/sandbox.ts` | `src/server.ts` |
 
 ## Commands

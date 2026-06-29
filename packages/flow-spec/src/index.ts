@@ -109,10 +109,67 @@ export const AgentFlowSchema = z
 
 export type AgentFlow = z.infer<typeof AgentFlowSchema>;
 
+export const RuntimeManifestAgentSchema = z.object({
+  id: z.string().min(1),
+  flowPath: z.string().min(1),
+  routePrefix: z.string().default(""),
+});
+
+export const RuntimeManifestSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    version: z.string().min(1),
+    packaging: z.enum(["monoagent", "multiagent"]),
+    defaultLlm: LlmConfigSchema.optional(),
+    agents: z.array(RuntimeManifestAgentSchema).min(1),
+  })
+  .superRefine((manifest, ctx) => {
+    const ids = new Set<string>();
+    const paths = new Set<string>();
+    for (const agent of manifest.agents) {
+      if (ids.has(agent.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agents", agent.id],
+          message: `Agente duplicado no manifesto: ${agent.id}.`,
+        });
+      }
+      ids.add(agent.id);
+
+      if (paths.has(agent.flowPath)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agents", agent.id, "flowPath"],
+          message: `flowPath duplicado no manifesto: ${agent.flowPath}.`,
+        });
+      }
+      paths.add(agent.flowPath);
+
+      if (agent.routePrefix && !agent.routePrefix.startsWith("/")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agents", agent.id, "routePrefix"],
+          message: "routePrefix deve ser vazio ou começar com '/'.",
+        });
+      }
+    }
+  });
+
+export type RuntimeManifest = z.infer<typeof RuntimeManifestSchema>;
+
 export function parseAgentFlow(value: unknown): AgentFlow {
   return AgentFlowSchema.parse(value);
 }
 
+export function parseRuntimeManifest(value: unknown): RuntimeManifest {
+  return RuntimeManifestSchema.parse(value);
+}
+
 export function agentFlowJsonSchema() {
   return zodToJsonSchema(AgentFlowSchema, "AgentFlow");
+}
+
+export function runtimeManifestJsonSchema() {
+  return zodToJsonSchema(RuntimeManifestSchema, "RuntimeManifest");
 }

@@ -1,0 +1,17 @@
+{
+  "id": "reference-runtime",
+  "name": "Reference Runtime",
+  "version": "0.1.0",
+  "packaging": "monoagent",
+  "generatedKind": "runtime-bundle",
+  "agents": [
+    {
+      "id": "reference-interview",
+      "flowId": "reference-interview",
+      "flowName": "Agente de Referência",
+      "routePrefix": "",
+      "runtimeDir": "agents/reference-interview",
+      "resourceName": "sessions"
+    }
+  ]
+}

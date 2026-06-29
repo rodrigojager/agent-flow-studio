@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { access, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ async function createWorkspaceFixture(): Promise<string> {
     path.join(workspaceRoot, "flows", "reference-interview"),
     { recursive: true },
   );
+  await cp(path.join(REPO_ROOT, "runtime.manifest.json"), path.join(workspaceRoot, "runtime.manifest.json"));
   return workspaceRoot;
 }
 
@@ -70,6 +71,60 @@ test("Builder API rejects generation outside the workspace", async (t) => {
   });
   assert.equal(response.statusCode, 400);
   assert.equal(response.json().error, "workspace_error");
+});
+
+test("Builder API reads, validates and generates a runtime manifest bundle", async (t) => {
+  const workspaceRoot = await createWorkspaceFixture();
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const app = buildApp({ workspaceRoot });
+  t.after(() => app.close());
+
+  const schema = await app.inject({ method: "GET", url: "/runtime-manifest-schema" });
+  assert.equal(schema.statusCode, 200);
+  assert.ok(schema.json().definitions.RuntimeManifest);
+
+  const loaded = await app.inject({ method: "GET", url: "/runtime-manifest" });
+  assert.equal(loaded.statusCode, 200);
+  assert.equal(loaded.json().manifest.id, "reference-runtime");
+
+  const validated = await app.inject({ method: "POST", url: "/runtime-manifest/validate" });
+  assert.equal(validated.statusCode, 200);
+  assert.equal(validated.json().status, "ok");
+  assert.equal(validated.json().agents[0].flowId, "reference-interview");
+
+  const generated = await app.inject({
+    method: "POST",
+    url: "/runtime-manifest/generate",
+    headers: { "content-type": "application/json" },
+    payload: { outDir: "generated/reference-runtime-bundle" },
+  });
+  assert.equal(generated.statusCode, 200);
+  assert.equal(generated.json().status, "ok");
+  assert.equal(generated.json().outDir, "generated/reference-runtime-bundle");
+  await access(
+    path.join(workspaceRoot, "generated", "reference-runtime-bundle", "agents", "reference-interview", "app", "main.py"),
+  );
+  await access(path.join(workspaceRoot, "generated", "reference-runtime-bundle", "bundle.json"));
+
+  await writeFile(
+    path.join(workspaceRoot, "runtime.manifest.json"),
+    JSON.stringify(
+      {
+        id: "broken",
+        name: "Broken",
+        version: "0.1.0",
+        packaging: "monoagent",
+        agents: [{ id: "reference-interview", flowPath: "../escape/agent.flow.json", routePrefix: "" }],
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  const escaped = await app.inject({ method: "POST", url: "/runtime-manifest/validate" });
+  assert.equal(escaped.statusCode, 400);
+  assert.equal(escaped.json().error, "workspace_error");
 });
 
 test("Builder API saves a valid flow and rejects id mismatch", async (t) => {

@@ -1,7 +1,11 @@
 import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { generateLangGraphRuntime } from "@agent-flow-builder/codegen-langgraph";
-import { type AgentFlow, parseAgentFlow } from "@agent-flow-builder/flow-spec";
+import {
+  generateLangGraphRuntime,
+  generateManifestRuntime as generateManifestRuntimeBundle,
+  type ManifestAgentRuntime,
+} from "@agent-flow-builder/codegen-langgraph";
+import { type AgentFlow, parseAgentFlow, parseRuntimeManifest, type RuntimeManifest } from "@agent-flow-builder/flow-spec";
 
 export interface FlowSummary {
   id: string;
@@ -19,11 +23,29 @@ export interface LoadedFlow {
   flowRoot: string;
 }
 
+export interface LoadedRuntimeManifest {
+  manifest: RuntimeManifest;
+  relativePath: string;
+  absolutePath: string;
+}
+
 export interface GenerateResult {
   flowId: string;
   flowPath: string;
   outDir: string;
   absoluteOutDir: string;
+}
+
+export interface GenerateManifestResult {
+  manifestId: string;
+  manifestPath: string;
+  outDir: string;
+  absoluteOutDir: string;
+  agents: Array<{
+    id: string;
+    flowPath: string;
+    routePrefix: string;
+  }>;
 }
 
 export interface SaveFlowResult {
@@ -156,6 +178,48 @@ export async function validateFlow(workspaceRoot: string, flowId: string) {
   };
 }
 
+export async function loadRuntimeManifest(
+  workspaceRoot: string,
+  manifestPath = "runtime.manifest.json",
+): Promise<LoadedRuntimeManifest> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const absolutePath = safeResolve(root, manifestPath);
+  const raw = await readFile(absolutePath, "utf-8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new WorkspaceError("runtime.manifest.json não é JSON válido.", 422, error);
+  }
+
+  try {
+    return {
+      manifest: parseRuntimeManifest(parsed),
+      relativePath: toWorkspaceRelative(root, absolutePath),
+      absolutePath,
+    };
+  } catch (error) {
+    throw new WorkspaceError("runtime.manifest.json não respeita o Runtime Manifest Spec.", 422, error);
+  }
+}
+
+export async function validateRuntimeManifest(workspaceRoot: string) {
+  const loaded = await loadRuntimeManifest(workspaceRoot);
+  const agents = await resolveManifestAgents(workspaceRoot, loaded.manifest);
+  return {
+    status: "ok" as const,
+    id: loaded.manifest.id,
+    name: loaded.manifest.name,
+    version: loaded.manifest.version,
+    packaging: loaded.manifest.packaging,
+    agents: agents.map((agent) => ({
+      id: agent.id,
+      flowId: agent.flow.id,
+      routePrefix: agent.routePrefix,
+    })),
+  };
+}
+
 export async function saveFlow(workspaceRoot: string, flowId: string, value: unknown): Promise<SaveFlowResult> {
   const root = normalizeWorkspaceRoot(workspaceRoot);
   const existing = await loadFlowById(root, flowId);
@@ -273,6 +337,27 @@ function safeResolveFlowAsset(flowRoot: string, assetPath: string): string {
   return resolved;
 }
 
+async function resolveManifestAgents(workspaceRoot: string, manifest: RuntimeManifest): Promise<ManifestAgentRuntime[]> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const agents: ManifestAgentRuntime[] = [];
+  for (const agent of manifest.agents) {
+    const loaded = await loadFlowByPath(root, agent.flowPath);
+    if (loaded.flow.id !== agent.id) {
+      throw new WorkspaceError(
+        `Manifesto referencia agente ${agent.id}, mas o flow ${agent.flowPath} tem id ${loaded.flow.id}.`,
+        422,
+      );
+    }
+    agents.push({
+      id: agent.id,
+      routePrefix: agent.routePrefix,
+      flow: loaded.flow,
+      flowRoot: loaded.flowRoot,
+    });
+  }
+  return agents;
+}
+
 export async function generateRuntime(
   workspaceRoot: string,
   flowId: string,
@@ -293,5 +378,33 @@ export async function generateRuntime(
     flowPath: loaded.relativePath,
     outDir: toWorkspaceRelative(root, absoluteOutDir),
     absoluteOutDir,
+  };
+}
+
+export async function generateRuntimeManifest(
+  workspaceRoot: string,
+  requestedOutDir?: string,
+): Promise<GenerateManifestResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const loaded = await loadRuntimeManifest(root);
+  const agents = await resolveManifestAgents(root, loaded.manifest);
+  const outDir = requestedOutDir?.trim() || `generated/${loaded.manifest.id}-bundle`;
+  const absoluteOutDir = safeResolve(root, outDir);
+  await mkdir(path.dirname(absoluteOutDir), { recursive: true });
+  await generateManifestRuntimeBundle({
+    manifest: loaded.manifest,
+    agents,
+    outDir: absoluteOutDir,
+  });
+  return {
+    manifestId: loaded.manifest.id,
+    manifestPath: loaded.relativePath,
+    outDir: toWorkspaceRelative(root, absoluteOutDir),
+    absoluteOutDir,
+    agents: loaded.manifest.agents.map((agent) => ({
+      id: agent.id,
+      flowPath: agent.flowPath,
+      routePrefix: agent.routePrefix,
+    })),
   };
 }

@@ -1,17 +1,20 @@
 import { pathToFileURL } from "node:url";
 import fastify, { type FastifyInstance } from "fastify";
-import { agentFlowJsonSchema } from "@agent-flow-builder/flow-spec";
+import { agentFlowJsonSchema, runtimeManifestJsonSchema } from "@agent-flow-builder/flow-spec";
 import { SandboxManager } from "./sandbox.ts";
 import {
+  generateRuntimeManifest,
   generateRuntime,
   listFlows,
   loadFlowById,
+  loadRuntimeManifest,
   normalizeWorkspaceRoot,
   readPrompt,
   readSchemaAsset,
   saveFlow,
   savePrompt,
   saveSchemaAsset,
+  validateRuntimeManifest,
   validateFlow,
   WorkspaceError,
 } from "./workspace.ts";
@@ -83,6 +86,33 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   }));
 
   app.get("/flow-schema", async () => agentFlowJsonSchema());
+
+  app.get("/runtime-manifest-schema", async () => runtimeManifestJsonSchema());
+
+  app.get("/runtime-manifest", async () => {
+    const loaded = await loadRuntimeManifest(workspaceRoot);
+    return {
+      path: loaded.relativePath,
+      manifest: loaded.manifest,
+    };
+  });
+
+  app.post("/runtime-manifest/validate", async () => validateRuntimeManifest(workspaceRoot));
+
+  app.post<{ Body: GenerateBody }>("/runtime-manifest/generate", async (request) => {
+    const body = request.body ?? {};
+    if (body.outDir !== undefined && typeof body.outDir !== "string") {
+      throw new WorkspaceError("outDir deve ser string quando informado.", 400);
+    }
+    const result = await generateRuntimeManifest(workspaceRoot, body.outDir);
+    return {
+      status: "ok",
+      manifestId: result.manifestId,
+      manifestPath: result.manifestPath,
+      outDir: result.outDir,
+      agents: result.agents,
+    };
+  });
 
   app.get("/flows", async () => ({
     flows: await listFlows(workspaceRoot),
