@@ -9,11 +9,13 @@ from app.graph import (
     CODE_NODE_IDS,
     FINISH_NODE_IDS,
     HUMAN_INPUT_NODE_IDS,
+    HTTP_REQUEST_NODE_IDS,
     INPUT_SAFETY_NODE_IDS,
     LLM_NODE_IDS,
     OUTPUT_SAFETY_NODE_IDS,
     START_NODE_IDS,
     SWITCH_NODE_IDS,
+    TRANSFORM_JSON_NODE_IDS,
 )
 from app.models import AgentMessage, AgentSession
 from app.settings import Settings
@@ -313,6 +315,14 @@ class ReferenceAgentService:
             elif node_id in HUMAN_INPUT_NODE_IDS:
                 event_type = "human_input_wait"
                 payload["handler"] = "human_input"
+            elif node_id in HTTP_REQUEST_NODE_IDS:
+                event_type = "http_request_completed"
+                payload["handler"] = "http_request"
+                payload["http"] = (result.get("http") or {}).get(node_id, {})
+            elif node_id in TRANSFORM_JSON_NODE_IDS:
+                event_type = "transform_json_completed"
+                payload["handler"] = "transform_json"
+                payload["transform"] = (result.get("transforms") or {}).get(node_id, {})
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:

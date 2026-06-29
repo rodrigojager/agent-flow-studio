@@ -112,6 +112,8 @@ const nodeTypeOptions = [
   { type: "code", label: "Code", icon: Code2 },
   { type: "switch", label: "Switch", icon: GitBranch },
   { type: "human_input", label: "Humano", icon: Send },
+  { type: "http_request", label: "HTTP", icon: Terminal },
+  { type: "transform_json", label: "Transform", icon: Boxes },
   { type: "end", label: "End", icon: CircleDot },
 ] as const;
 
@@ -1601,6 +1603,8 @@ function NodeInspector({
   const nodeAdapterOptions = llmAdapterOptions(llmAdapters, String(node.llm?.adapter ?? flow.llm.adapter));
   const isLlmNode = node.type === "llm_prompt" || node.type === "llm_structured";
   const isCodeNode = node.type === "code";
+  const isHttpNode = node.type === "http_request";
+  const isTransformNode = node.type === "transform_json";
   return (
     <div className="inspector-body">
       <div className="edit-group">
@@ -1727,6 +1731,50 @@ function NodeInspector({
               <span>Handler</span>
               <input value={node.handler ?? ""} onChange={(event) => onNodeFieldChange(node.id, "handler", event.target.value)} />
             </label>
+          ) : null}
+          {isHttpNode ? (
+            <>
+              <label>
+                <span>Método</span>
+                <select value={node.method ?? "GET"} onChange={(event) => onNodeFieldChange(node.id, "method", event.target.value)}>
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                  <option value="DELETE">DELETE</option>
+                </select>
+              </label>
+              <label>
+                <span>URL</span>
+                <input value={node.url ?? ""} onChange={(event) => onNodeFieldChange(node.id, "url", event.target.value)} />
+              </label>
+              <label>
+                <span>Body path</span>
+                <input value={node.bodyPath ?? ""} onChange={(event) => onNodeFieldChange(node.id, "bodyPath", event.target.value)} />
+              </label>
+              <label>
+                <span>Response path</span>
+                <input
+                  value={node.responsePath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "responsePath", event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
+          {isTransformNode ? (
+            <>
+              <label>
+                <span>Input path</span>
+                <input value={node.inputPath ?? ""} onChange={(event) => onNodeFieldChange(node.id, "inputPath", event.target.value)} />
+              </label>
+              <label>
+                <span>Output path</span>
+                <input
+                  value={node.outputPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "outputPath", event.target.value)}
+                />
+              </label>
+            </>
           ) : null}
           <label>
             <span>Stage</span>
@@ -2510,6 +2558,16 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
   }
   if (node.type === "code") {
     next.handler = node.handler ?? "handler_name";
+  }
+  if (node.type === "http_request") {
+    next.method = node.method ?? "POST";
+    next.url = node.url ?? "mock://echo";
+    next.bodyPath = node.bodyPath ?? "user_message";
+    next.responsePath = node.responsePath ?? `http.${node.id}`;
+  }
+  if (node.type === "transform_json") {
+    next.inputPath = node.inputPath ?? "assistant_message";
+    next.outputPath = node.outputPath ?? `transforms.${node.id}`;
   }
   return next;
 }

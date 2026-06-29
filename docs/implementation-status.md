@@ -44,8 +44,9 @@
 - Flow Spec aceita `position` opcional em nós para preservar layout visual sem afetar o runtime gerado.
 - Codegen LangGraph monta o grafo gerado a partir dos nós e arestas do `agent.flow.json`, com handlers por tipo de nó e eventos baseados nos nós realmente executados.
 - Codegen LangGraph executa nós dedicados de `switch` e `human_input`, incluindo condições simples com `and`, comparações de estado e eventos operacionais específicos.
+- Flow Spec, Builder UI e Codegen LangGraph possuem suporte inicial a nós avançados determinísticos `http_request` e `transform_json`, com configuração visual, execução no runtime gerado, suporte a `mock://echo` para testes sem rede e eventos próprios em `/events`.
 - Codegen LangGraph valida adapters LLM pelo catálogo, gera runtime apenas com o adapter selecionado e respeita overrides de adapter/modelo em nós LLM.
-- Codegen possui teste end-to-end com flow simplificado sem `deterministic_gate`, gerando runtime temporário e executando pytest no artefato gerado.
+- Codegen possui testes end-to-end com flow simplificado sem `deterministic_gate`, flow com `switch`/`human_input`, flow com `http_request`/`transform_json` e bundle multiagente, gerando runtimes temporários e executando pytest nos artefatos gerados.
 - Flow Spec define `RuntimeManifest` para agrupamento monoagente ou multiagente, com agentes referenciando `agent.flow.json` por `flowPath`.
 - Codegen gera bundle a partir de `runtime.manifest.json`, com metadados, README e um runtime independente por agente em `generated/reference-runtime-bundle/agents/`.
 - Codegen gera app FastAPI raiz para manifestos `multiagent`, montando os agentes em um único processo pelos `routePrefix` e preservando idempotência por prefixo de rota.
@@ -81,11 +82,11 @@ Também foi validado localmente:
 
 ## Ainda não implementado
 
-- Codegen genérico para recursos avançados e execução real de nós futuros como RAG, PDF, HTTP, banco, approval, scoring e analytics.
+- Codegen genérico para recursos avançados futuros como RAG, PDF, banco, approval, scoring e analytics.
 - Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
 - Jobs pós-finalização com worker.
 - Streaming.
 - Autenticação avançada.
-- Nós avançados como RAG, PDF extract, HTTP request, database query/save, approval gate, scoring e analytics.
+- Nós avançados como RAG, PDF extract, database query/save, approval gate, scoring e analytics.

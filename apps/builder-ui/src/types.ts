@@ -28,6 +28,13 @@ export interface FlowNode {
   handler?: string;
   stage?: string;
   llm?: Record<string, unknown>;
+  method?: string;
+  url?: string;
+  bodyPath?: string;
+  responsePath?: string;
+  inputPath?: string;
+  outputPath?: string;
+  timeoutSeconds?: number;
   position?: {
     x: number;
     y: number;

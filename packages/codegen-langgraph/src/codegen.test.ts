@@ -187,6 +187,106 @@ def test_switch_and_human_input_events(tmp_path):
   });
 });
 
+test("generated runtime executes deterministic HTTP and transform nodes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-integration-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente com integração");
+
+  const flow: AgentFlow = {
+    ...simpleFlow("integration-agent", "Agente Integração"),
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      {
+        id: "echo_http",
+        type: "http_request",
+        method: "POST",
+        url: "mock://echo",
+        bodyPath: "user_message",
+        responsePath: "http.echo_http",
+      },
+      {
+        id: "capture_http",
+        type: "transform_json",
+        inputPath: "http.echo_http.request",
+        outputPath: "transforms.capture_http",
+      },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "llm_step", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "llm_step", to: "echo_http" },
+      { from: "echo_http", to: "capture_http" },
+      { from: "capture_http", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /HTTP_REQUEST_NODE_IDS/);
+  assert.match(graph, /TRANSFORM_JSON_NODE_IDS/);
+  assert.match(graph, /mock:\/\/echo/);
+  await writeFile(
+    path.join(outDir, "tests", "test_integration_nodes.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "integration.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_http_and_transform_events(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
+    session_id = create_resp.json()["session"]["session_id"]
+    client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "payload de teste"},
+    )
+    assert turn_resp.status_code == 200
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    by_type = {item["event_type"]: item for item in events}
+    assert by_type["http_request_completed"]["payload"]["http"]["mock"] is True
+    assert by_type["http_request_completed"]["payload"]["http"]["request"] == "payload de teste"
+    assert by_type["transform_json_completed"]["payload"]["transform"]["value"] == "payload de teste"
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated multiagent manifest bundle mounts agents in one FastAPI process", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-multi-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

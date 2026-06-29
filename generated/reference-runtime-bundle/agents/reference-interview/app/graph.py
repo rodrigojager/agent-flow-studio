@@ -1,5 +1,7 @@
 import atexit
 import json
+import urllib.error
+import urllib.request
 from typing import Any, Literal, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -44,6 +46,8 @@ LLM_NODE_IDS = [
 CODE_NODE_IDS = _node_ids(node_type="code")
 SWITCH_NODE_IDS = _node_ids(node_type="switch")
 HUMAN_INPUT_NODE_IDS = _node_ids(node_type="human_input")
+HTTP_REQUEST_NODE_IDS = _node_ids(node_type="http_request")
+TRANSFORM_JSON_NODE_IDS = _node_ids(node_type="transform_json")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -58,6 +62,8 @@ class ReferenceState(TypedDict, total=False):
     assistant_message: dict[str, str]
     safety: dict[str, Any]
     llm: dict[str, Any]
+    http: dict[str, Any]
+    transforms: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -117,6 +123,42 @@ def build_graph(
         executed = list(state.get("executed_nodes") or [])
         executed.append(node_id)
         return {**updates, "executed_nodes": executed}
+
+    def state_path_value(state: ReferenceState, path: str):
+        current: Any = state
+        normalized = str(path or "").removeprefix("state.")
+        for part in normalized.split("."):
+            if not part:
+                continue
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                current = getattr(current, part, None)
+            if current is None:
+                return None
+        return current
+
+    def assign_state_path(updates: dict[str, Any], state: ReferenceState, path: str, value: Any) -> None:
+        parts = [part for part in str(path or "").removeprefix("state.").split(".") if part]
+        if not parts:
+            return
+        root_key = parts[0]
+        if len(parts) == 1:
+            updates[root_key] = value
+            return
+        root = updates.get(root_key)
+        if not isinstance(root, dict):
+            source_root = state.get(root_key)
+            root = dict(source_root) if isinstance(source_root, dict) else {}
+            updates[root_key] = root
+        current = root
+        for part in parts[1:-1]:
+            child = current.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                current[part] = child
+            current = child
+        current[parts[-1]] = value
 
     def make_start_node(config: dict[str, Any]):
         node_id = config["id"]
@@ -258,6 +300,102 @@ def build_graph(
 
         return run
 
+    def make_http_request_node(config: dict[str, Any]):
+        node_id = config["id"]
+        method = str(config.get("method") or "GET").upper()
+        url = str(config.get("url") or "")
+        body_path = str(config.get("bodyPath") or "")
+        response_path = str(config.get("responsePath") or f"http.{node_id}")
+        timeout = int(config.get("timeoutSeconds") or 10)
+
+        def run(state: ReferenceState) -> ReferenceState:
+            request_body = state_path_value(state, body_path) if body_path else None
+            if not url:
+                response = {
+                    "ok": False,
+                    "skipped": True,
+                    "method": method,
+                    "url": url,
+                    "reason": "url_not_configured",
+                }
+            elif url.startswith("mock://"):
+                response = {
+                    "ok": True,
+                    "mock": True,
+                    "method": method,
+                    "url": url,
+                    "request": request_body,
+                }
+            else:
+                try:
+                    data = None
+                    headers = {"Accept": "application/json"}
+                    if request_body is not None and method not in {"GET", "DELETE"}:
+                        data = json.dumps(request_body).encode("utf-8")
+                        headers["Content-Type"] = "application/json"
+                    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+                    with urllib.request.urlopen(request, timeout=timeout) as result:
+                        raw = result.read().decode("utf-8", errors="replace")
+                        try:
+                            content: Any = json.loads(raw)
+                        except json.JSONDecodeError:
+                            content = raw
+                        response = {
+                            "ok": 200 <= result.status < 400,
+                            "status_code": result.status,
+                            "method": method,
+                            "url": url,
+                            "body": content,
+                        }
+                except urllib.error.HTTPError as exc:
+                    raw = exc.read().decode("utf-8", errors="replace")
+                    response = {
+                        "ok": False,
+                        "status_code": exc.code,
+                        "method": method,
+                        "url": url,
+                        "error": raw,
+                    }
+                except Exception as exc:
+                    response = {
+                        "ok": False,
+                        "method": method,
+                        "url": url,
+                        "error": str(exc),
+                    }
+
+            updates: dict[str, Any] = {}
+            http_results = dict(state.get("http") or {})
+            http_results[node_id] = response
+            updates["http"] = http_results
+            if response_path != f"http.{node_id}":
+                assign_state_path(updates, state, response_path, response)
+            return mark_node(state, node_id, updates)
+
+        return run
+
+    def make_transform_json_node(config: dict[str, Any]):
+        node_id = config["id"]
+        input_path = str(config.get("inputPath") or "assistant_message")
+        output_path = str(config.get("outputPath") or f"transforms.{node_id}")
+
+        def run(state: ReferenceState) -> ReferenceState:
+            value = state_path_value(state, input_path)
+            transformed = {
+                "node_id": node_id,
+                "input_path": input_path,
+                "value": value,
+            }
+            updates: dict[str, Any] = {}
+            transform_results = dict(state.get("transforms") or {})
+            transform_results[node_id] = transformed
+            updates["transforms"] = transform_results
+            if output_path != f"transforms.{node_id}":
+                assign_state_path(updates, state, output_path, transformed)
+            return mark_node(state, node_id, updates)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -293,22 +431,13 @@ def build_graph(
             return make_switch_node(config)
         if node_type == "human_input":
             return make_human_input_node(config)
+        if node_type == "http_request":
+            return make_http_request_node(config)
+        if node_type == "transform_json":
+            return make_transform_json_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)
-
-    def state_path_value(state: ReferenceState, path: str):
-        current: Any = state
-        for part in str(path or "").split("."):
-            if not part:
-                continue
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                current = getattr(current, part, None)
-            if current is None:
-                return None
-        return current
 
     def compare_values(left: Any, operator: str, right: Any) -> bool:
         if operator == "==":

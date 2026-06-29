@@ -10,6 +10,8 @@ export const NodeTypeSchema = z.enum([
   "switch",
   "human_input",
   "safety_gate",
+  "http_request",
+  "transform_json",
 ]);
 
 export const PromptRefSchema = z.object({
@@ -137,6 +139,13 @@ export const NodeSchema = z
     handler: z.string().min(1).optional(),
     stage: z.enum(["input", "output", "context"]).optional(),
     llm: LlmConfigSchema.partial().optional(),
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
+    url: z.string().min(1).optional(),
+    bodyPath: z.string().min(1).optional(),
+    responsePath: z.string().min(1).optional(),
+    inputPath: z.string().min(1).optional(),
+    outputPath: z.string().min(1).optional(),
+    timeoutSeconds: z.number().int().positive().max(120).optional(),
     position: NodePositionSchema.optional(),
   })
   .passthrough();
@@ -430,6 +439,55 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
         nodeId: node.id,
       });
     }
+    if (node.type === "http_request") {
+      if (!node.url) {
+        add({
+          severity: "warning",
+          code: "missing_http_url",
+          message: `Nó HTTP ${node.id} não declara url.`,
+          path: `nodes.${node.id}.url`,
+          nodeId: node.id,
+        });
+      }
+      if (node.bodyPath && !isValidStatePath(node.bodyPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_http_body_path",
+          message: `bodyPath do nó HTTP ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.bodyPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.responsePath && !isValidStatePath(node.responsePath)) {
+        add({
+          severity: "warning",
+          code: "invalid_http_response_path",
+          message: `responsePath do nó HTTP ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.responsePath`,
+          nodeId: node.id,
+        });
+      }
+    }
+    if (node.type === "transform_json") {
+      if (node.inputPath && !isValidStatePath(node.inputPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_transform_input_path",
+          message: `inputPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.inputPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.outputPath && !isValidStatePath(node.outputPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_transform_output_path",
+          message: `outputPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.outputPath`,
+          nodeId: node.id,
+        });
+      }
+    }
   }
 
   for (const [nodeId, count] of nodeCounts.entries()) {
@@ -606,6 +664,10 @@ function validateLlmAdapter(
       nodeId,
     });
   }
+}
+
+function isValidStatePath(value: string): boolean {
+  return /^(state\.)?[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(value);
 }
 
 function traverse(start: string, outgoing: Map<string, string[]>): Set<string> {
