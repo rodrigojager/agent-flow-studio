@@ -8,10 +8,12 @@ from app.cache import recent_key
 from app.graph import (
     CODE_NODE_IDS,
     FINISH_NODE_IDS,
+    HUMAN_INPUT_NODE_IDS,
     INPUT_SAFETY_NODE_IDS,
     LLM_NODE_IDS,
     OUTPUT_SAFETY_NODE_IDS,
     START_NODE_IDS,
+    SWITCH_NODE_IDS,
 )
 from app.models import AgentMessage, AgentSession
 from app.settings import Settings
@@ -305,6 +307,12 @@ class ReferenceAgentService:
                 payload["safety"] = result.get("safety") or {"blocked": False, "decision": "allow"}
             elif node_id in CODE_NODE_IDS:
                 payload["handler"] = "code"
+            elif node_id in SWITCH_NODE_IDS:
+                event_type = "switch_evaluated"
+                payload["handler"] = "switch"
+            elif node_id in HUMAN_INPUT_NODE_IDS:
+                event_type = "human_input_wait"
+                payload["handler"] = "human_input"
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:

@@ -1456,6 +1456,7 @@ function NodeInspector({
   const adapterOptions = llmAdapterOptions(llmAdapters, flow.llm.adapter);
   const nodeAdapterOptions = llmAdapterOptions(llmAdapters, String(node.llm?.adapter ?? flow.llm.adapter));
   const isLlmNode = node.type === "llm_prompt" || node.type === "llm_structured";
+  const isCodeNode = node.type === "code";
   return (
     <div className="inspector-body">
       <div className="edit-group">
@@ -1577,10 +1578,12 @@ function NodeInspector({
               </label>
             </>
           ) : null}
-          <label>
-            <span>Handler</span>
-            <input value={node.handler ?? ""} onChange={(event) => onNodeFieldChange(node.id, "handler", event.target.value)} />
-          </label>
+          {isCodeNode ? (
+            <label>
+              <span>Handler</span>
+              <input value={node.handler ?? ""} onChange={(event) => onNodeFieldChange(node.id, "handler", event.target.value)} />
+            </label>
+          ) : null}
           <label>
             <span>Stage</span>
             <select value={node.stage ?? ""} onChange={(event) => onNodeFieldChange(node.id, "stage", event.target.value)}>
@@ -2301,9 +2304,6 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
   }
   if (node.type === "code") {
     next.handler = node.handler ?? "handler_name";
-  }
-  if (node.type === "switch") {
-    next.handler = node.handler ?? "switch_condition";
   }
   return next;
 }

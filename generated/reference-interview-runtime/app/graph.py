@@ -42,6 +42,8 @@ LLM_NODE_IDS = [
     if item["type"] in {"llm_prompt", "llm_structured"}
 ]
 CODE_NODE_IDS = _node_ids(node_type="code")
+SWITCH_NODE_IDS = _node_ids(node_type="switch")
+HUMAN_INPUT_NODE_IDS = _node_ids(node_type="human_input")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -233,6 +235,29 @@ def build_graph(
 
         return deterministic_gate if handler == "deterministic_gate" else noop_code
 
+    def make_switch_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            return mark_node(state, node_id, {})
+
+        return run
+
+    def make_human_input_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            updates: ReferenceState = {
+                "status": "active",
+                "phase": "awaiting_turn",
+                "is_complete": False,
+            }
+            if not state.get("assistant_message"):
+                updates["assistant_message"] = {"code": "WAIT", "text": "Aguardando entrada do usuário."}
+            return mark_node(state, node_id, updates)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -264,14 +289,53 @@ def build_graph(
             return make_llm_node(config)
         if node_type == "code":
             return make_code_node(config)
+        if node_type == "switch":
+            return make_switch_node(config)
+        if node_type == "human_input":
+            return make_human_input_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)
+
+    def state_path_value(state: ReferenceState, path: str):
+        current: Any = state
+        for part in str(path or "").split("."):
+            if not part:
+                continue
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                current = getattr(current, part, None)
+            if current is None:
+                return None
+        return current
+
+    def compare_values(left: Any, operator: str, right: Any) -> bool:
+        if operator == "==":
+            return left == right
+        if operator == "!=":
+            return left != right
+        try:
+            left_number = float(left)
+            right_number = float(right)
+        except (TypeError, ValueError):
+            return False
+        if operator == ">=":
+            return left_number >= right_number
+        if operator == "<=":
+            return left_number <= right_number
+        if operator == ">":
+            return left_number > right_number
+        if operator == "<":
+            return left_number < right_number
+        return False
 
     def condition_matches(state: ReferenceState, condition: dict[str, Any]) -> bool:
         kind = condition.get("kind")
         if kind == "always":
             return True
+        if kind == "all":
+            return all(condition_matches(state, item) for item in condition.get("conditions", []))
         if kind == "safety_blocked":
             return bool((state.get("safety") or {}).get("blocked")) is bool(condition.get("value"))
         if kind == "safety_decision":
@@ -280,6 +344,10 @@ def build_graph(
             return state.get("status") == condition.get("value")
         if kind == "phase_equals":
             return state.get("phase") == condition.get("value")
+        if kind == "state_compare":
+            left = state_path_value(state, condition.get("path", ""))
+            right = state_path_value(state, condition["rightPath"]) if "rightPath" in condition else condition.get("value")
+            return compare_values(left, condition.get("operator", "=="), right)
         return False
 
     def make_route_after_node(node_id: str):

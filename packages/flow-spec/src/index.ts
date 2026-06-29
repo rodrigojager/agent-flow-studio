@@ -421,21 +421,12 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
         nodeId: node.id,
       });
     }
-    if ((node.type === "code" || node.type === "switch") && !node.handler) {
+    if (node.type === "code" && !node.handler) {
       add({
         severity: "warning",
         code: "missing_handler",
         message: `Nó ${node.id} não declara handler.`,
         path: `nodes.${node.id}.handler`,
-        nodeId: node.id,
-      });
-    }
-    if (node.type === "switch" || node.type === "human_input") {
-      add({
-        severity: "warning",
-        code: "codegen_node_type_pending",
-        message: `O codegen atual ainda não executa ${node.type} como recurso dedicado.`,
-        path: `nodes.${node.id}.type`,
         nodeId: node.id,
       });
     }

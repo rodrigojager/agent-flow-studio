@@ -20,8 +20,19 @@ interface RuntimeNodeConfig {
 
 interface RuntimeRouteCondition {
   key: string;
-  kind: "always" | "safety_blocked" | "safety_decision" | "status_equals" | "phase_equals";
-  value?: string | boolean;
+  kind:
+    | "always"
+    | "safety_blocked"
+    | "safety_decision"
+    | "status_equals"
+    | "phase_equals"
+    | "state_compare"
+    | "all";
+  value?: string | boolean | number;
+  path?: string;
+  operator?: "==" | "!=" | ">=" | "<=" | ">" | "<";
+  rightPath?: string;
+  conditions?: RuntimeRouteCondition[];
 }
 
 interface RuntimePlan {
@@ -173,6 +184,18 @@ function parseNodeRouteCondition(edge: FlowEdge, index: number): RuntimeRouteCon
     return { key, kind: "always" };
   }
   const condition = edge.condition.trim();
+  const conjunctiveParts = condition.split(/\s+and\s+/i).map((part) => part.trim()).filter(Boolean);
+  if (conjunctiveParts.length > 1) {
+    return {
+      key,
+      kind: "all",
+      conditions: conjunctiveParts.map((part, partIndex) => parseSingleNodeRouteCondition(part, `${key}_${partIndex}`, edge)),
+    };
+  }
+  return parseSingleNodeRouteCondition(condition, key, edge);
+}
+
+function parseSingleNodeRouteCondition(condition: string, key: string, edge: FlowEdge): RuntimeRouteCondition {
   const safetyBlocked = condition.match(/safety\.blocked\s*==\s*(true|false)/i);
   if (safetyBlocked) {
     return { key, kind: "safety_blocked", value: safetyBlocked[1].toLowerCase() === "true" };
@@ -189,7 +212,41 @@ function parseNodeRouteCondition(edge: FlowEdge, index: number): RuntimeRouteCon
   if (phase) {
     return { key, kind: "phase_equals", value: phase[1] };
   }
+  const comparison = condition.match(/^([A-Za-z_][A-Za-z0-9_.]*)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+  if (comparison) {
+    const rightOperand = parseRouteOperand(comparison[3].trim());
+    return {
+      key,
+      kind: "state_compare",
+      path: normalizeStatePath(comparison[1]),
+      operator: comparison[2] as RuntimeRouteCondition["operator"],
+      ...(rightOperand.kind === "path" ? { rightPath: rightOperand.path } : { value: rightOperand.value }),
+    };
+  }
   throw new Error(`Condição de aresta ainda não suportada pelo gerador Python: ${edge.condition}`);
+}
+
+function normalizeStatePath(value: string): string {
+  return value.replace(/^state\./i, "");
+}
+
+type RouteOperand = { kind: "path"; path: string } | { kind: "literal"; value: string | boolean | number };
+
+function parseRouteOperand(value: string): RouteOperand {
+  const quoted = value.match(/^['"]([^'"]*)['"]$/);
+  if (quoted) {
+    return { kind: "literal", value: quoted[1] };
+  }
+  if (/^(true|false)$/i.test(value)) {
+    return { kind: "literal", value: value.toLowerCase() === "true" };
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(value)) {
+    return { kind: "literal", value: Number(value) };
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(value)) {
+    return { kind: "path", path: normalizeStatePath(value) };
+  }
+  throw new Error(`Operando de condição ainda não suportado pelo gerador Python: ${value}`);
 }
 
 function basename(value: string): string {
@@ -1121,6 +1178,8 @@ LLM_NODE_IDS = [
     if item["type"] in {"llm_prompt", "llm_structured"}
 ]
 CODE_NODE_IDS = _node_ids(node_type="code")
+SWITCH_NODE_IDS = _node_ids(node_type="switch")
+HUMAN_INPUT_NODE_IDS = _node_ids(node_type="human_input")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -1312,6 +1371,29 @@ def build_graph(
 
         return deterministic_gate if handler == "deterministic_gate" else noop_code
 
+    def make_switch_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            return mark_node(state, node_id, {})
+
+        return run
+
+    def make_human_input_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            updates: ReferenceState = {
+                "status": "active",
+                "phase": "awaiting_turn",
+                "is_complete": False,
+            }
+            if not state.get("assistant_message"):
+                updates["assistant_message"] = {"code": "WAIT", "text": "Aguardando entrada do usuário."}
+            return mark_node(state, node_id, updates)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -1343,14 +1425,53 @@ def build_graph(
             return make_llm_node(config)
         if node_type == "code":
             return make_code_node(config)
+        if node_type == "switch":
+            return make_switch_node(config)
+        if node_type == "human_input":
+            return make_human_input_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)
+
+    def state_path_value(state: ReferenceState, path: str):
+        current: Any = state
+        for part in str(path or "").split("."):
+            if not part:
+                continue
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                current = getattr(current, part, None)
+            if current is None:
+                return None
+        return current
+
+    def compare_values(left: Any, operator: str, right: Any) -> bool:
+        if operator == "==":
+            return left == right
+        if operator == "!=":
+            return left != right
+        try:
+            left_number = float(left)
+            right_number = float(right)
+        except (TypeError, ValueError):
+            return False
+        if operator == ">=":
+            return left_number >= right_number
+        if operator == "<=":
+            return left_number <= right_number
+        if operator == ">":
+            return left_number > right_number
+        if operator == "<":
+            return left_number < right_number
+        return False
 
     def condition_matches(state: ReferenceState, condition: dict[str, Any]) -> bool:
         kind = condition.get("kind")
         if kind == "always":
             return True
+        if kind == "all":
+            return all(condition_matches(state, item) for item in condition.get("conditions", []))
         if kind == "safety_blocked":
             return bool((state.get("safety") or {}).get("blocked")) is bool(condition.get("value"))
         if kind == "safety_decision":
@@ -1359,6 +1480,10 @@ def build_graph(
             return state.get("status") == condition.get("value")
         if kind == "phase_equals":
             return state.get("phase") == condition.get("value")
+        if kind == "state_compare":
+            left = state_path_value(state, condition.get("path", ""))
+            right = state_path_value(state, condition["rightPath"]) if "rightPath" in condition else condition.get("value")
+            return compare_values(left, condition.get("operator", "=="), right)
         return False
 
     def make_route_after_node(node_id: str):
@@ -1492,10 +1617,12 @@ from app.cache import recent_key
 from app.graph import (
     CODE_NODE_IDS,
     FINISH_NODE_IDS,
+    HUMAN_INPUT_NODE_IDS,
     INPUT_SAFETY_NODE_IDS,
     LLM_NODE_IDS,
     OUTPUT_SAFETY_NODE_IDS,
     START_NODE_IDS,
+    SWITCH_NODE_IDS,
 )
 from app.models import AgentMessage, AgentSession
 from app.settings import Settings
@@ -1789,6 +1916,12 @@ class ReferenceAgentService:
                 payload["safety"] = result.get("safety") or {"blocked": False, "decision": "allow"}
             elif node_id in CODE_NODE_IDS:
                 payload["handler"] = "code"
+            elif node_id in SWITCH_NODE_IDS:
+                event_type = "switch_evaluated"
+                payload["handler"] = "switch"
+            elif node_id in HUMAN_INPUT_NODE_IDS:
+                event_type = "human_input_wait"
+                payload["handler"] = "human_input"
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:

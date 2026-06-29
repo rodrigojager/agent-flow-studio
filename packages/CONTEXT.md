@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod, metadados visuais, manifestos de agrupamento, catálogo de adapters LLM e análise estruturada de flow; o `codegen-langgraph` gera runtimes Python LangGraph + FastAPI a partir de flows, bundles por manifesto e apps FastAPI compartilhados para manifestos multiagente.
+Pacotes TypeScript do builder/codegen. O `flow-spec` define o schema canônico em Zod, metadados visuais, manifestos de agrupamento, catálogo de adapters LLM e análise estruturada de flow; o `codegen-langgraph` gera runtimes Python LangGraph + FastAPI a partir de flows, incluindo nós MVP como LLM, safety, code, switch e human input, bundles por manifesto e apps FastAPI compartilhados para manifestos multiagente.
 
 ---
 
@@ -28,6 +28,7 @@ packages/
 | Alterar formato do manifesto | `flow-spec/src/index.ts` | `../docs/adr/0001-separar-fluxo-de-agente-e-manifesto-de-agrupamento.md` |
 | Validar flow via CLI | `flow-spec/src/cli.ts` | `flow-spec/src/index.ts` |
 | Alterar geração de runtime | `codegen-langgraph/src/index.ts` e `codegen-langgraph/src/pythonRuntimeTemplates.ts` | `../flows/CONTEXT.md` |
+| Alterar execução de nós switch/human_input | `codegen-langgraph/src/pythonRuntimeTemplates.ts` e `codegen-langgraph/src/codegen.test.ts` | `flow-spec/src/index.ts` |
 | Alterar app multiagente gerado | `codegen-langgraph/src/pythonBundleTemplates.ts` | `../docs/adr/0001-separar-fluxo-de-agente-e-manifesto-de-agrupamento.md` |
 | Alterar testes do codegen | `codegen-langgraph/src/codegen.test.ts` | `codegen-langgraph/src/index.ts` |
 | Alterar CLI de geração | `codegen-langgraph/src/cli.ts` | `codegen-langgraph/src/index.ts` |

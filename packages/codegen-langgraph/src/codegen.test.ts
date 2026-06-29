@@ -96,6 +96,97 @@ test("generated runtime supports a simple flow without deterministic gate", asyn
   });
 });
 
+test("generated runtime executes switch and human input nodes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-switch-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente com switch");
+
+  const flow: AgentFlow = {
+    ...simpleFlow("switch-human-agent", "Agente Switch Humano"),
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      { id: "turn_router", type: "switch" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      { id: "wait_user_answer", type: "human_input" },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "turn_router", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "turn_router", to: "llm_step", condition: "status == 'active' and turn < max_turns" },
+      { from: "turn_router", to: "finish_node", condition: "turn >= max_turns" },
+      { from: "llm_step", to: "wait_user_answer" },
+      { from: "wait_user_answer", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /SWITCH_NODE_IDS/);
+  assert.match(graph, /HUMAN_INPUT_NODE_IDS/);
+  assert.match(graph, /state_compare/);
+  await writeFile(
+    path.join(outDir, "tests", "test_switch_human_nodes.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "switch-human.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_switch_and_human_input_events(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
+    session_id = create_resp.json()["session"]["session_id"]
+    client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "teste"},
+    )
+    assert turn_resp.status_code == 200
+    data = turn_resp.json()
+    assert data["assistant_message"]["code"] == "ECHO"
+    assert data["session"]["phase"] == "awaiting_turn"
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    event_types = [item["event_type"] for item in events]
+    assert "switch_evaluated" in event_types
+    assert "human_input_wait" in event_types
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated multiagent manifest bundle mounts agents in one FastAPI process", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-multi-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

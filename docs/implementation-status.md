@@ -42,6 +42,7 @@
 - Builder UI permite criar, remover, mover, conectar e reconectar nós/arestas no canvas, com posições persistidas no `agent.flow.json`.
 - Flow Spec aceita `position` opcional em nós para preservar layout visual sem afetar o runtime gerado.
 - Codegen LangGraph monta o grafo gerado a partir dos nós e arestas do `agent.flow.json`, com handlers por tipo de nó e eventos baseados nos nós realmente executados.
+- Codegen LangGraph executa nós dedicados de `switch` e `human_input`, incluindo condições simples com `and`, comparações de estado e eventos operacionais específicos.
 - Codegen LangGraph valida adapters LLM pelo catálogo, gera runtime apenas com o adapter selecionado e respeita overrides de adapter/modelo em nós LLM.
 - Codegen possui teste end-to-end com flow simplificado sem `deterministic_gate`, gerando runtime temporário e executando pytest no artefato gerado.
 - Flow Spec define `RuntimeManifest` para agrupamento monoagente ou multiagente, com agentes referenciando `agent.flow.json` por `flowPath`.
@@ -79,7 +80,7 @@ Também foi validado localmente:
 
 ## Ainda não implementado
 
-- Codegen genérico para recursos avançados e execução real de todos os tipos futuros de nós.
+- Codegen genérico para recursos avançados e execução real de nós futuros como RAG, PDF, HTTP, banco, approval, scoring e analytics.
 - Edição visual avançada de prompts/schemas e ergonomia refinada do canvas.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
