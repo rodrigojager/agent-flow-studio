@@ -38,7 +38,7 @@
 - Codegen gera app FastAPI raiz para manifestos `multiagent`, montando os agentes em um único processo pelos `routePrefix` e preservando idempotência por prefixo de rota.
 - Builder API lê, valida e gera bundles por manifesto via rotas `/runtime-manifest`, `/runtime-manifest/validate` e `/runtime-manifest/generate`.
 - Builder UI possui aba `Runtime` para carregar `runtime.manifest.json`, exibir agentes, validar o manifesto e gerar bundle por manifesto via Builder API.
-- Sandbox local inicial: Builder API inicia/para o runtime gerado, acompanha status/logs, e Builder UI aciona criação de sessão, turnos, finalização, transcript e events.
+- Sandbox local inicial: Builder API inicia/para o runtime gerado, lista runtimes em memória, acompanha status/logs e aceita porta configurável; Builder UI permite iniciar/parar/atualizar, acompanhar logs recentes, escolher porta e acionar criação de sessão, turnos, finalização, transcript e events.
 
 ## Verificado
 
@@ -70,7 +70,6 @@ Também foi validado localmente:
 
 - Codegen genérico para recursos avançados e execução real de todos os tipos futuros de nós.
 - Edição visual avançada de prompts/schemas, validação visual rica, import/export de workspace e ergonomia refinada do canvas.
-- Sandbox visual mais completo, com logs ao vivo, gerenciamento de múltiplos runtimes e seleção de portas.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Catálogo real de adapters além do OpenAI/OpenAI-compatible.
 - Safety Harness completo.

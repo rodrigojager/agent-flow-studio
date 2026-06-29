@@ -36,4 +36,4 @@ AGENTES IA/
 
 ## Current Status
 
-Baseline manual, flow spec inicial, manifesto de agrupamento inicial, Builder API mínima, Builder UI inicial, edição persistente de flow/prompts/schemas/nós/arestas, operação visual inicial de `runtime.manifest.json`, sandbox local inicial, codegen Python dirigido por nós/arestas do flow, bundle por manifesto, composição multiagente inicial em processo único e verificação automatizada de paridade implementados. Sandbox completo, codegen para recursos avançados e recursos avançados ainda não foram implementados.
+Baseline manual, flow spec inicial, manifesto de agrupamento inicial, Builder API mínima, Builder UI inicial, edição persistente de flow/prompts/schemas/nós/arestas, operação visual inicial de `runtime.manifest.json`, sandbox local com logs, porta configurável e listagem de runtimes, codegen Python dirigido por nós/arestas do flow, bundle por manifesto, composição multiagente inicial em processo único e verificação automatizada de paridade implementados. Sandbox avançado, codegen para recursos avançados e recursos avançados ainda não foram implementados.

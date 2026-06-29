@@ -35,15 +35,29 @@ export class SandboxManager {
 
   constructor(private readonly workspaceRoot: string) {}
 
+  list(): SandboxStatus[] {
+    return [...this.sandboxes.values()].map((sandbox) => this.toStatus(sandbox));
+  }
+
   async start(flowId: string, options: SandboxStartOptions = {}): Promise<SandboxStatus> {
     const current = this.sandboxes.get(flowId);
-    if (current && !current.child.killed) {
+    if (current && isRunning(current.child)) {
       return this.toStatus(current);
+    }
+    if (current) {
+      this.sandboxes.delete(flowId);
     }
 
     const runtimeDir = safeResolve(this.workspaceRoot, options.runtimeDir || `generated/${flowId}-runtime`);
     await assertRuntimeDir(runtimeDir);
     const port = normalizePort(options.port);
+    const conflict = [...this.sandboxes.values()].find(
+      (sandbox) => sandbox.flowId !== flowId && sandbox.port === port && isRunning(sandbox.child),
+    );
+    if (conflict) {
+      throw new WorkspaceError(`Porta ${port} já está em uso pelo sandbox ${conflict.flowId}.`, 409);
+    }
+
     const logs: string[] = [];
     const child = spawn(
       "python",
@@ -71,13 +85,19 @@ export class SandboxManager {
     });
     this.sandboxes.set(flowId, sandbox);
 
-    await waitForHealth(port, logs);
+    try {
+      await waitForHealth(port, logs);
+    } catch (error) {
+      await stopChild(child);
+      this.sandboxes.delete(flowId);
+      throw error;
+    }
     return this.toStatus(sandbox);
   }
 
   status(flowId: string): SandboxStatus {
     const sandbox = this.sandboxes.get(flowId);
-    if (!sandbox || sandbox.child.killed || sandbox.child.exitCode !== null) {
+    if (!sandbox || !isRunning(sandbox.child)) {
       return emptyStatus(flowId);
     }
     return this.toStatus(sandbox);
@@ -103,7 +123,7 @@ export class SandboxManager {
   }
 
   private toStatus(sandbox: SandboxProcess): SandboxStatus {
-    const running = !sandbox.child.killed && sandbox.child.exitCode === null;
+    const running = isRunning(sandbox.child);
     return {
       flowId: sandbox.flowId,
       running,
@@ -134,6 +154,10 @@ function normalizePort(port: number | undefined): number {
     throw new WorkspaceError("port deve ser inteiro entre 1024 e 65535.", 400);
   }
   return port;
+}
+
+function isRunning(child: ChildProcessWithoutNullStreams): boolean {
+  return !child.killed && child.exitCode === null;
 }
 
 function appendLog(logs: string[], text: string): void {

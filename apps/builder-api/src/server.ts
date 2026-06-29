@@ -169,6 +169,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     };
   });
 
+  app.get("/sandboxes", async () => ({
+    sandboxes: sandboxManager.list(),
+  }));
+
   app.get<{ Params: FlowParams }>("/sandboxes/:flowId/status", async (request) => {
     return sandboxManager.status(request.params.flowId);
   });

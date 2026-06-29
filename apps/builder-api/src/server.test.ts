@@ -232,6 +232,10 @@ test("Builder API exposes sandbox status and validates runtime directories", asy
   assert.equal(status.statusCode, 200);
   assert.equal(status.json().running, false);
 
+  const listed = await app.inject({ method: "GET", url: "/sandboxes" });
+  assert.equal(listed.statusCode, 200);
+  assert.deepEqual(listed.json().sandboxes, []);
+
   const missingRuntime = await app.inject({
     method: "POST",
     url: "/sandboxes/reference-interview/start",

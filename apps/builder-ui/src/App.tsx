@@ -40,6 +40,7 @@ import {
   generateFlow,
   generateRuntimeManifest,
   listFlows,
+  listSandboxes,
   loadFlow,
   loadPromptAsset,
   loadRuntimeManifest,
@@ -106,6 +107,8 @@ export default function App() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [sandbox, setSandbox] = useState<SandboxStatus | null>(null);
+  const [activeSandboxes, setActiveSandboxes] = useState<SandboxStatus[]>([]);
+  const [sandboxPort, setSandboxPort] = useState("8090");
   const [runtimeSession, setRuntimeSession] = useState<SessionView | null>(null);
   const [transcript, setTranscript] = useState<MessageView[]>([]);
   const [runtimeEventsData, setRuntimeEventsData] = useState<EventView[]>([]);
@@ -173,6 +176,30 @@ export default function App() {
     void refreshRuntimeManifest(true);
   }, [refreshRuntimeManifest]);
 
+  const refreshSandboxState = useCallback(
+    async (flowId = selectedFlowId, silent = false) => {
+      if (!flowId) {
+        return;
+      }
+      if (!silent) {
+        setStatus({ kind: "busy", message: `Atualizando sandbox de ${flowId}.` });
+      }
+      try {
+        const [nextSandbox, listResult] = await Promise.all([sandboxStatus(flowId), listSandboxes()]);
+        setSandbox(nextSandbox);
+        setActiveSandboxes(listResult.sandboxes);
+        if (!silent) {
+          setStatus({ kind: "ok", message: nextSandbox.running ? `Sandbox ativo em ${nextSandbox.url}.` : "Sandbox parado." });
+        }
+      } catch (error) {
+        if (!silent) {
+          setStatus({ kind: "error", message: errorMessage(error) });
+        }
+      }
+    },
+    [selectedFlowId],
+  );
+
   useEffect(() => {
     if (!selectedFlowId) {
       setLoadedFlow(null);
@@ -183,6 +210,10 @@ export default function App() {
       setStatus({ kind: "busy", message: `Carregando ${selectedFlowId}.` });
       try {
         const loaded = await loadFlow(selectedFlowId);
+        if (!active) {
+          return;
+        }
+        const [nextSandbox, listResult] = await Promise.all([sandboxStatus(loaded.flow.id), listSandboxes()]);
         if (!active) {
           return;
         }
@@ -200,11 +231,9 @@ export default function App() {
         setRuntimeSession(null);
         setTranscript([]);
         setRuntimeEventsData([]);
+        setSandbox(nextSandbox);
+        setActiveSandboxes(listResult.sandboxes);
         setStatus({ kind: "ok", message: `${loaded.flow.name} carregado.` });
-        const nextSandbox = await sandboxStatus(loaded.flow.id);
-        if (active) {
-          setSandbox(nextSandbox);
-        }
       } catch (error) {
         if (!active) {
           return;
@@ -222,6 +251,16 @@ export default function App() {
       active = false;
     };
   }, [selectedFlowId]);
+
+  useEffect(() => {
+    if (!selectedFlowId || (inspectorTab !== "sandbox" && !sandbox?.running)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshSandboxState(selectedFlowId, true);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [inspectorTab, refreshSandboxState, sandbox?.running, selectedFlowId]);
 
   useEffect(() => {
     if (!selectedFlowId || !selectedPromptId) {
@@ -661,6 +700,7 @@ export default function App() {
     }
     setStatus({ kind: "busy", message: `Gerando e iniciando sandbox de ${selectedFlowId}.` });
     try {
+      const port = parseSandboxPort(sandboxPort);
       if (isDirty && draftFlow) {
         const saved = await saveFlow(selectedFlowId, draftFlow);
         setLoadedFlow(saved);
@@ -669,8 +709,10 @@ export default function App() {
       }
       await saveDirtyAssets();
       await generateFlow(selectedFlowId);
-      const result = await startSandbox(selectedFlowId);
+      const result = await startSandbox(selectedFlowId, port);
       setSandbox(result);
+      const listResult = await listSandboxes();
+      setActiveSandboxes(listResult.sandboxes);
       setRuntimeSession(null);
       setTranscript([]);
       setRuntimeEventsData([]);
@@ -689,6 +731,8 @@ export default function App() {
     try {
       const result = await stopSandbox(selectedFlowId);
       setSandbox(result);
+      const listResult = await listSandboxes();
+      setActiveSandboxes(listResult.sandboxes);
       setRuntimeSession(null);
       setTranscript([]);
       setRuntimeEventsData([]);
@@ -696,6 +740,10 @@ export default function App() {
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
+  }
+
+  async function handleRefreshSandbox() {
+    await refreshSandboxState(selectedFlowId);
   }
 
   async function refreshRuntimeData(nextSession?: SessionView) {
@@ -722,6 +770,7 @@ export default function App() {
       setRuntimeSession(started.session);
       setTranscript(started.messages);
       await refreshRuntimeData(started.session);
+      await refreshSandboxState(selectedFlowId, true);
       setStatus({ kind: "ok", message: `Sessão ${started.session.session_id} iniciada.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -743,6 +792,7 @@ export default function App() {
       setRuntimeSession(result.session);
       setUserMessage("");
       await refreshRuntimeData(result.session);
+      await refreshSandboxState(selectedFlowId, true);
       setStatus({ kind: "ok", message: result.assistant_message.text });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -758,6 +808,7 @@ export default function App() {
       const result = await finishRuntimeSession(sandbox.url, draftFlow.api.resourceName, runtimeSession.session_id);
       setRuntimeSession(result.session);
       await refreshRuntimeData(result.session);
+      await refreshSandboxState(selectedFlowId, true);
       setStatus({ kind: "ok", message: "Sessão finalizada." });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -1000,13 +1051,17 @@ export default function App() {
             <SandboxPanel
               flow={draftFlow}
               sandbox={sandbox}
+              sandboxes={activeSandboxes}
+              sandboxPort={sandboxPort}
               session={runtimeSession}
               transcript={transcript}
               events={runtimeEventsData}
               userMessage={userMessage}
+              setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
               onStartSandbox={handleStartSandbox}
               onStopSandbox={handleStopSandbox}
+              onRefreshSandbox={handleRefreshSandbox}
               onCreateSession={handleCreateRuntimeSession}
               onSendTurn={handleSendRuntimeTurn}
               onFinishSession={handleFinishRuntimeSession}
@@ -1418,26 +1473,34 @@ function RuntimeManifestPanel({
 function SandboxPanel({
   flow,
   sandbox,
+  sandboxes,
+  sandboxPort,
   session,
   transcript,
   events,
   userMessage,
+  setSandboxPort,
   setUserMessage,
   onStartSandbox,
   onStopSandbox,
+  onRefreshSandbox,
   onCreateSession,
   onSendTurn,
   onFinishSession,
 }: {
   flow: AgentFlow | null;
   sandbox: SandboxStatus | null;
+  sandboxes: SandboxStatus[];
+  sandboxPort: string;
   session: SessionView | null;
   transcript: MessageView[];
   events: EventView[];
   userMessage: string;
+  setSandboxPort: (value: string) => void;
   setUserMessage: (value: string) => void;
   onStartSandbox: () => void;
   onStopSandbox: () => void;
+  onRefreshSandbox: () => void;
   onCreateSession: () => void;
   onSendTurn: () => void;
   onFinishSession: () => void;
@@ -1453,10 +1516,22 @@ function SandboxPanel({
         <dl className="kv-list inspector-list">
           <Field label="Runtime" value={sandbox?.url ?? "-"} />
           <Field label="Swagger" value={sandbox?.docsUrl ?? "-"} />
+          <Field label="Porta atual" value={sandbox?.port ? String(sandbox.port) : "-"} />
           <Field label="PID" value={sandbox?.pid ? String(sandbox.pid) : "-"} />
         </dl>
+        <div className="edit-group">
+          <label>
+            <span>Porta</span>
+            <input
+              inputMode="numeric"
+              value={sandboxPort}
+              onChange={(event) => setSandboxPort(event.target.value)}
+              disabled={running}
+            />
+          </label>
+        </div>
         <div className="sandbox-actions">
-          <button type="button" className="command-button primary" onClick={onStartSandbox}>
+          <button type="button" className="command-button primary" onClick={onStartSandbox} disabled={running}>
             <Play size={16} aria-hidden="true" />
             Iniciar
           </button>
@@ -1464,11 +1539,37 @@ function SandboxPanel({
             <CircleDot size={16} aria-hidden="true" />
             Parar
           </button>
+          <button type="button" className="command-button" onClick={onRefreshSandbox}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Atualizar
+          </button>
           {sandbox?.docsUrl ? (
             <a className="link-button" href={sandbox.docsUrl} target="_blank" rel="noreferrer">
               Docs
             </a>
           ) : null}
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Runtimes</strong>
+          <span>{sandboxes.length}</span>
+        </div>
+        <div className="runtime-list compact-list">
+          {sandboxes.length ? (
+            sandboxes.map((item) => (
+              <article className="runtime-item" key={`${item.flowId}-${item.port ?? "none"}`}>
+                <strong>{item.flowId}</strong>
+                <span>{item.running ? `ativo em ${item.url}` : "parado"} - PID {item.pid ?? "-"}</span>
+              </article>
+            ))
+          ) : (
+            <article className="runtime-item">
+              <strong>Nenhum runtime ativo</strong>
+              <span>Sem runtime local para o flow selecionado.</span>
+            </article>
+          )}
         </div>
       </section>
 
@@ -1533,9 +1634,9 @@ function SandboxPanel({
         <section className="sandbox-section">
           <div className="sandbox-header">
             <strong>Logs</strong>
-            <span>{sandbox.logs.length}</span>
+            <span>{running ? "ao vivo" : String(sandbox.logs.length)}</span>
           </div>
-          <pre className="mini-json">{sandbox.logs.slice(-16).join("\n")}</pre>
+          <pre className="mini-json">{sandbox.logs.slice(-24).join("\n")}</pre>
         </section>
       ) : null}
     </div>
@@ -1672,6 +1773,18 @@ function manifestValidationMessage(result: RuntimeManifestValidationResult): str
 
 function manifestGenerateMessage(result: RuntimeManifestGenerateResult): string {
   return `Bundle ${result.manifestId} gerado em ${result.outDir}.`;
+}
+
+function parseSandboxPort(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error("Porta do sandbox deve ser um inteiro entre 1024 e 65535.");
+  }
+  return port;
 }
 
 function errorMessage(error: unknown): string {

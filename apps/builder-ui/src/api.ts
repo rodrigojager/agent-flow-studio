@@ -9,6 +9,7 @@ import type {
   LoadedRuntimeManifest,
   RuntimeManifestGenerateResult,
   RuntimeManifestValidationResult,
+  SandboxListResult,
   SandboxStatus,
   SessionView,
   ValidationResult,
@@ -95,6 +96,10 @@ export async function generateRuntimeManifest(outDir?: string): Promise<RuntimeM
 
 export async function sandboxStatus(flowId: string): Promise<SandboxStatus> {
   return request<SandboxStatus>(`/sandboxes/${encodeURIComponent(flowId)}/status`);
+}
+
+export async function listSandboxes(): Promise<SandboxListResult> {
+  return request<SandboxListResult>("/sandboxes");
 }
 
 export async function startSandbox(flowId: string, port?: number): Promise<SandboxStatus> {

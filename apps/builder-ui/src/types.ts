@@ -157,6 +157,10 @@ export interface SandboxStatus {
   logs: string[];
 }
 
+export interface SandboxListResult {
+  sandboxes: SandboxStatus[];
+}
+
 export interface SessionView {
   session_id: string;
   status: string;
