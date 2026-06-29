@@ -14,6 +14,7 @@
     "test:baseline": "python -m pytest -q examples/reference-interview-runtime",
     "test:generated": "python -m pytest -q generated/reference-interview-runtime",
     "test:builder-api": "tsx --test apps/builder-api/src/server.test.ts",
+    "test:codegen": "tsx --test packages/codegen-langgraph/src/codegen.test.ts",
     "dev:builder-api": "tsx apps/builder-api/src/server.ts",
     "dev:builder-ui": "npm --workspace @agent-flow-builder/builder-ui run dev",
     "build:builder-ui": "npm --workspace @agent-flow-builder/builder-ui run build"

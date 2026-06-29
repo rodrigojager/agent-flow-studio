@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session
 from app import repo
 from app.cache import recent_key
 from app.graph import (
-    DETERMINISTIC_NODE_ID,
-    FINISH_NODE_ID,
-    INPUT_SAFETY_NODE_ID,
-    LLM_NODE_ID,
-    OUTPUT_SAFETY_NODE_ID,
-    START_NODE_ID,
+    CODE_NODE_IDS,
+    FINISH_NODE_IDS,
+    INPUT_SAFETY_NODE_IDS,
+    LLM_NODE_IDS,
+    OUTPUT_SAFETY_NODE_IDS,
+    START_NODE_IDS,
 )
 from app.models import AgentMessage, AgentSession
 from app.settings import Settings
@@ -106,6 +106,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "executed_nodes": [],
             },
             row.session_id,
         )
@@ -118,7 +119,7 @@ class ReferenceAgentService:
             code=assistant["code"],
             content=assistant["text"],
         )
-        repo.append_event(db, session_id=row.session_id, event_type="node_completed", node=START_NODE_ID, payload=result)
+        self._persist_graph_events(db, row.session_id, result)
         self._cache_recent(row.session_id, [message_view(message)])
         return {"session": session_view(row), "messages": [message_view(message)]}
 
@@ -157,9 +158,11 @@ class ReferenceAgentService:
                 "max_turns": row.max_turns,
                 "user_message": user_message,
                 "recent_messages": recent_messages[-RECENT_LIMIT:],
+                "executed_nodes": [],
             },
             row.session_id,
         )
+        result = self._normalize_turn_result(result, row)
         completed = bool(result.get("is_complete"))
         repo.update_session_state(
             db,
@@ -178,7 +181,7 @@ class ReferenceAgentService:
             content=assistant["text"],
             metadata_json={"llm": result.get("llm"), "safety": result.get("safety")},
         )
-        self._persist_turn_events(db, row.session_id, result, user_row.message_id)
+        self._persist_graph_events(db, row.session_id, result, source_message_id=user_row.message_id)
         recent_payload = [*recent_messages[-RECENT_LIMIT:], {"role": "assistant", "content": assistant["text"]}]
         self.cache.set_json(recent_key(row.session_id), recent_payload[-RECENT_LIMIT:], ttl_seconds=self.settings.redis_ttl_seconds)
         return {
@@ -203,6 +206,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "executed_nodes": [],
             },
             row.session_id,
         )
@@ -215,7 +219,7 @@ class ReferenceAgentService:
             code=assistant["code"],
             content=assistant["text"],
         )
-        repo.append_event(db, session_id=row.session_id, event_type="node_completed", node=FINISH_NODE_ID, payload=result)
+        self._persist_graph_events(db, row.session_id, result)
         repo.append_event(
             db,
             session_id=row.session_id,
@@ -253,33 +257,62 @@ class ReferenceAgentService:
         payload = [{"role": item["role"], "content": item["content"]} for item in messages]
         self.cache.set_json(recent_key(session_id), payload[-RECENT_LIMIT:], ttl_seconds=self.settings.redis_ttl_seconds)
 
-    def _persist_turn_events(self, db: Session, session_id: str, result: dict[str, Any], user_message_id: str) -> None:
-        repo.append_event(
-            db,
-            session_id=session_id,
-            event_type="node_completed",
-            node=INPUT_SAFETY_NODE_ID,
-            payload={"safety": result.get("safety"), "source_message_id": user_message_id},
-        )
-        if not (result.get("safety") or {}).get("blocked"):
+    def _normalize_turn_result(self, result: dict[str, Any], row: AgentSession) -> dict[str, Any]:
+        assistant = result.get("assistant_message")
+        if not assistant:
+            result["assistant_message"] = {"code": "OK", "text": "Turno processado."}
+
+        next_turn = int(result.get("turn") or row.turn)
+        if next_turn <= row.turn:
+            next_turn = row.turn + 1
+        result["turn"] = next_turn
+
+        if next_turn >= row.max_turns and result.get("status") != "completed":
+            text = result["assistant_message"]["text"]
+            result["assistant_message"] = {
+                "code": "ENC",
+                "text": f"{text}\n\nEncerramos por aqui porque o limite de turnos foi atingido.",
+            }
+            result["status"] = "completed"
+            result["phase"] = "closing"
+            result["is_complete"] = True
+        else:
+            result.setdefault("status", "active")
+            result.setdefault("phase", "awaiting_turn")
+            result.setdefault("is_complete", False)
+        return result
+
+    def _persist_graph_events(
+        self,
+        db: Session,
+        session_id: str,
+        result: dict[str, Any],
+        source_message_id: str | None = None,
+    ) -> None:
+        for node_id in result.get("executed_nodes") or []:
+            payload: dict[str, Any] = {
+                "status": result.get("status"),
+                "phase": result.get("phase"),
+                "turn": result.get("turn"),
+            }
+            if source_message_id:
+                payload["source_message_id"] = source_message_id
+            event_type = "node_completed"
+            if node_id in LLM_NODE_IDS:
+                event_type = "llm_called"
+                payload.update(result.get("llm") or {})
+            elif node_id in INPUT_SAFETY_NODE_IDS or node_id in OUTPUT_SAFETY_NODE_IDS:
+                payload["safety"] = result.get("safety") or {"blocked": False, "decision": "allow"}
+            elif node_id in CODE_NODE_IDS:
+                payload["handler"] = "code"
+            elif node_id in START_NODE_IDS:
+                payload["handler"] = "start"
+            elif node_id in FINISH_NODE_IDS:
+                payload["handler"] = "finish"
             repo.append_event(
                 db,
                 session_id=session_id,
-                event_type="llm_called",
-                node=LLM_NODE_ID,
-                payload=result.get("llm") or {},
-            )
-            repo.append_event(
-                db,
-                session_id=session_id,
-                event_type="node_completed",
-                node=OUTPUT_SAFETY_NODE_ID,
-                payload={"safety": result.get("safety") or {"blocked": False, "decision": "allow"}},
-            )
-            repo.append_event(
-                db,
-                session_id=session_id,
-                event_type="node_completed",
-                node=DETERMINISTIC_NODE_ID,
-                payload={"turn": result.get("turn"), "status": result.get("status"), "phase": result.get("phase")},
+                event_type=event_type,
+                node=node_id,
+                payload=payload,
             )

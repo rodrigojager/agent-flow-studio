@@ -5,20 +5,36 @@ export interface RuntimeFile {
   content: string;
 }
 
-interface ReferenceNodes {
-  startNodeId: string;
-  inputSafetyNodeId: string;
-  llmNodeId: string;
-  outputSafetyNodeId: string;
-  deterministicNodeId: string;
-  finishNodeId: string;
-  systemPromptFile: string;
+type FlowNode = AgentFlow["nodes"][number];
+type FlowEdge = AgentFlow["edges"][number];
+
+interface RuntimeNodeConfig {
+  id: string;
+  type: string;
+  stage?: string;
+  handler?: string;
+  promptFile?: string;
+}
+
+interface RuntimeRouteCondition {
+  key: string;
+  kind: "always" | "safety_blocked" | "safety_decision" | "status_equals" | "phase_equals";
+  value?: string | boolean;
+}
+
+interface RuntimePlan {
+  nodes: RuntimeNodeConfig[];
+  directNodeEdges: Record<string, string>;
+  nodeRouteMap: Record<string, Record<string, string>>;
+  nodeRouteConditions: Record<string, RuntimeRouteCondition[]>;
   actionRoutes: Record<string, string>;
+  defaultActionRoute: string;
+  defaultPromptFile: string;
 }
 
 export function renderPythonRuntimeFiles(flow: AgentFlow): RuntimeFile[] {
   assertSupportedRuntime(flow);
-  const nodes = referenceNodes(flow);
+  const plan = runtimePlan(flow);
   const serviceName = `${slug(flow.id)}-runtime`;
   return [
     { relativePath: "pyproject.toml", content: renderPyproject(flow, serviceName) },
@@ -37,7 +53,7 @@ export function renderPythonRuntimeFiles(flow: AgentFlow): RuntimeFile[] {
     { relativePath: "app/idempotency.py", content: renderIdempotency() },
     { relativePath: "app/safety.py", content: renderSafety() },
     { relativePath: "app/llm.py", content: renderLlm(flow) },
-    { relativePath: "app/graph.py", content: renderGraph(flow, nodes) },
+    { relativePath: "app/graph.py", content: renderGraph(flow, plan) },
     { relativePath: "app/schemas.py", content: renderSchemas() },
     { relativePath: "app/service.py", content: renderService() },
     { relativePath: "app/auth.py", content: renderAuth() },
@@ -60,47 +76,110 @@ function assertSupportedRuntime(flow: AgentFlow): void {
   }
 }
 
-function referenceNodes(flow: AgentFlow): ReferenceNodes {
-  const startNode = flow.nodes.find((node) => node.type === "start");
-  const inputSafety = flow.nodes.find((node) => node.type === "safety_gate" && node.stage === "input");
-  const llmNode = flow.nodes.find((node) => node.type === "llm_prompt" || node.type === "llm_structured");
-  const outputSafety = flow.nodes.find((node) => node.type === "safety_gate" && node.stage === "output");
-  const deterministicNode = flow.nodes.find((node) => node.type === "code" && node.handler === "deterministic_gate");
-  const finishNode = flow.nodes.find((node) => node.type === "end");
-
-  if (!startNode || !inputSafety || !llmNode || !outputSafety || !deterministicNode || !finishNode) {
-    throw new Error(
-      "O gerador de referência espera nós start, safety_gate input, llm_prompt, safety_gate output, deterministic_gate e end.",
-    );
+function runtimePlan(flow: AgentFlow): RuntimePlan {
+  const defaultPrompt = flow.prompts[0];
+  if (!defaultPrompt) {
+    throw new Error("O gerador Python exige ao menos um prompt no flow.");
+  }
+  const firstNode = flow.nodes[0];
+  if (!firstNode) {
+    throw new Error("O gerador Python exige ao menos um nó no flow.");
   }
 
-  const prompt = flow.prompts.find((item) => item.id === llmNode.promptId) ?? flow.prompts[0];
+  const nodes = flow.nodes.map((node) => runtimeNodeConfig(flow, node, defaultPrompt.path));
   const actionRoutes: Record<string, string> = {};
+  let defaultActionRoute = firstNode.id;
   for (const edge of flow.edges.filter((edge) => edge.from === "start")) {
     const action = parseActionCondition(edge.condition);
     if (action) {
       actionRoutes[action] = edge.to;
+    } else if (!edge.condition) {
+      defaultActionRoute = edge.to;
+    } else {
+      throw new Error(`Condição de entrada ainda não suportada pelo gerador Python: ${edge.condition}`);
     }
   }
-  actionRoutes.start ??= startNode.id;
-  actionRoutes.turn ??= inputSafety.id;
-  actionRoutes.finish ??= finishNode.id;
+  actionRoutes.start ??= flow.nodes.find((node) => node.type === "start")?.id ?? defaultActionRoute;
+  actionRoutes.turn ??=
+    flow.nodes.find((node) => node.type === "safety_gate" && node.stage === "input")?.id ??
+    flow.nodes.find((node) => node.type === "llm_prompt" || node.type === "llm_structured")?.id ??
+    defaultActionRoute;
+  actionRoutes.finish ??= flow.nodes.find((node) => node.type === "end")?.id ?? "end";
+
+  const directNodeEdges: Record<string, string> = {};
+  const nodeRouteMap: Record<string, Record<string, string>> = {};
+  const nodeRouteConditions: Record<string, RuntimeRouteCondition[]> = {};
+  for (const node of flow.nodes) {
+    const outgoing = flow.edges.filter((edge) => edge.from === node.id);
+    if (outgoing.length === 0) {
+      directNodeEdges[node.id] = "end";
+      continue;
+    }
+    if (outgoing.length === 1 && !outgoing[0].condition) {
+      directNodeEdges[node.id] = outgoing[0].to;
+      continue;
+    }
+    const routeMap: Record<string, string> = {};
+    const routeConditions: RuntimeRouteCondition[] = [];
+    outgoing.forEach((edge, index) => {
+      const route = parseNodeRouteCondition(edge, index);
+      routeMap[route.key] = edge.to;
+      routeConditions.push(route);
+    });
+    nodeRouteMap[node.id] = routeMap;
+    nodeRouteConditions[node.id] = routeConditions;
+  }
 
   return {
-    startNodeId: startNode.id,
-    inputSafetyNodeId: inputSafety.id,
-    llmNodeId: llmNode.id,
-    outputSafetyNodeId: outputSafety.id,
-    deterministicNodeId: deterministicNode.id,
-    finishNodeId: finishNode.id,
-    systemPromptFile: basename(prompt.path),
+    nodes,
+    directNodeEdges,
+    nodeRouteMap,
+    nodeRouteConditions,
     actionRoutes,
+    defaultActionRoute,
+    defaultPromptFile: basename(defaultPrompt.path),
+  };
+}
+
+function runtimeNodeConfig(flow: AgentFlow, node: FlowNode, defaultPromptPath: string): RuntimeNodeConfig {
+  const prompt = node.promptId ? flow.prompts.find((item) => item.id === node.promptId) : undefined;
+  return {
+    id: node.id,
+    type: node.type,
+    stage: node.stage,
+    handler: node.handler,
+    promptFile: basename(prompt?.path ?? defaultPromptPath),
   };
 }
 
 function parseActionCondition(condition: string | undefined): string | undefined {
   const match = condition?.match(/action\s*==\s*['"]([^'"]+)['"]/);
   return match?.[1];
+}
+
+function parseNodeRouteCondition(edge: FlowEdge, index: number): RuntimeRouteCondition {
+  const key = `route_${index}`;
+  if (!edge.condition) {
+    return { key, kind: "always" };
+  }
+  const condition = edge.condition.trim();
+  const safetyBlocked = condition.match(/safety\.blocked\s*==\s*(true|false)/i);
+  if (safetyBlocked) {
+    return { key, kind: "safety_blocked", value: safetyBlocked[1].toLowerCase() === "true" };
+  }
+  const safetyDecision = condition.match(/safety\.decision\s*==\s*['"]([^'"]+)['"]/i);
+  if (safetyDecision) {
+    return { key, kind: "safety_decision", value: safetyDecision[1] };
+  }
+  const status = condition.match(/status\s*==\s*['"]([^'"]+)['"]/i);
+  if (status) {
+    return { key, kind: "status_equals", value: status[1] };
+  }
+  const phase = condition.match(/phase\s*==\s*['"]([^'"]+)['"]/i);
+  if (phase) {
+    return { key, kind: "phase_equals", value: phase[1] };
+  }
+  throw new Error(`Condição de aresta ainda não suportada pelo gerador Python: ${edge.condition}`);
 }
 
 function basename(value: string): string {
@@ -982,7 +1061,7 @@ def load_prompt(name: str = "system.md") -> str:
 `;
 }
 
-function renderGraph(flow: AgentFlow, nodes: ReferenceNodes): string {
+function renderGraph(flow: AgentFlow, plan: RuntimePlan): string {
   return `import atexit
 import json
 from typing import Any, Literal, TypedDict
@@ -995,15 +1074,38 @@ from app.safety import SafetyGate
 from app.settings import Settings
 
 
-START_NODE_ID = ${pyString(nodes.startNodeId)}
-INPUT_SAFETY_NODE_ID = ${pyString(nodes.inputSafetyNodeId)}
-LLM_NODE_ID = ${pyString(nodes.llmNodeId)}
-OUTPUT_SAFETY_NODE_ID = ${pyString(nodes.outputSafetyNodeId)}
-DETERMINISTIC_NODE_ID = ${pyString(nodes.deterministicNodeId)}
-FINISH_NODE_ID = ${pyString(nodes.finishNodeId)}
-SYSTEM_PROMPT_FILE = ${pyString(nodes.systemPromptFile)}
-ACTION_ROUTE_MAP = json.loads(${pyJson(nodes.actionRoutes)})
+NODE_CONFIGS = json.loads(${pyJson(plan.nodes)})
+NODE_CONFIG_BY_ID = {item["id"]: item for item in NODE_CONFIGS}
+RAW_ACTION_ROUTE_MAP = json.loads(${pyJson(plan.actionRoutes)})
+DEFAULT_ACTION_ROUTE = ${pyString(plan.defaultActionRoute)}
+DEFAULT_PROMPT_FILE = ${pyString(plan.defaultPromptFile)}
+DIRECT_NODE_EDGES_RAW = json.loads(${pyJson(plan.directNodeEdges)})
+NODE_ROUTE_MAP_RAW = json.loads(${pyJson(plan.nodeRouteMap)})
+NODE_ROUTE_CONDITIONS = json.loads(${pyJson(plan.nodeRouteConditions)})
 START_MESSAGE = ${pyString(`Olá! Este é o ${flow.name}. Envie uma mensagem para eu ecoar o fluxo com segurança, LLM e estado.`)}
+
+
+def _node_ids(*, node_type: str, stage: str | None = None) -> list[str]:
+    result = []
+    for item in NODE_CONFIGS:
+        if item["type"] != node_type:
+            continue
+        if stage is not None and item.get("stage") != stage:
+            continue
+        result.append(item["id"])
+    return result
+
+
+START_NODE_IDS = _node_ids(node_type="start")
+FINISH_NODE_IDS = _node_ids(node_type="end")
+INPUT_SAFETY_NODE_IDS = _node_ids(node_type="safety_gate", stage="input")
+OUTPUT_SAFETY_NODE_IDS = _node_ids(node_type="safety_gate", stage="output")
+LLM_NODE_IDS = [
+    item["id"]
+    for item in NODE_CONFIGS
+    if item["type"] in {"llm_prompt", "llm_structured"}
+]
+CODE_NODE_IDS = _node_ids(node_type="code")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -1019,6 +1121,7 @@ class ReferenceState(TypedDict, total=False):
     safety: dict[str, Any]
     llm: dict[str, Any]
     is_complete: bool
+    executed_nodes: list[str]
 
 
 def build_checkpointer(settings: Settings):
@@ -1048,127 +1151,220 @@ def build_graph(
     safety_gate: SafetyGate,
     checkpointer,
 ):
-    system_prompt = load_prompt(SYSTEM_PROMPT_FILE)
+    prompt_cache: dict[str, str] = {}
+
+    def normalize_graph_target(target: str):
+        return END if target == "end" else target
+
+    raw_action_map = dict(RAW_ACTION_ROUTE_MAP)
+    raw_action_map["__default__"] = DEFAULT_ACTION_ROUTE
+    action_route_map = {key: normalize_graph_target(value) for key, value in raw_action_map.items()}
+    direct_node_edges = {key: normalize_graph_target(value) for key, value in DIRECT_NODE_EDGES_RAW.items()}
+    node_route_map = {
+        node_id: {key: normalize_graph_target(value) for key, value in route_map.items()}
+        for node_id, route_map in NODE_ROUTE_MAP_RAW.items()
+    }
 
     def route_action(state: ReferenceState) -> str:
         action = state.get("action", "turn")
-        return action if action in ACTION_ROUTE_MAP else "turn"
+        return action if action in action_route_map else "__default__"
 
-    def start_node(state: ReferenceState) -> ReferenceState:
-        return {
-            "status": "active",
-            "phase": "awaiting_turn",
-            "assistant_message": {"code": "ABR", "text": START_MESSAGE},
-            "is_complete": False,
-        }
+    def prompt_for_node(config: dict[str, Any]) -> str:
+        prompt_file = str(config.get("promptFile") or DEFAULT_PROMPT_FILE)
+        if prompt_file not in prompt_cache:
+            prompt_cache[prompt_file] = load_prompt(prompt_file)
+        return prompt_cache[prompt_file]
 
-    def input_safety_check(state: ReferenceState) -> ReferenceState:
-        decision = safety_gate.check_input(state.get("user_message", ""))
-        if decision.blocked:
-            return {
-                "safety": {
-                    "blocked": True,
-                    "decision": decision.decision,
-                    "category": decision.category,
-                    "reason": decision.reason,
+    def mark_node(state: ReferenceState, node_id: str, updates: ReferenceState) -> ReferenceState:
+        executed = list(state.get("executed_nodes") or [])
+        executed.append(node_id)
+        return {**updates, "executed_nodes": executed}
+
+    def make_start_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            return mark_node(state, node_id, {
+                "status": "active",
+                "phase": "awaiting_turn",
+                "assistant_message": {"code": "ABR", "text": START_MESSAGE},
+                "is_complete": False,
+            })
+
+        return run
+
+    def make_safety_node(config: dict[str, Any]):
+        node_id = config["id"]
+        stage = config.get("stage")
+
+        def run(state: ReferenceState) -> ReferenceState:
+            if stage == "input":
+                decision = safety_gate.check_input(state.get("user_message", ""))
+                if decision.blocked:
+                    return mark_node(state, node_id, {
+                        "safety": {
+                            "blocked": True,
+                            "decision": decision.decision,
+                            "category": decision.category,
+                            "reason": decision.reason,
+                        },
+                        "assistant_message": {"code": "SEG", "text": decision.safe_response or "Mensagem bloqueada."},
+                        "phase": "safety",
+                        "is_complete": decision.decision == "block",
+                        "status": "completed" if decision.decision == "block" else "active",
+                    })
+                return mark_node(state, node_id, {
+                    "safety": {"blocked": False, "decision": "allow"},
+                })
+
+            if stage == "output":
+                current_message = state.get("assistant_message") or {}
+                decision = safety_gate.check_output(str(current_message.get("text") or ""))
+                if decision.blocked:
+                    return mark_node(state, node_id, {
+                        "safety": {
+                            "blocked": True,
+                            "decision": decision.decision,
+                            "category": decision.category,
+                            "reason": decision.reason,
+                        },
+                        "assistant_message": {"code": "SEG", "text": decision.safe_response or "Saída ajustada por segurança."},
+                    })
+                return mark_node(state, node_id, {})
+
+            return mark_node(state, node_id, {})
+
+        return run
+
+    def make_llm_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            result = llm_client.generate(
+                system_prompt=prompt_for_node(config),
+                user_message=state.get("user_message", ""),
+                context={
+                    "session_id": state.get("session_id"),
+                    "turn": state.get("turn", 0),
+                    "max_turns": state.get("max_turns", 3),
+                    "phase": state.get("phase"),
+                    "node_id": node_id,
                 },
-                "assistant_message": {"code": "SEG", "text": decision.safe_response or "Mensagem bloqueada."},
-                "phase": "safety",
-                "is_complete": decision.decision == "block",
-                "status": "completed" if decision.decision == "block" else "active",
-            }
-        return {
-            "safety": {"blocked": False, "decision": "allow"},
-        }
-
-    def route_after_input_safety(state: ReferenceState) -> str:
-        return "blocked" if (state.get("safety") or {}).get("blocked") else "safe"
-
-    def llm_step(state: ReferenceState) -> ReferenceState:
-        result = llm_client.generate(
-            system_prompt=system_prompt,
-            user_message=state.get("user_message", ""),
-            context={
-                "session_id": state.get("session_id"),
-                "turn": state.get("turn", 0),
-                "max_turns": state.get("max_turns", 3),
-                "phase": state.get("phase"),
-            },
-            recent_messages=state.get("recent_messages", []),
-        )
-        return {
-            "assistant_message": {"code": "ECHO", "text": result.text},
-            "llm": {
-                "provider": result.provider,
-                "model": result.model,
-                "attempts": result.attempts,
-            },
-        }
-
-    def output_safety_check(state: ReferenceState) -> ReferenceState:
-        current_message = state.get("assistant_message") or {}
-        decision = safety_gate.check_output(str(current_message.get("text") or ""))
-        if decision.blocked:
-            return {
-                "safety": {
-                    "blocked": True,
-                    "decision": decision.decision,
-                    "category": decision.category,
-                    "reason": decision.reason,
+                recent_messages=state.get("recent_messages", []),
+            )
+            return mark_node(state, node_id, {
+                "assistant_message": {"code": "ECHO", "text": result.text},
+                "llm": {
+                    "provider": result.provider,
+                    "model": result.model,
+                    "attempts": result.attempts,
+                    "node_id": node_id,
                 },
-                "assistant_message": {"code": "SEG", "text": decision.safe_response or "Saída ajustada por segurança."},
-            }
-        return {}
+            })
 
-    def deterministic_gate(state: ReferenceState) -> ReferenceState:
-        next_turn = int(state.get("turn") or 0) + 1
-        max_turns = int(state.get("max_turns") or 3)
-        if next_turn >= max_turns:
-            text = (state.get("assistant_message") or {}).get("text") or "Obrigado pela resposta."
-            return {
+        return run
+
+    def make_code_node(config: dict[str, Any]):
+        node_id = config["id"]
+        handler = config.get("handler")
+
+        def deterministic_gate(state: ReferenceState) -> ReferenceState:
+            next_turn = int(state.get("turn") or 0) + 1
+            max_turns = int(state.get("max_turns") or 3)
+            if next_turn >= max_turns:
+                text = (state.get("assistant_message") or {}).get("text") or "Obrigado pela resposta."
+                return mark_node(state, node_id, {
+                    "turn": next_turn,
+                    "status": "completed",
+                    "phase": "closing",
+                    "is_complete": True,
+                    "assistant_message": {
+                        "code": "ENC",
+                        "text": f"{text}\\n\\nEncerramos por aqui porque o limite de turnos foi atingido.",
+                    },
+                })
+            return mark_node(state, node_id, {
                 "turn": next_turn,
+                "status": "active",
+                "phase": "awaiting_turn",
+                "is_complete": False,
+            })
+
+        def noop_code(state: ReferenceState) -> ReferenceState:
+            return mark_node(state, node_id, {})
+
+        return deterministic_gate if handler == "deterministic_gate" else noop_code
+
+    def make_finish_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            return mark_node(state, node_id, {
                 "status": "completed",
                 "phase": "closing",
                 "is_complete": True,
-                "assistant_message": {
-                    "code": "ENC",
-                    "text": f"{text}\\n\\nEncerramos por aqui porque o limite de turnos foi atingido.",
-                },
-            }
-        return {
-            "turn": next_turn,
-            "status": "active",
-            "phase": "awaiting_turn",
-            "is_complete": False,
-        }
+                "assistant_message": {"code": "ENC", "text": "Sessão finalizada manualmente."},
+            })
 
-    def finish_node(state: ReferenceState) -> ReferenceState:
-        return {
-            "status": "completed",
-            "phase": "closing",
-            "is_complete": True,
-            "assistant_message": {"code": "ENC", "text": "Sessão finalizada manualmente."},
-        }
+        return run
+
+    def make_noop_node(config: dict[str, Any]):
+        node_id = config["id"]
+
+        def run(state: ReferenceState) -> ReferenceState:
+            return mark_node(state, node_id, {})
+
+        return run
+
+    def handler_for_node(config: dict[str, Any]):
+        node_type = config["type"]
+        if node_type == "start":
+            return make_start_node(config)
+        if node_type == "safety_gate":
+            return make_safety_node(config)
+        if node_type in {"llm_prompt", "llm_structured"}:
+            return make_llm_node(config)
+        if node_type == "code":
+            return make_code_node(config)
+        if node_type == "end":
+            return make_finish_node(config)
+        return make_noop_node(config)
+
+    def condition_matches(state: ReferenceState, condition: dict[str, Any]) -> bool:
+        kind = condition.get("kind")
+        if kind == "always":
+            return True
+        if kind == "safety_blocked":
+            return bool((state.get("safety") or {}).get("blocked")) is bool(condition.get("value"))
+        if kind == "safety_decision":
+            return (state.get("safety") or {}).get("decision") == condition.get("value")
+        if kind == "status_equals":
+            return state.get("status") == condition.get("value")
+        if kind == "phase_equals":
+            return state.get("phase") == condition.get("value")
+        return False
+
+    def make_route_after_node(node_id: str):
+        conditions = NODE_ROUTE_CONDITIONS.get(node_id, [])
+        fallback = conditions[0]["key"] if conditions else "__end__"
+
+        def route(state: ReferenceState) -> str:
+            for condition in conditions:
+                if condition_matches(state, condition):
+                    return condition["key"]
+            return fallback
+
+        return route
 
     builder = StateGraph(ReferenceState)
-    builder.add_node(START_NODE_ID, start_node)
-    builder.add_node(INPUT_SAFETY_NODE_ID, input_safety_check)
-    builder.add_node(LLM_NODE_ID, llm_step)
-    builder.add_node(OUTPUT_SAFETY_NODE_ID, output_safety_check)
-    builder.add_node(DETERMINISTIC_NODE_ID, deterministic_gate)
-    builder.add_node(FINISH_NODE_ID, finish_node)
+    for config in NODE_CONFIGS:
+        builder.add_node(config["id"], handler_for_node(config))
 
-    builder.add_conditional_edges(START, route_action, ACTION_ROUTE_MAP)
-    builder.add_edge(START_NODE_ID, END)
-    builder.add_conditional_edges(
-        INPUT_SAFETY_NODE_ID,
-        route_after_input_safety,
-        {"blocked": END, "safe": LLM_NODE_ID},
-    )
-    builder.add_edge(LLM_NODE_ID, OUTPUT_SAFETY_NODE_ID)
-    builder.add_edge(OUTPUT_SAFETY_NODE_ID, DETERMINISTIC_NODE_ID)
-    builder.add_edge(DETERMINISTIC_NODE_ID, END)
-    builder.add_edge(FINISH_NODE_ID, END)
+    builder.add_conditional_edges(START, route_action, action_route_map)
+    for node_id, target in direct_node_edges.items():
+        builder.add_edge(node_id, target)
+    for node_id, route_map in node_route_map.items():
+        builder.add_conditional_edges(node_id, make_route_after_node(node_id), route_map)
 
     return builder.compile(checkpointer=checkpointer)
 `;
@@ -1277,12 +1473,12 @@ from sqlalchemy.orm import Session
 from app import repo
 from app.cache import recent_key
 from app.graph import (
-    DETERMINISTIC_NODE_ID,
-    FINISH_NODE_ID,
-    INPUT_SAFETY_NODE_ID,
-    LLM_NODE_ID,
-    OUTPUT_SAFETY_NODE_ID,
-    START_NODE_ID,
+    CODE_NODE_IDS,
+    FINISH_NODE_IDS,
+    INPUT_SAFETY_NODE_IDS,
+    LLM_NODE_IDS,
+    OUTPUT_SAFETY_NODE_IDS,
+    START_NODE_IDS,
 )
 from app.models import AgentMessage, AgentSession
 from app.settings import Settings
@@ -1377,6 +1573,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "executed_nodes": [],
             },
             row.session_id,
         )
@@ -1389,7 +1586,7 @@ class ReferenceAgentService:
             code=assistant["code"],
             content=assistant["text"],
         )
-        repo.append_event(db, session_id=row.session_id, event_type="node_completed", node=START_NODE_ID, payload=result)
+        self._persist_graph_events(db, row.session_id, result)
         self._cache_recent(row.session_id, [message_view(message)])
         return {"session": session_view(row), "messages": [message_view(message)]}
 
@@ -1428,9 +1625,11 @@ class ReferenceAgentService:
                 "max_turns": row.max_turns,
                 "user_message": user_message,
                 "recent_messages": recent_messages[-RECENT_LIMIT:],
+                "executed_nodes": [],
             },
             row.session_id,
         )
+        result = self._normalize_turn_result(result, row)
         completed = bool(result.get("is_complete"))
         repo.update_session_state(
             db,
@@ -1449,7 +1648,7 @@ class ReferenceAgentService:
             content=assistant["text"],
             metadata_json={"llm": result.get("llm"), "safety": result.get("safety")},
         )
-        self._persist_turn_events(db, row.session_id, result, user_row.message_id)
+        self._persist_graph_events(db, row.session_id, result, source_message_id=user_row.message_id)
         recent_payload = [*recent_messages[-RECENT_LIMIT:], {"role": "assistant", "content": assistant["text"]}]
         self.cache.set_json(recent_key(row.session_id), recent_payload[-RECENT_LIMIT:], ttl_seconds=self.settings.redis_ttl_seconds)
         return {
@@ -1474,6 +1673,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "executed_nodes": [],
             },
             row.session_id,
         )
@@ -1486,7 +1686,7 @@ class ReferenceAgentService:
             code=assistant["code"],
             content=assistant["text"],
         )
-        repo.append_event(db, session_id=row.session_id, event_type="node_completed", node=FINISH_NODE_ID, payload=result)
+        self._persist_graph_events(db, row.session_id, result)
         repo.append_event(
             db,
             session_id=row.session_id,
@@ -1524,35 +1724,64 @@ class ReferenceAgentService:
         payload = [{"role": item["role"], "content": item["content"]} for item in messages]
         self.cache.set_json(recent_key(session_id), payload[-RECENT_LIMIT:], ttl_seconds=self.settings.redis_ttl_seconds)
 
-    def _persist_turn_events(self, db: Session, session_id: str, result: dict[str, Any], user_message_id: str) -> None:
-        repo.append_event(
-            db,
-            session_id=session_id,
-            event_type="node_completed",
-            node=INPUT_SAFETY_NODE_ID,
-            payload={"safety": result.get("safety"), "source_message_id": user_message_id},
-        )
-        if not (result.get("safety") or {}).get("blocked"):
+    def _normalize_turn_result(self, result: dict[str, Any], row: AgentSession) -> dict[str, Any]:
+        assistant = result.get("assistant_message")
+        if not assistant:
+            result["assistant_message"] = {"code": "OK", "text": "Turno processado."}
+
+        next_turn = int(result.get("turn") or row.turn)
+        if next_turn <= row.turn:
+            next_turn = row.turn + 1
+        result["turn"] = next_turn
+
+        if next_turn >= row.max_turns and result.get("status") != "completed":
+            text = result["assistant_message"]["text"]
+            result["assistant_message"] = {
+                "code": "ENC",
+                "text": f"{text}\\n\\nEncerramos por aqui porque o limite de turnos foi atingido.",
+            }
+            result["status"] = "completed"
+            result["phase"] = "closing"
+            result["is_complete"] = True
+        else:
+            result.setdefault("status", "active")
+            result.setdefault("phase", "awaiting_turn")
+            result.setdefault("is_complete", False)
+        return result
+
+    def _persist_graph_events(
+        self,
+        db: Session,
+        session_id: str,
+        result: dict[str, Any],
+        source_message_id: str | None = None,
+    ) -> None:
+        for node_id in result.get("executed_nodes") or []:
+            payload: dict[str, Any] = {
+                "status": result.get("status"),
+                "phase": result.get("phase"),
+                "turn": result.get("turn"),
+            }
+            if source_message_id:
+                payload["source_message_id"] = source_message_id
+            event_type = "node_completed"
+            if node_id in LLM_NODE_IDS:
+                event_type = "llm_called"
+                payload.update(result.get("llm") or {})
+            elif node_id in INPUT_SAFETY_NODE_IDS or node_id in OUTPUT_SAFETY_NODE_IDS:
+                payload["safety"] = result.get("safety") or {"blocked": False, "decision": "allow"}
+            elif node_id in CODE_NODE_IDS:
+                payload["handler"] = "code"
+            elif node_id in START_NODE_IDS:
+                payload["handler"] = "start"
+            elif node_id in FINISH_NODE_IDS:
+                payload["handler"] = "finish"
             repo.append_event(
                 db,
                 session_id=session_id,
-                event_type="llm_called",
-                node=LLM_NODE_ID,
-                payload=result.get("llm") or {},
-            )
-            repo.append_event(
-                db,
-                session_id=session_id,
-                event_type="node_completed",
-                node=OUTPUT_SAFETY_NODE_ID,
-                payload={"safety": result.get("safety") or {"blocked": False, "decision": "allow"}},
-            )
-            repo.append_event(
-                db,
-                session_id=session_id,
-                event_type="node_completed",
-                node=DETERMINISTIC_NODE_ID,
-                payload={"turn": result.get("turn"), "status": result.get("status"), "phase": result.get("phase")},
+                event_type=event_type,
+                node=node_id,
+                payload=payload,
             )
 `;
 }

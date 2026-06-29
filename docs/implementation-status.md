@@ -30,6 +30,8 @@
 - Builder UI possui aba `Arquivos` para editar prompts e schemas referenciados pelo flow antes de validar, gerar ou iniciar sandbox.
 - Builder UI permite criar, remover, mover, conectar e reconectar nós/arestas no canvas, com posições persistidas no `agent.flow.json`.
 - Flow Spec aceita `position` opcional em nós para preservar layout visual sem afetar o runtime gerado.
+- Codegen LangGraph monta o grafo gerado a partir dos nós e arestas do `agent.flow.json`, com handlers por tipo de nó e eventos baseados nos nós realmente executados.
+- Codegen possui teste end-to-end com flow simplificado sem `deterministic_gate`, gerando runtime temporário e executando pytest no artefato gerado.
 - Sandbox local inicial: Builder API inicia/para o runtime gerado, acompanha status/logs, e Builder UI aciona criação de sessão, turnos, finalização, transcript e events.
 
 ## Verificado
@@ -41,6 +43,7 @@ npm run typecheck
 npm run test:baseline
 npm run test:generated
 npm run test:builder-api
+npm run test:codegen
 npm run build:builder-ui
 npm audit --audit-level=moderate
 ```
@@ -56,7 +59,7 @@ Também foi validado localmente:
 
 ## Ainda não implementado
 
-- Codegen genérico para todos os tipos futuros de nós e recursos avançados.
+- Codegen genérico para recursos avançados e execução real de todos os tipos futuros de nós.
 - Teste automatizado de equivalência estrutural mais estrito entre baseline manual, flow spec e runtime gerado.
 - Edição visual avançada de prompts/schemas, validação visual rica, import/export de workspace e ergonomia refinada do canvas.
 - Sandbox visual mais completo, com logs ao vivo, gerenciamento de múltiplos runtimes e seleção de portas.
