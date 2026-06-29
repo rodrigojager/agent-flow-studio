@@ -1,0 +1,951 @@
+PLANO REVISADO - OBJETIVO, VISÃO E IMPLEMENTAÇÃO
+BUILDER VISUAL PARA CRIAR AGENTES DE IA COMO APIs INDEPENDENTES
+================================================================
+
+1. OBJETIVO PRINCIPAL
+---------------------
+
+O objetivo deste projeto é criar uma ferramenta que facilite a criação de múltiplos agentes de IA, cada um funcionando como uma API independente, embarcável em container Docker, com memória entre interações, endpoints bem definidos, Swagger/OpenAPI, execução de etapas determinísticas e etapas com IA.
+
+A ferramenta deve permitir criar agentes de maneira mais prática do que programar tudo manualmente em Python/FastAPI, mas sem depender de uma plataforma centralizada pesada como n8n, Dify ou Flowise em produção.
+
+A visão é:
+
+    Criar visualmente um fluxo de agente
+        -> gerar código enxuto em LangGraph + FastAPI
+        -> rodar esse agente como uma API independente
+        -> empacotar em Docker
+        -> consumir essa API a partir de outros sistemas
+
+O objetivo NÃO é criar um chatbot genérico.
+
+O objetivo é criar agentes de IA orientados a fluxo, com estado, etapas, regras, validações e interação por API.
+
+
+2. PROBLEMA QUE ESTE PROJETO RESOLVE
+------------------------------------
+
+Hoje, para criar um agente via API, é necessário programar manualmente muita infraestrutura repetitiva:
+
+    - criar endpoints de conversa
+    - gerar UUID/run_id
+    - controlar estado da conversa
+    - salvar histórico
+    - manter cache/memória
+    - montar prompts com contexto
+    - chamar LLM
+    - validar JSON
+    - controlar etapas
+    - repetir pergunta quando resposta é ruim
+    - avançar quando resposta é aceita
+    - limitar tentativas
+    - encerrar fluxo
+    - salvar resultado em banco
+    - expor Swagger
+    - empacotar em Docker
+
+Isso funciona quando há poucos agentes.
+
+Mas, quando for necessário criar muitos agentes diferentes, esse modelo vira repetitivo, demorado e propenso a inconsistências.
+
+O problema central é:
+
+    Como criar muitos agentes stateful via API, com memória e lógica de fluxo,
+    sem reprogramar a mesma estrutura do zero toda vez?
+
+Este projeto resolve isso criando um gerador visual de agentes.
+
+
+3. EXEMPLO REAL DO TIPO DE AGENTE QUE PRECISA SER CRIADO
+---------------------------------------------------------
+
+Um exemplo de agente que este projeto deve facilitar:
+
+    1. Um sistema externo inicia uma conversa via API.
+    2. A API cria uma conversa com UUID/run_id.
+    3. O sistema informa um código de conteúdo, por exemplo o código de uma apostila.
+    4. O agente busca a base de conhecimento correspondente.
+    5. O agente envia uma apresentação padrão ao usuário.
+    6. O agente faz a primeira pergunta com base no conteúdo.
+    7. O usuário responde via API.
+    8. A IA avalia se a resposta foi satisfatória.
+    9. Se a resposta for boa, o fluxo avança para a próxima pergunta.
+    10. Se a resposta for ruim, o agente reformula a pergunta.
+    11. O agente tenta novamente até um limite configurado.
+    12. Depois de 3 perguntas respondidas, o agente encerra.
+    13. Tudo é salvo em banco.
+    14. A API retorna o status final e o resultado.
+
+Esse é apenas um exemplo.
+
+O mesmo padrão deve servir para outros agentes, como:
+
+    - classificador de PDF
+    - agente de triagem
+    - agente de entrevista
+    - agente de onboarding
+    - agente de revisão documental
+    - agente de atendimento
+    - agente de extração de dados
+    - agente com aprovação humana
+    - agente que consulta banco
+    - agente que chama endpoints externos
+
+
+4. RESULTADO FINAL ESPERADO
+---------------------------
+
+Ao final, deve existir uma ferramenta com este fluxo de uso:
+
+    1. O usuário abre um editor visual.
+    2. Arrasta nós para montar o fluxo do agente.
+    3. Configura prompts, condições, schemas, etapas de código e limites.
+    4. Valida o fluxo.
+    5. Gera um projeto LangGraph + FastAPI.
+    6. Testa em sandbox.
+    7. Abre o Swagger da API gerada.
+    8. Usa o LangGraph Studio para inspecionar/debugar a execução.
+    9. Empacota o agente em Docker.
+    10. Usa o agente como uma API independente.
+
+O agente gerado deve ser independente do builder.
+
+Ou seja:
+
+    O builder é usado para criar e gerar.
+    O agente gerado roda sozinho.
+
+O container final do agente NÃO deve carregar a interface visual do builder.
+
+O container final deve conter apenas:
+
+    - FastAPI
+    - LangGraph
+    - código do agente
+    - prompts
+    - schemas
+    - memória/checkpoint
+    - dependências necessárias
+
+
+5. PRINCÍPIO DE ARQUITETURA
+---------------------------
+
+O sistema deve ser separado em duas partes:
+
+    A. Builder visual
+
+        Ferramenta usada em desenvolvimento para montar o fluxo.
+
+    B. Runtime gerado
+
+        API independente gerada a partir do fluxo visual.
+
+Essa separação é essencial.
+
+O builder pode ser mais pesado, visual e cheio de recursos.
+
+O agente gerado deve ser enxuto, simples de hospedar e fácil de consumir via API.
+
+
+6. VISÃO EM DIAGRAMA
+--------------------
+
+Fluxo de criação:
+
+    Usuário
+      |
+      v
+    Builder visual estilo n8n
+      |
+      v
+    agent.flow.json
+      |
+      v
+    Code generator
+      |
+      v
+    Projeto LangGraph + FastAPI
+      |
+      v
+    Docker image
+      |
+      v
+    Agent API independente
+
+Fluxo de uso em produção:
+
+    Sistema externo
+      |
+      | POST /runs
+      v
+    Agent API em Docker
+      |
+      | executa LangGraph
+      | chama LLM quando necessário
+      | executa código determinístico
+      | salva memória/estado
+      v
+    Resposta ao sistema externo
+
+
+7. POR QUE LANGGRAPH + FASTAPI
+------------------------------
+
+A escolha recomendada é gerar código em LangGraph + FastAPI porque:
+
+    - LangGraph é adequado para fluxos stateful.
+    - O modelo de nós e edges combina com editor visual.
+    - O código gerado pode ser enxuto.
+    - FastAPI expõe Swagger/OpenAPI automaticamente.
+    - Python facilita PDF, RAG, banco, regex, matemática e integrações.
+    - LangGraph Studio pode ser usado como sandbox/debug visual.
+    - O agente final pode rodar em Docker como uma API independente.
+    - Não há necessidade de carregar uma plataforma visual inteira em produção.
+
+A ferramenta visual própria não substitui o LangGraph.
+
+Ela gera código LangGraph.
+
+
+8. POR QUE NÃO USAR N8N COMO RUNTIME FINAL
+------------------------------------------
+
+O n8n é excelente para automação visual, mas não é a melhor base para este objetivo porque:
+
+    - roda como plataforma completa
+    - não gera um runtime enxuto por agente
+    - não foi desenhado para exportar um único agente como API mínima
+    - carrega editor, engine, credenciais, banco interno e estrutura própria
+    - pode trazer questões de licença se usado embutido em produto
+    - o agente final ficaria dependente do n8n inteiro
+
+O n8n deve ser usado como referência de UX, não como base do runtime.
+
+A pergunta correta não é:
+
+    "Como embarcar o n8n?"
+
+E sim:
+
+    "Como criar uma experiência parecida com n8n para gerar código LangGraph?"
+
+
+9. POR QUE NÃO CRIAR UM RUNTIME PRÓPRIO DO ZERO AGORA
+------------------------------------------------------
+
+Criar o runtime do zero seria possível, mas custoso.
+
+Seria necessário implementar:
+
+    - executor de grafo
+    - estado por run
+    - memória
+    - checkpoints
+    - resume/suspend
+    - human input
+    - branching
+    - validação
+    - retry
+    - streaming
+    - API
+    - Swagger
+    - tracing
+    - sandbox
+    - Docker
+    - segurança
+    - integração com LLMs
+
+Isso recriaria grande parte do LangGraph e FastAPI.
+
+A melhor estratégia inicial é:
+
+    Criar um builder/codegen próprio em cima de LangGraph.
+
+No futuro, se LangGraph limitar demais, pode-se evoluir para um runtime próprio.
+
+Mas não começar por isso.
+
+
+10. O QUE O BUILDER VISUAL DEVE FAZER
+-------------------------------------
+
+O builder visual deve permitir montar fluxos com nós como:
+
+    - Start
+    - End
+    - LLM Prompt
+    - LLM Structured Output
+    - Code Step
+    - Switch / Condition
+    - Human Input
+    - File Extract
+    - RAG Retrieval
+    - HTTP Request
+    - Database Query
+    - Database Save
+    - Approval Gate
+
+No MVP, começar apenas com:
+
+    - Start
+    - End
+    - LLM Prompt
+    - LLM Structured Output
+    - Code Step
+    - Switch
+    - Human Input
+
+A UI deve permitir:
+
+    - criar nós
+    - conectar nós
+    - configurar propriedades
+    - editar prompts
+    - escolher schemas
+    - configurar condições
+    - validar fluxo
+    - visualizar JSON intermediário
+    - gerar código
+    - rodar sandbox
+
+
+11. O QUE O AGENTE GERADO DEVE FAZER
+------------------------------------
+
+Cada agente gerado deve:
+
+    - expor API HTTP
+    - ter Swagger
+    - receber requisições de sistemas externos
+    - criar run/conversation
+    - manter memória entre turnos
+    - executar fluxo LangGraph
+    - chamar LLM quando necessário
+    - executar código determinístico em etapas
+    - validar JSON de saída da IA
+    - pausar quando precisar de resposta do usuário
+    - retomar via API
+    - salvar estado e histórico
+    - retornar status a cada turno
+    - ser empacotável em Docker
+
+Endpoints mínimos:
+
+    GET  /health
+    GET  /metadata
+    POST /runs
+    GET  /runs/{run_id}
+    POST /runs/{run_id}/resume
+    POST /runs/{run_id}/cancel
+    GET  /runs/{run_id}/events
+
+Swagger:
+
+    GET /docs
+    GET /openapi.json
+
+
+12. COMO A MEMÓRIA DEVE FUNCIONAR
+---------------------------------
+
+O agente precisa de memória entre interações.
+
+Essa memória não é apenas "histórico de chat".
+
+Ela deve conter:
+
+    1. Estado operacional
+
+        - etapa atual
+        - pergunta atual
+        - número de tentativas
+        - status da execução
+        - outputs dos nós anteriores
+        - branch tomada
+
+    2. Histórico conversacional
+
+        - mensagens do usuário
+        - mensagens da IA
+        - perguntas feitas
+        - respostas recebidas
+
+    3. Contexto de conhecimento
+
+        - trechos recuperados de apostila/documento
+        - contexto RAG
+        - conteúdo usado para gerar perguntas/respostas
+
+    4. Resultado final
+
+        - classificação
+        - resumo
+        - score
+        - status
+        - dados extraídos
+        - conclusão
+
+No MVP:
+
+    - usar SQLite ou Postgres
+    - salvar runs, mensagens e eventos
+    - usar run_id como chave principal
+
+Depois:
+
+    - checkpointer oficial do LangGraph
+    - Redis, Postgres ou outro backend conforme necessidade
+
+
+13. COMO OS GATES DEVEM FUNCIONAR
+---------------------------------
+
+A IA não deve controlar sozinha a lógica crítica.
+
+A regra deve ser:
+
+    IA interpreta.
+    Código decide.
+
+Exemplo:
+
+    A IA avalia uma resposta e retorna JSON:
+
+        {
+          "accepted": true,
+          "confidence": 0.86,
+          "feedback": "Resposta adequada"
+        }
+
+    O código valida:
+
+        - JSON é válido?
+        - confidence é suficiente?
+        - limite de tentativas foi atingido?
+        - já chegou no número máximo de perguntas?
+        - deve avançar ou repetir?
+
+Isso evita que o fluxo dependa apenas da memória ou da boa vontade do modelo.
+
+Gates devem ser nós determinísticos, configuráveis no builder.
+
+
+14. COMO PROMPTS DEVEM FUNCIONAR
+--------------------------------
+
+Prompts devem ser editáveis e versionáveis.
+
+Cada prompt deve ser um arquivo separado no projeto gerado.
+
+Exemplo:
+
+    app/prompts/evaluate_answer_v1.md
+
+O prompt deve poder usar variáveis do estado:
+
+    {{ content_context }}
+    {{ last_question }}
+    {{ last_answer }}
+    {{ messages }}
+    {{ current_question_index }}
+    {{ max_questions }}
+
+O builder deve permitir editar o prompt visualmente.
+
+Mas o prompt não deve conter lógica de negócio crítica.
+
+Exemplo errado:
+
+    "Lembre-se de encerrar depois de 3 perguntas."
+
+Exemplo correto:
+
+    O prompt pode saber que há 3 perguntas,
+    mas o código deve verificar se já chegou em 3.
+
+
+15. FORMATO INTERMEDIÁRIO
+-------------------------
+
+O builder deve salvar o fluxo em um arquivo intermediário.
+
+Nome recomendado:
+
+    agent.flow.json
+
+Esse arquivo é a representação visual do agente.
+
+Ele deve conter:
+
+    - id do agente
+    - nome
+    - versão
+    - runtime alvo
+    - configurações de API
+    - configurações de memória
+    - configurações de modelo
+    - schema de estado
+    - nós
+    - conexões
+    - prompts
+    - schemas
+    - variáveis
+    - configurações de Docker
+
+O agent.flow.json deve ser independente do LangGraph o suficiente para permitir, no futuro, gerar outros runtimes.
+
+Mas o primeiro target deve ser LangGraph.
+
+
+16. EXEMPLO RESUMIDO DE AGENT.FLOW.JSON
+---------------------------------------
+
+{
+  "id": "questionnaire-agent",
+  "name": "Agente de Perguntas",
+  "version": "1.0.0",
+  "runtime": "langgraph-python",
+  "api": {
+    "swagger": true,
+    "streaming": true
+  },
+  "memory": {
+    "type": "postgres",
+    "threadKey": "run_id"
+  },
+  "model": {
+    "provider": "openai-compatible",
+    "baseUrlEnv": "LLM_BASE_URL",
+    "apiKeyEnv": "LLM_API_KEY",
+    "defaultModel": "gpt-4.1-mini"
+  },
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start"
+    },
+    {
+      "id": "load_content",
+      "type": "code",
+      "handler": "load_content"
+    },
+    {
+      "id": "generate_question",
+      "type": "llm_prompt",
+      "promptId": "generate_question_v1"
+    },
+    {
+      "id": "wait_user_answer",
+      "type": "human_input"
+    },
+    {
+      "id": "evaluate_answer",
+      "type": "llm_structured",
+      "promptId": "evaluate_answer_v1",
+      "outputSchema": "AnswerEvaluation"
+    },
+    {
+      "id": "route",
+      "type": "switch",
+      "cases": [
+        {
+          "condition": "state.last_evaluation.accepted == true and state.current_question_index < state.max_questions",
+          "target": "generate_question"
+        },
+        {
+          "condition": "state.last_evaluation.accepted == false and state.attempts_current_question < state.max_attempts_per_question",
+          "target": "generate_question"
+        },
+        {
+          "condition": "state.current_question_index >= state.max_questions",
+          "target": "finish"
+        }
+      ]
+    },
+    {
+      "id": "finish",
+      "type": "end"
+    }
+  ],
+  "edges": [
+    { "from": "start", "to": "load_content" },
+    { "from": "load_content", "to": "generate_question" },
+    { "from": "generate_question", "to": "wait_user_answer" },
+    { "from": "wait_user_answer", "to": "evaluate_answer" },
+    { "from": "evaluate_answer", "to": "route" }
+  ]
+}
+
+
+17. ESTRUTURA DO PROJETO GERADO
+-------------------------------
+
+O codegen deve gerar algo como:
+
+generated-agent/
+  app/
+    main.py
+    graph.py
+    state.py
+    config.py
+
+    api/
+      routes.py
+      schemas.py
+
+    nodes/
+      load_content.py
+      generate_question.py
+      wait_user_answer.py
+      evaluate_answer.py
+      validate_evaluation.py
+      finish.py
+
+    services/
+      llm.py
+      memory.py
+      database.py
+      rag.py
+      tracing.py
+
+    prompts/
+      generate_question_v1.md
+      evaluate_answer_v1.md
+
+    schemas/
+      outputs.py
+      inputs.py
+
+  tests/
+    test_api.py
+    test_graph.py
+
+  langgraph.json
+  pyproject.toml
+  Dockerfile
+  docker-compose.yml
+  README.md
+  .env.example
+
+
+18. ESTRUTURA DO BUILDER
+------------------------
+
+Monorepo sugerido:
+
+agent-flow-builder/
+  apps/
+    builder-ui/
+      React + React Flow
+
+    builder-api/
+      API para salvar flows, gerar código e rodar sandbox
+
+  packages/
+    flow-spec/
+      Tipos e validações do agent.flow.json
+
+    codegen-langgraph/
+      Gerador de projeto LangGraph + FastAPI
+
+    shared/
+      Código compartilhado
+
+  examples/
+    questionnaire-agent/
+      Exemplo do agente de perguntas
+
+  docs/
+    Documentação técnica
+
+
+19. TECNOLOGIAS RECOMENDADAS
+----------------------------
+
+Builder visual:
+
+    - React
+    - React Flow
+    - TypeScript
+    - Zod
+    - Zustand
+    - Monaco Editor
+    - Mantine ou Tailwind
+
+Backend do builder:
+
+    - Node.js com Fastify/NestJS/Express
+    - ou Python FastAPI
+
+Codegen:
+
+    - TypeScript
+    - templates com Handlebars/Mustache/EJS
+    - formatadores no output
+
+Runtime gerado:
+
+    - Python
+    - FastAPI
+    - LangGraph
+    - Pydantic
+    - Uvicorn
+    - SQLAlchemy/asyncpg
+    - httpx
+    - client OpenAI-compatible
+
+Observabilidade:
+
+    - logs JSON no MVP
+    - LangSmith ou Langfuse depois
+    - OpenTelemetry depois
+
+Container:
+
+    - Docker
+    - python:3.12-slim
+    - compose para dev
+
+
+20. FASES DO PROJETO
+--------------------
+
+FASE 0 - Validar o runtime manualmente
+
+Objetivo:
+
+    Criar manualmente um agente LangGraph + FastAPI com o fluxo real das 3 perguntas.
+
+Entregáveis:
+
+    - API FastAPI
+    - LangGraph
+    - memória SQLite/Postgres
+    - Swagger
+    - Dockerfile
+    - fluxo de 3 perguntas funcionando
+
+Critério de sucesso:
+
+    O agente manual substitui o modelo antigo Python/FastAPI com mais organização.
+
+
+FASE 1 - Criar agent.flow.json
+
+Objetivo:
+
+    Definir o formato intermediário do fluxo.
+
+Entregáveis:
+
+    - schema do flow
+    - validador
+    - exemplo do agente de perguntas
+    - CLI validate
+
+Critério de sucesso:
+
+    O fluxo pode ser representado fora do código.
+
+
+FASE 2 - Criar codegen LangGraph + FastAPI
+
+Objetivo:
+
+    Gerar projeto Python a partir do agent.flow.json.
+
+Entregáveis:
+
+    - geração de state.py
+    - geração de graph.py
+    - geração de nodes
+    - geração de prompts
+    - geração de FastAPI
+    - geração de Dockerfile
+    - geração de README
+
+Critério de sucesso:
+
+    O projeto gerado roda e expõe Swagger.
+
+
+FASE 3 - Criar editor visual MVP
+
+Objetivo:
+
+    Editar agent.flow.json visualmente.
+
+Entregáveis:
+
+    - canvas React Flow
+    - node palette
+    - painel de propriedades
+    - editor de prompt
+    - JSON preview
+    - validação visual
+    - export/import
+
+Critério de sucesso:
+
+    O agente de perguntas pode ser montado no canvas.
+
+
+FASE 4 - Integrar geração de código à UI
+
+Objetivo:
+
+    Permitir gerar projeto pela interface.
+
+Entregáveis:
+
+    - botão gerar código
+    - download zip
+    - preview de arquivos
+    - mensagens de erro
+
+Critério de sucesso:
+
+    Usuário monta visualmente e baixa o projeto gerado.
+
+
+FASE 5 - Sandbox
+
+Objetivo:
+
+    Testar agente gerado de forma rápida.
+
+Entregáveis:
+
+    - rodar agente localmente
+    - link para Swagger
+    - link para LangGraph Studio
+    - painel de logs
+    - formulário para /runs e /resume
+
+Critério de sucesso:
+
+    Usuário consegue testar o agente sem configurar tudo manualmente.
+
+
+FASE 6 - Nós avançados
+
+Adicionar:
+
+    - PDF Extract
+    - RAG Retrieval
+    - HTTP Request
+    - Database Query
+    - Database Save
+    - Approval Gate
+    - Transform JSON
+
+Critério de sucesso:
+
+    Criar agentes documentais e de integração sem muito código.
+
+
+FASE 7 - Observabilidade e versionamento
+
+Adicionar:
+
+    - histórico de runs
+    - traces
+    - tokens/custo
+    - versões de prompt
+    - versões de agente
+    - rollback
+
+Critério de sucesso:
+
+    Debug e evolução dos agentes ficam controláveis.
+
+
+21. MVP RECOMENDADO
+-------------------
+
+O MVP deve ter foco em apenas um caso:
+
+    Agente de conversa guiada com N perguntas.
+
+Recursos do MVP:
+
+    - Start
+    - LLM Prompt
+    - LLM Structured Output
+    - Code Step
+    - Switch
+    - Human Input
+    - End
+    - FastAPI
+    - Swagger
+    - memória básica
+    - Docker
+    - React Flow
+    - codegen LangGraph
+
+Não incluir no MVP:
+
+    - clone completo do n8n
+    - marketplace de nodes
+    - multiusuário
+    - permissões avançadas
+    - OCR
+    - Kubernetes
+    - editor bidirecional completo
+    - runtime próprio
+
+
+22. CRITÉRIOS DE SUCESSO
+------------------------
+
+O projeto será considerado bem-sucedido se:
+
+    1. Criar o segundo agente for muito mais rápido que programar manualmente.
+    2. O código gerado for legível.
+    3. O agente gerado rodar em Docker.
+    4. O Swagger for claro.
+    5. O fluxo visual ajudar a entender a lógica.
+    6. A memória funcionar entre turnos.
+    7. Gates forem determinísticos.
+    8. Prompts forem fáceis de editar.
+    9. LangGraph Studio ajudar no debug.
+    10. O agente gerado puder ser consumido por qualquer sistema via API.
+
+
+23. RESUMO FINAL
+----------------
+
+O objetivo não é apenas "montar uma ferramenta visual".
+
+O objetivo é criar uma fábrica de agentes de IA via API.
+
+A ferramenta deve permitir sair de:
+
+    programar manualmente cada agente em Python/FastAPI
+
+para:
+
+    desenhar o fluxo
+    configurar prompts e gates
+    gerar código LangGraph + FastAPI
+    testar em sandbox
+    empacotar em Docker
+    consumir como API independente
+
+A arquitetura recomendada é:
+
+    Builder visual próprio
+        -> agent.flow.json
+        -> codegen
+        -> LangGraph + FastAPI
+        -> Docker
+        -> API independente
+
+Isso entrega o equilíbrio desejado:
+
+    - mais prático que Python puro
+    - mais enxuto que n8n
+    - mais controlável que Dify/Flowise
+    - menos trabalho que runtime próprio
+    - adequado para múltiplos agentes independentes

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "turn_output.schema.json",
+  "title": "ReferenceTurnOutput",
+  "type": "object",
+  "properties": {
+    "assistant_message": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "text": { "type": "string" }
+      },
+      "required": ["code", "text"]
+    },
+    "safety": {
+      "type": "object",
+      "properties": {
+        "blocked": { "type": "boolean" },
+        "decision": { "type": "string" },
+        "category": { "type": ["string", "null"] }
+      },
+      "required": ["blocked", "decision"]
+    }
+  },
+  "required": ["assistant_message", "safety"]
+}

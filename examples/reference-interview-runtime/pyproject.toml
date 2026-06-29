@@ -1,0 +1,31 @@
+[project]
+name = "reference-interview-runtime"
+version = "0.1.0"
+description = "Baseline manual LangGraph + FastAPI para a fábrica de agentes de IA."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pydantic-settings",
+  "sqlalchemy",
+  "psycopg2-binary",
+  "redis",
+  "openai",
+  "langgraph",
+  "langgraph-checkpoint-postgres",
+  "psycopg[binary,pool]",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

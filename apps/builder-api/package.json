@@ -1,0 +1,13 @@
+{
+  "name": "@agent-flow-builder/builder-api",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/server.ts"
+  },
+  "dependencies": {
+    "@agent-flow-builder/codegen-langgraph": "file:../../packages/codegen-langgraph",
+    "@agent-flow-builder/flow-spec": "file:../../packages/flow-spec",
+    "fastify": "^5.0.0"
+  }
+}

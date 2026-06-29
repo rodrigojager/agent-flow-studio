@@ -1,0 +1,26 @@
+{
+  "name": "agent-flow-builder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "validate:flow": "tsx packages/flow-spec/src/cli.ts flows/reference-interview/agent.flow.json",
+    "codegen:reference": "tsx packages/codegen-langgraph/src/cli.ts --flow flows/reference-interview/agent.flow.json --out generated/reference-interview-runtime",
+    "test:baseline": "python -m pytest -q examples/reference-interview-runtime",
+    "test:generated": "python -m pytest -q generated/reference-interview-runtime",
+    "test:builder-api": "tsx --test apps/builder-api/src/server.test.ts",
+    "dev:builder-api": "tsx apps/builder-api/src/server.ts",
+    "dev:builder-ui": "npm --workspace @agent-flow-builder/builder-ui run dev",
+    "build:builder-ui": "npm --workspace @agent-flow-builder/builder-ui run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@agent-flow-builder/codegen-langgraph",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agent-flow-builder/flow-spec": "file:../flow-spec"
+  }
+}
