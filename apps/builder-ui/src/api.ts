@@ -6,6 +6,9 @@ import type {
   AgentFlow,
   LoadedFlow,
   MessageView,
+  LoadedRuntimeManifest,
+  RuntimeManifestGenerateResult,
+  RuntimeManifestValidationResult,
   SandboxStatus,
   SessionView,
   ValidationResult,
@@ -66,6 +69,24 @@ export async function validateFlow(flowId: string): Promise<ValidationResult> {
 
 export async function generateFlow(flowId: string, outDir?: string): Promise<GenerateResult> {
   return request<GenerateResult>(`/flows/${encodeURIComponent(flowId)}/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ outDir }),
+  });
+}
+
+export async function loadRuntimeManifest(): Promise<LoadedRuntimeManifest> {
+  return request<LoadedRuntimeManifest>("/runtime-manifest");
+}
+
+export async function validateRuntimeManifest(): Promise<RuntimeManifestValidationResult> {
+  return request<RuntimeManifestValidationResult>("/runtime-manifest/validate", {
+    method: "POST",
+  });
+}
+
+export async function generateRuntimeManifest(outDir?: string): Promise<RuntimeManifestGenerateResult> {
+  return request<RuntimeManifestGenerateResult>("/runtime-manifest/generate", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ outDir }),

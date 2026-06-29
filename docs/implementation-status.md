@@ -36,6 +36,7 @@
 - Codegen gera bundle a partir de `runtime.manifest.json`, com metadados, README e um runtime independente por agente em `generated/reference-runtime-bundle/agents/`.
 - Codegen gera app FastAPI raiz para manifestos `multiagent`, montando os agentes em um único processo pelos `routePrefix` e preservando idempotência por prefixo de rota.
 - Builder API lê, valida e gera bundles por manifesto via rotas `/runtime-manifest`, `/runtime-manifest/validate` e `/runtime-manifest/generate`.
+- Builder UI possui aba `Runtime` para carregar `runtime.manifest.json`, exibir agentes, validar o manifesto e gerar bundle por manifesto via Builder API.
 - Sandbox local inicial: Builder API inicia/para o runtime gerado, acompanha status/logs, e Builder UI aciona criação de sessão, turnos, finalização, transcript e events.
 
 ## Verificado

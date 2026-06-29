@@ -342,7 +342,7 @@ button:disabled {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   padding: 12px;
   border-bottom: 1px solid #d7ddd8;
   gap: 6px;
@@ -354,6 +354,7 @@ button:disabled {
   border-radius: 6px;
   color: #5d6c68;
   background: transparent;
+  font-size: 12px;
 }
 
 .tabs button.active {
@@ -449,7 +450,8 @@ button:disabled {
   line-height: 1.35;
 }
 
-.sandbox-body {
+.sandbox-body,
+.runtime-manifest-body {
   display: grid;
   gap: 12px;
   padding: 12px;

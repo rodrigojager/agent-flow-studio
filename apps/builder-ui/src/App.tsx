@@ -38,9 +38,11 @@ import {
   createRuntimeSession,
   finishRuntimeSession,
   generateFlow,
+  generateRuntimeManifest,
   listFlows,
   loadFlow,
   loadPromptAsset,
+  loadRuntimeManifest,
   loadSchemaAsset,
   runtimeEvents,
   runtimeTranscript,
@@ -53,6 +55,7 @@ import {
   startSandbox,
   stopSandbox,
   validateFlow,
+  validateRuntimeManifest,
 } from "./api.ts";
 import type {
   AgentFlow,
@@ -62,14 +65,17 @@ import type {
   FlowSummary,
   GenerateResult,
   LoadedFlow,
+  LoadedRuntimeManifest,
   MessageView,
+  RuntimeManifestGenerateResult,
+  RuntimeManifestValidationResult,
   SandboxStatus,
   SessionView,
   ValidationResult,
 } from "./types.ts";
 import "./styles.css";
 
-type InspectorTab = "properties" | "files" | "json" | "sandbox";
+type InspectorTab = "properties" | "files" | "json" | "runtime" | "sandbox";
 type StatusKind = "idle" | "ok" | "error" | "busy";
 
 interface StatusState {
@@ -104,6 +110,10 @@ export default function App() {
   const [transcript, setTranscript] = useState<MessageView[]>([]);
   const [runtimeEventsData, setRuntimeEventsData] = useState<EventView[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
+  const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
+  const [manifestValidation, setManifestValidation] = useState<RuntimeManifestValidationResult | null>(null);
+  const [manifestGeneration, setManifestGeneration] = useState<RuntimeManifestGenerateResult | null>(null);
+  const [manifestOutDir, setManifestOutDir] = useState("");
   const [selectedPromptId, setSelectedPromptId] = useState("");
   const [selectedSchemaId, setSelectedSchemaId] = useState("");
   const [promptContent, setPromptContent] = useState("");
@@ -135,6 +145,33 @@ export default function App() {
   useEffect(() => {
     void refreshFlows();
   }, [refreshFlows]);
+
+  const refreshRuntimeManifest = useCallback(async (silent = false) => {
+    if (!silent) {
+      setStatus({ kind: "busy", message: "Carregando manifesto de runtime." });
+    }
+    try {
+      const loaded = await loadRuntimeManifest();
+      setRuntimeManifest(loaded);
+      setManifestValidation(null);
+      setManifestGeneration(null);
+      setManifestOutDir((current) => current || `generated/${loaded.manifest.id}-bundle`);
+      if (!silent) {
+        setStatus({ kind: "ok", message: `${loaded.manifest.name} carregado.` });
+      }
+    } catch (error) {
+      setRuntimeManifest(null);
+      setManifestValidation(null);
+      setManifestGeneration(null);
+      if (!silent) {
+        setStatus({ kind: "error", message: errorMessage(error) });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRuntimeManifest(true);
+  }, [refreshRuntimeManifest]);
 
   useEffect(() => {
     if (!selectedFlowId) {
@@ -594,6 +631,30 @@ export default function App() {
     }
   }
 
+  async function handleValidateManifest() {
+    setStatus({ kind: "busy", message: "Validando runtime.manifest.json." });
+    try {
+      const result = await validateRuntimeManifest();
+      setManifestValidation(result);
+      setStatus({ kind: "ok", message: manifestValidationMessage(result) });
+    } catch (error) {
+      setManifestValidation(null);
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleGenerateManifest() {
+    setStatus({ kind: "busy", message: "Gerando bundle do manifesto." });
+    try {
+      const result = await generateRuntimeManifest(manifestOutDir.trim() || undefined);
+      setManifestGeneration(result);
+      setStatus({ kind: "ok", message: manifestGenerateMessage(result) });
+    } catch (error) {
+      setManifestGeneration(null);
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleStartSandbox() {
     if (!selectedFlowId) {
       return;
@@ -851,7 +912,7 @@ export default function App() {
               className={inspectorTab === "properties" ? "active" : ""}
               onClick={() => setInspectorTab("properties")}
             >
-              Propriedades
+              Editar
             </button>
             <button
               type="button"
@@ -862,6 +923,13 @@ export default function App() {
             </button>
             <button type="button" className={inspectorTab === "json" ? "active" : ""} onClick={() => setInspectorTab("json")}>
               JSON
+            </button>
+            <button
+              type="button"
+              className={inspectorTab === "runtime" ? "active" : ""}
+              onClick={() => setInspectorTab("runtime")}
+            >
+              Runtime
             </button>
             <button
               type="button"
@@ -917,6 +985,17 @@ export default function App() {
             />
           ) : inspectorTab === "json" ? (
             <pre className="json-preview">{draftFlow ? JSON.stringify(draftFlow, null, 2) : "{}"}</pre>
+          ) : inspectorTab === "runtime" ? (
+            <RuntimeManifestPanel
+              loaded={runtimeManifest}
+              validation={manifestValidation}
+              generation={manifestGeneration}
+              outDir={manifestOutDir}
+              onOutDirChange={setManifestOutDir}
+              onRefresh={() => refreshRuntimeManifest()}
+              onValidate={handleValidateManifest}
+              onGenerate={handleGenerateManifest}
+            />
           ) : (
             <SandboxPanel
               flow={draftFlow}
@@ -1223,6 +1302,119 @@ function AssetsPanel({
   );
 }
 
+function RuntimeManifestPanel({
+  loaded,
+  validation,
+  generation,
+  outDir,
+  onOutDirChange,
+  onRefresh,
+  onValidate,
+  onGenerate,
+}: {
+  loaded: LoadedRuntimeManifest | null;
+  validation: RuntimeManifestValidationResult | null;
+  generation: RuntimeManifestGenerateResult | null;
+  outDir: string;
+  onOutDirChange: (value: string) => void;
+  onRefresh: () => void;
+  onValidate: () => void;
+  onGenerate: () => void;
+}) {
+  if (!loaded) {
+    return (
+      <div className="empty-state">
+        <AlertCircle size={18} aria-hidden="true" />
+        <span>Nenhum runtime.manifest.json carregado.</span>
+      </div>
+    );
+  }
+
+  const { manifest } = loaded;
+  const generatedAgents = generation?.agents ?? [];
+  return (
+    <div className="runtime-manifest-body">
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>{manifest.name}</strong>
+          <span className={manifest.packaging === "multiagent" ? "runtime-pill running" : "runtime-pill"}>
+            {manifest.packaging}
+          </span>
+        </div>
+        <dl className="kv-list inspector-list">
+          <Field label="Arquivo" value={loaded.path} />
+          <Field label="ID" value={manifest.id} />
+          <Field label="Versão" value={manifest.version} />
+          <Field label="LLM padrão" value={manifest.defaultLlm ? `${manifest.defaultLlm.adapter} - ${manifest.defaultLlm.model}` : "-"} />
+        </dl>
+        <div className="sandbox-actions">
+          <button type="button" className="command-button" onClick={onRefresh}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Atualizar
+          </button>
+          <button type="button" className="command-button" onClick={onValidate}>
+            <CheckCircle2 size={16} aria-hidden="true" />
+            Validar
+          </button>
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Agentes</strong>
+          <span>{manifest.agents.length}</span>
+        </div>
+        <div className="runtime-list compact-list">
+          {manifest.agents.map((agent) => (
+            <article className="runtime-item" key={agent.id}>
+              <strong>{agent.id}</strong>
+              <span>{agent.routePrefix || "/"} - {agent.flowPath}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Bundle</strong>
+          <span>{generation ? "gerado" : "pronto"}</span>
+        </div>
+        <div className="edit-group">
+          <label>
+            <span>Diretório de saída</span>
+            <input value={outDir} onChange={(event) => onOutDirChange(event.target.value)} />
+          </label>
+        </div>
+        <button type="button" className="command-button primary full-width" onClick={onGenerate}>
+          <Terminal size={16} aria-hidden="true" />
+          Gerar bundle
+        </button>
+        {generation ? (
+          <dl className="kv-list inspector-list">
+            <Field label="Saída" value={generation.outDir} />
+            <Field label="Manifesto" value={generation.manifestPath} />
+            <Field label="Agentes gerados" value={String(generatedAgents.length)} />
+          </dl>
+        ) : null}
+      </section>
+
+      {validation ? (
+        <section className="sandbox-section">
+          <div className="sandbox-header">
+            <strong>Validação</strong>
+            <span>{validation.status}</span>
+          </div>
+          <dl className="kv-list inspector-list">
+            <Field label="Nome" value={validation.name} />
+            <Field label="Empacotamento" value={validation.packaging} />
+            <Field label="Agentes válidos" value={String(validation.agents.length)} />
+          </dl>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 function SandboxPanel({
   flow,
   sandbox,
@@ -1472,6 +1664,14 @@ function validationMessage(result: ValidationResult): string {
 
 function generateMessage(result: GenerateResult): string {
   return `Runtime gerado em ${result.outDir}.`;
+}
+
+function manifestValidationMessage(result: RuntimeManifestValidationResult): string {
+  return `${result.name}: ${result.agents.length} agente(s), modo ${result.packaging}.`;
+}
+
+function manifestGenerateMessage(result: RuntimeManifestGenerateResult): string {
+  return `Bundle ${result.manifestId} gerado em ${result.outDir}.`;
 }
 
 function errorMessage(error: unknown): string {

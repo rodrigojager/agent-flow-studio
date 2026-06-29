@@ -93,6 +93,53 @@ export interface GenerateResult {
   outDir: string;
 }
 
+export interface RuntimeManifestAgent {
+  id: string;
+  flowPath: string;
+  routePrefix: string;
+}
+
+export interface RuntimeManifest {
+  id: string;
+  name: string;
+  version: string;
+  packaging: "monoagent" | "multiagent";
+  defaultLlm?: {
+    adapter: string;
+    model: string;
+    apiKeyEnv?: string;
+    baseUrlEnv?: string;
+    mockEnv?: string;
+  };
+  agents: RuntimeManifestAgent[];
+}
+
+export interface LoadedRuntimeManifest {
+  path: string;
+  manifest: RuntimeManifest;
+}
+
+export interface RuntimeManifestValidationResult {
+  status: "ok";
+  id: string;
+  name: string;
+  version: string;
+  packaging: RuntimeManifest["packaging"];
+  agents: Array<{
+    id: string;
+    flowId: string;
+    routePrefix: string;
+  }>;
+}
+
+export interface RuntimeManifestGenerateResult {
+  status: "ok";
+  manifestId: string;
+  manifestPath: string;
+  outDir: string;
+  agents: RuntimeManifestAgent[];
+}
+
 export interface FlowAssetContent {
   id: string;
   path: string;
