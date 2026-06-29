@@ -98,12 +98,17 @@ def create_app() -> FastAPI:
     def idempotency_key(header: str | None, body_key: str | None) -> str:
         return normalize_idempotency_key(header, body_key)
 
+    def operation_name(request: Request, method: str, path_template: str) -> str:
+        root_path = (request.scope.get("root_path") or "").rstrip("/")
+        return f"{method} {root_path}{path_template}"
+
     @app.post(
         f"/{API_RESOURCE}",
         response_model=CreateSessionResponse,
         dependencies=[Depends(require_agent_api_key)],
     )
     def create_session(
+        request: Request,
         payload: CreateSessionRequest,
         db: Session = Depends(get_session),
         header_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -112,7 +117,7 @@ def create_app() -> FastAPI:
         request_payload = payload.model_dump(mode="json")
         return run_idempotent(
             db,
-            operation=f"POST /{API_RESOURCE}",
+            operation=operation_name(request, "POST", f"/{API_RESOURCE}"),
             idempotency_key=key,
             payload=request_payload,
             handler=lambda: app.state.service.create_session(
@@ -137,6 +142,7 @@ def create_app() -> FastAPI:
         dependencies=[Depends(require_agent_api_key)],
     )
     def start_session(
+        request: Request,
         session_id: str,
         payload: EmptyIdempotentRequest,
         db: Session = Depends(get_session),
@@ -146,7 +152,7 @@ def create_app() -> FastAPI:
         request_payload: dict[str, Any] = {"session_id": session_id, **payload.model_dump(mode="json")}
         return run_idempotent(
             db,
-            operation=f"POST /{API_RESOURCE}/{{session_id}}/start",
+            operation=operation_name(request, "POST", f"/{API_RESOURCE}/{{session_id}}/start"),
             idempotency_key=key,
             payload=request_payload,
             handler=lambda: app.state.service.start_session(db, session_id),
@@ -158,6 +164,7 @@ def create_app() -> FastAPI:
         dependencies=[Depends(require_agent_api_key)],
     )
     def turn_session(
+        request: Request,
         session_id: str,
         payload: TurnRequest,
         db: Session = Depends(get_session),
@@ -167,7 +174,7 @@ def create_app() -> FastAPI:
         request_payload: dict[str, Any] = {"session_id": session_id, **payload.model_dump(mode="json")}
         return run_idempotent(
             db,
-            operation=f"POST /{API_RESOURCE}/{{session_id}}/turn",
+            operation=operation_name(request, "POST", f"/{API_RESOURCE}/{{session_id}}/turn"),
             idempotency_key=key,
             payload=request_payload,
             handler=lambda: app.state.service.process_turn(db, session_id, payload.user_message),
@@ -179,6 +186,7 @@ def create_app() -> FastAPI:
         dependencies=[Depends(require_agent_api_key)],
     )
     def finish_session(
+        request: Request,
         session_id: str,
         payload: EmptyIdempotentRequest,
         db: Session = Depends(get_session),
@@ -188,7 +196,7 @@ def create_app() -> FastAPI:
         request_payload: dict[str, Any] = {"session_id": session_id, **payload.model_dump(mode="json")}
         return run_idempotent(
             db,
-            operation=f"POST /{API_RESOURCE}/{{session_id}}/finish",
+            operation=operation_name(request, "POST", f"/{API_RESOURCE}/{{session_id}}/finish"),
             idempotency_key=key,
             payload=request_payload,
             handler=lambda: app.state.service.finish_session(db, session_id),

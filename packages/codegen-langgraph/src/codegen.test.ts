@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import type { AgentFlow } from "@agent-flow-builder/flow-spec";
-import { generateLangGraphRuntime } from "./index.ts";
+import type { AgentFlow, RuntimeManifest } from "@agent-flow-builder/flow-spec";
+import { generateLangGraphRuntime, generateManifestRuntime } from "./index.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -91,3 +91,130 @@ test("generated runtime supports a simple flow without deterministic gate", asyn
     timeout: 120000,
   });
 });
+
+test("generated multiagent manifest bundle mounts agents in one FastAPI process", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-multi-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const firstRoot = path.join(workspaceRoot, "first-flow");
+  const secondRoot = path.join(workspaceRoot, "second-flow");
+  const outDir = path.join(workspaceRoot, "bundle");
+  await writeFlowAssets(firstRoot, "Primeiro agente");
+  await writeFlowAssets(secondRoot, "Segundo agente");
+
+  const firstFlow = simpleFlow("first-agent", "Primeiro Agente");
+  const secondFlow = simpleFlow("second-agent", "Segundo Agente");
+  const manifest: RuntimeManifest = {
+    id: "multiagent-reference",
+    name: "Multiagent Reference",
+    version: "0.1.0",
+    packaging: "multiagent",
+    defaultLlm: {
+      adapter: "openai",
+      model: "gpt-4.1-mini",
+      apiKeyEnv: "OPENAI_API_KEY",
+      baseUrlEnv: "OPENAI_BASE_URL",
+      mockEnv: "MOCK_LLM",
+    },
+    agents: [
+      {
+        id: firstFlow.id,
+        flowPath: "first-flow/agent.flow.json",
+        routePrefix: "/first",
+      },
+      {
+        id: secondFlow.id,
+        flowPath: "second-flow/agent.flow.json",
+        routePrefix: "/second",
+      },
+    ],
+  };
+
+  await generateManifestRuntime({
+    manifest,
+    outDir,
+    agents: [
+      { id: firstFlow.id, routePrefix: "/first", flow: firstFlow, flowRoot: firstRoot },
+      { id: secondFlow.id, routePrefix: "/second", flow: secondFlow, flowRoot: secondRoot },
+    ],
+  });
+
+  await execFileAsync("python", ["-m", "pytest", "-q"], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
+async function writeFlowAssets(flowRoot: string, title: string): Promise<void> {
+  await mkdir(path.join(flowRoot, "prompts"), { recursive: true });
+  await mkdir(path.join(flowRoot, "schemas"), { recursive: true });
+  await writeFile(
+    path.join(flowRoot, "prompts", "system.md"),
+    `# ${title}\n\nResponda em português brasileiro de forma curta.\n`,
+    "utf-8",
+  );
+  await writeFile(
+    path.join(flowRoot, "schemas", "session_state.schema.json"),
+    JSON.stringify({ type: "object", properties: { session_id: { type: "string" } } }, null, 2),
+    "utf-8",
+  );
+}
+
+function simpleFlow(id: string, name: string): AgentFlow {
+  return {
+    id,
+    name,
+    version: "0.1.0",
+    runtime: "langgraph-python",
+    api: {
+      contract: "sessions-v1",
+      resourceName: "sessions",
+      autoStartOnCreate: false,
+    },
+    persistence: {
+      checkpointer: "memory",
+      publicStore: "sqlite",
+      cache: "memory",
+    },
+    llm: {
+      adapter: "openai",
+      model: "gpt-4.1-mini",
+      apiKeyEnv: "OPENAI_API_KEY",
+      baseUrlEnv: "OPENAI_BASE_URL",
+      mockEnv: "MOCK_LLM",
+    },
+    state: {
+      schemaRef: "schemas/session_state.schema.json",
+    },
+    prompts: [
+      {
+        id: "system",
+        path: "prompts/system.md",
+        version: "v1",
+        variables: [],
+      },
+    ],
+    schemas: [
+      {
+        id: "session_state",
+        path: "schemas/session_state.schema.json",
+      },
+    ],
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "llm_step", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "llm_step", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+}

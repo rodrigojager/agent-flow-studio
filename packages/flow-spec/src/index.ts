@@ -127,6 +127,7 @@ export const RuntimeManifestSchema = z
   .superRefine((manifest, ctx) => {
     const ids = new Set<string>();
     const paths = new Set<string>();
+    const routePrefixes = new Set<string>();
     for (const agent of manifest.agents) {
       if (ids.has(agent.id)) {
         ctx.addIssue({
@@ -151,6 +152,26 @@ export const RuntimeManifestSchema = z
           code: z.ZodIssueCode.custom,
           path: ["agents", agent.id, "routePrefix"],
           message: "routePrefix deve ser vazio ou começar com '/'.",
+        });
+      }
+
+      const normalizedRoutePrefix = agent.routePrefix.replace(/\/+$/g, "") || "/";
+      if (agent.routePrefix && routePrefixes.has(normalizedRoutePrefix)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agents", agent.id, "routePrefix"],
+          message: `routePrefix duplicado no manifesto: ${agent.routePrefix}.`,
+        });
+      }
+      if (agent.routePrefix) {
+        routePrefixes.add(normalizedRoutePrefix);
+      }
+
+      if (manifest.packaging === "multiagent" && (!agent.routePrefix || normalizedRoutePrefix === "/")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agents", agent.id, "routePrefix"],
+          message: "Manifestos multiagent exigem routePrefix não vazio e diferente de '/'.",
         });
       }
     }

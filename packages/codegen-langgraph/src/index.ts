@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentFlow, RuntimeManifest } from "@agent-flow-builder/flow-spec";
+import { renderPythonMultiAgentBundleFiles } from "./pythonBundleTemplates.ts";
 import { renderPythonRuntimeFiles } from "./pythonRuntimeTemplates.ts";
 
 export interface GenerateOptions {
@@ -73,6 +74,14 @@ export async function generateManifestRuntime(options: GenerateManifestOptions):
       outDir: path.join(outDir, "agents", safeSegment(agent.id)),
     });
   }
+
+  if (manifest.packaging === "multiagent") {
+    for (const file of renderPythonMultiAgentBundleFiles(manifest, agents)) {
+      const target = path.join(outDir, file.relativePath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, file.content, "utf-8");
+    }
+  }
 }
 
 function bundleMetadata(manifest: RuntimeManifest, agents: ManifestAgentRuntime[]) {
@@ -94,6 +103,22 @@ function bundleMetadata(manifest: RuntimeManifest, agents: ManifestAgentRuntime[
 }
 
 function renderBundleReadme(manifest: RuntimeManifest, agents: ManifestAgentRuntime[]): string {
+  const runtimeDescription =
+    manifest.packaging === "multiagent"
+      ? "Este bundle também contém um app FastAPI raiz que monta todos os agentes em um único processo, usando os `routePrefix` do manifesto."
+      : "Cada subdiretório em `agents/` contém um runtime FastAPI independente gerado a partir do respectivo `agent.flow.json`.";
+  const localRun =
+    manifest.packaging === "multiagent"
+      ? `
+## Execução do bundle compartilhado
+
+\`\`\`powershell
+python -m pip install -e ".[dev]"
+pytest -q
+uvicorn app.main:app --reload --port 8080
+\`\`\``
+      : "";
+
   return `# ${manifest.name}
 
 Bundle gerado a partir de \`runtime.manifest.json\`.
@@ -113,7 +138,7 @@ ${agents
   )
   .join("\n")}
 
-Cada subdiretório em \`agents/\` contém um runtime FastAPI independente gerado a partir do respectivo \`agent.flow.json\`. O próximo passo do suporte multiagente é compor esses agentes em um único processo FastAPI compartilhado quando \`packaging\` for \`multiagent\`.
+${runtimeDescription}${localRun}
 `;
 }
 
