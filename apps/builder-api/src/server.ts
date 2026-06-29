@@ -7,7 +7,11 @@ import {
   listFlows,
   loadFlowById,
   normalizeWorkspaceRoot,
+  readPrompt,
+  readSchemaAsset,
   saveFlow,
+  savePrompt,
+  saveSchemaAsset,
   validateFlow,
   WorkspaceError,
 } from "./workspace.ts";
@@ -21,8 +25,20 @@ interface FlowParams {
   flowId: string;
 }
 
+interface PromptParams extends FlowParams {
+  promptId: string;
+}
+
+interface SchemaParams extends FlowParams {
+  schemaId: string;
+}
+
 interface GenerateBody {
   outDir?: string;
+}
+
+interface AssetBody {
+  content?: unknown;
 }
 
 interface SandboxBody {
@@ -87,6 +103,22 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       path: result.flowPath,
       flow: result.flow,
     };
+  });
+
+  app.get<{ Params: PromptParams }>("/flows/:flowId/prompts/:promptId", async (request) => {
+    return readPrompt(workspaceRoot, request.params.flowId, request.params.promptId);
+  });
+
+  app.put<{ Params: PromptParams; Body: AssetBody }>("/flows/:flowId/prompts/:promptId", async (request) => {
+    return savePrompt(workspaceRoot, request.params.flowId, request.params.promptId, request.body?.content);
+  });
+
+  app.get<{ Params: SchemaParams }>("/flows/:flowId/schemas/:schemaId", async (request) => {
+    return readSchemaAsset(workspaceRoot, request.params.flowId, request.params.schemaId);
+  });
+
+  app.put<{ Params: SchemaParams; Body: AssetBody }>("/flows/:flowId/schemas/:schemaId", async (request) => {
+    return saveSchemaAsset(workspaceRoot, request.params.flowId, request.params.schemaId, request.body?.content);
   });
 
   app.post<{ Params: FlowParams }>("/flows/:flowId/validate", async (request) => {

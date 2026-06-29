@@ -26,6 +26,8 @@
 - Builder API mínima em `apps/builder-api/` para listar, ler, validar e gerar flows versionáveis.
 - Builder UI inicial em `apps/builder-ui/` com canvas React Flow, lista de flows, inspector, preview JSON, edição básica de propriedades, salvamento do `agent.flow.json` e ações de validar/gerar via Builder API.
 - Builder API persiste flows versionáveis com `PUT /flows/{flowId}`, valida Flow Spec antes de gravar e bloqueia divergência de `id`.
+- Builder API lê e salva prompts Markdown e schemas JSON referenciados pelo flow, com validação de path dentro do diretório do flow e validação JSON para schemas.
+- Builder UI possui aba `Arquivos` para editar prompts e schemas referenciados pelo flow antes de validar, gerar ou iniciar sandbox.
 - Sandbox local inicial: Builder API inicia/para o runtime gerado, acompanha status/logs, e Builder UI aciona criação de sessão, turnos, finalização, transcript e events.
 
 ## Verificado
@@ -54,7 +56,7 @@ Também foi validado localmente:
 
 - Codegen genérico para todos os tipos futuros de nós e recursos avançados.
 - Teste automatizado de equivalência estrutural mais estrito entre baseline manual, flow spec e runtime gerado.
-- Edição visual completa de nós e arestas, incluindo criação/remoção/reconexão no canvas e edição de prompts/schemas.
+- Edição visual completa de nós e arestas, incluindo criação/remoção/reconexão no canvas e edição avançada de prompts/schemas.
 - Sandbox visual mais completo, com logs ao vivo, gerenciamento de múltiplos runtimes e seleção de portas.
 - Suporte multiagente completo a partir de `runtime.manifest.json`.
 - Catálogo real de adapters além do OpenAI/OpenAI-compatible.

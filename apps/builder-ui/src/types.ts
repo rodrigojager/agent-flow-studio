@@ -89,6 +89,12 @@ export interface GenerateResult {
   outDir: string;
 }
 
+export interface FlowAssetContent {
+  id: string;
+  path: string;
+  content: string;
+}
+
 export interface SandboxStatus {
   flowId: string;
   running: boolean;

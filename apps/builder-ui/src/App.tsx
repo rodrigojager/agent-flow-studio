@@ -32,10 +32,14 @@ import {
   generateFlow,
   listFlows,
   loadFlow,
+  loadPromptAsset,
+  loadSchemaAsset,
   runtimeEvents,
   runtimeTranscript,
   sandboxStatus,
   saveFlow,
+  savePromptAsset,
+  saveSchemaAsset,
   sendRuntimeTurn,
   startRuntimeSession,
   startSandbox,
@@ -56,7 +60,7 @@ import type {
 } from "./types.ts";
 import "./styles.css";
 
-type InspectorTab = "properties" | "json" | "sandbox";
+type InspectorTab = "properties" | "files" | "json" | "sandbox";
 type StatusKind = "idle" | "ok" | "error" | "busy";
 
 interface StatusState {
@@ -86,6 +90,12 @@ export default function App() {
   const [transcript, setTranscript] = useState<MessageView[]>([]);
   const [runtimeEventsData, setRuntimeEventsData] = useState<EventView[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
+  const [selectedPromptId, setSelectedPromptId] = useState("");
+  const [selectedSchemaId, setSelectedSchemaId] = useState("");
+  const [promptContent, setPromptContent] = useState("");
+  const [schemaContent, setSchemaContent] = useState("");
+  const [promptDirty, setPromptDirty] = useState(false);
+  const [schemaDirty, setSchemaDirty] = useState(false);
   const [status, setStatus] = useState<StatusState>({
     kind: "idle",
     message: "Builder API aguardando ação.",
@@ -129,6 +139,12 @@ export default function App() {
         setDraftFlow(loaded.flow);
         setIsDirty(false);
         setSelectedNodeId("start");
+        setSelectedPromptId(loaded.flow.prompts[0]?.id ?? "");
+        setSelectedSchemaId(loaded.flow.schemas[0]?.id ?? "");
+        setPromptContent("");
+        setSchemaContent("");
+        setPromptDirty(false);
+        setSchemaDirty(false);
         setRuntimeSession(null);
         setTranscript([]);
         setRuntimeEventsData([]);
@@ -152,6 +168,58 @@ export default function App() {
       active = false;
     };
   }, [selectedFlowId]);
+
+  useEffect(() => {
+    if (!selectedFlowId || !selectedPromptId) {
+      setPromptContent("");
+      setPromptDirty(false);
+      return;
+    }
+    let active = true;
+    async function run() {
+      try {
+        const asset = await loadPromptAsset(selectedFlowId, selectedPromptId);
+        if (active) {
+          setPromptContent(asset.content);
+          setPromptDirty(false);
+        }
+      } catch (error) {
+        if (active) {
+          setStatus({ kind: "error", message: errorMessage(error) });
+        }
+      }
+    }
+    void run();
+    return () => {
+      active = false;
+    };
+  }, [selectedFlowId, selectedPromptId]);
+
+  useEffect(() => {
+    if (!selectedFlowId || !selectedSchemaId) {
+      setSchemaContent("");
+      setSchemaDirty(false);
+      return;
+    }
+    let active = true;
+    async function run() {
+      try {
+        const asset = await loadSchemaAsset(selectedFlowId, selectedSchemaId);
+        if (active) {
+          setSchemaContent(asset.content);
+          setSchemaDirty(false);
+        }
+      } catch (error) {
+        if (active) {
+          setStatus({ kind: "error", message: errorMessage(error) });
+        }
+      }
+    }
+    void run();
+    return () => {
+      active = false;
+    };
+  }, [selectedFlowId, selectedSchemaId]);
 
   const graph = useMemo(() => toReactFlowGraph(draftFlow ?? undefined, selectedNodeId), [draftFlow, selectedNodeId]);
 
@@ -221,6 +289,52 @@ export default function App() {
     }
   }
 
+  async function saveDirtyAssets() {
+    if (!selectedFlowId) {
+      return;
+    }
+    if (promptDirty && selectedPromptId) {
+      const savedPrompt = await savePromptAsset(selectedFlowId, selectedPromptId, promptContent);
+      setPromptContent(savedPrompt.content);
+      setPromptDirty(false);
+    }
+    if (schemaDirty && selectedSchemaId) {
+      const savedSchema = await saveSchemaAsset(selectedFlowId, selectedSchemaId, schemaContent);
+      setSchemaContent(savedSchema.content);
+      setSchemaDirty(false);
+    }
+  }
+
+  async function handleSavePrompt() {
+    if (!selectedFlowId || !selectedPromptId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando prompt ${selectedPromptId}.` });
+    try {
+      const saved = await savePromptAsset(selectedFlowId, selectedPromptId, promptContent);
+      setPromptContent(saved.content);
+      setPromptDirty(false);
+      setStatus({ kind: "ok", message: `Prompt salvo em ${saved.path}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleSaveSchema() {
+    if (!selectedFlowId || !selectedSchemaId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando schema ${selectedSchemaId}.` });
+    try {
+      const saved = await saveSchemaAsset(selectedFlowId, selectedSchemaId, schemaContent);
+      setSchemaContent(saved.content);
+      setSchemaDirty(false);
+      setStatus({ kind: "ok", message: `Schema salvo em ${saved.path}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleValidate() {
     if (!selectedFlowId) {
       return;
@@ -246,6 +360,7 @@ export default function App() {
         setDraftFlow(saved.flow);
         setIsDirty(false);
       }
+      await saveDirtyAssets();
       const result = await generateFlow(selectedFlowId);
       setStatus({ kind: "ok", message: generateMessage(result) });
     } catch (error) {
@@ -265,6 +380,7 @@ export default function App() {
         setDraftFlow(saved.flow);
         setIsDirty(false);
       }
+      await saveDirtyAssets();
       await generateFlow(selectedFlowId);
       const result = await startSandbox(selectedFlowId);
       setSandbox(result);
@@ -491,6 +607,13 @@ export default function App() {
             >
               Propriedades
             </button>
+            <button
+              type="button"
+              className={inspectorTab === "files" ? "active" : ""}
+              onClick={() => setInspectorTab("files")}
+            >
+              Arquivos
+            </button>
             <button type="button" className={inspectorTab === "json" ? "active" : ""} onClick={() => setInspectorTab("json")}>
               JSON
             </button>
@@ -509,6 +632,28 @@ export default function App() {
               node={selectedNode}
               onFlowFieldChange={updateFlowField}
               onNodeFieldChange={updateNodeField}
+            />
+          ) : inspectorTab === "files" ? (
+            <AssetsPanel
+              flow={draftFlow}
+              selectedPromptId={selectedPromptId}
+              selectedSchemaId={selectedSchemaId}
+              promptContent={promptContent}
+              schemaContent={schemaContent}
+              promptDirty={promptDirty}
+              schemaDirty={schemaDirty}
+              onPromptSelect={setSelectedPromptId}
+              onSchemaSelect={setSelectedSchemaId}
+              onPromptChange={(value) => {
+                setPromptContent(value);
+                setPromptDirty(true);
+              }}
+              onSchemaChange={(value) => {
+                setSchemaContent(value);
+                setSchemaDirty(true);
+              }}
+              onPromptSave={handleSavePrompt}
+              onSchemaSave={handleSaveSchema}
             />
           ) : inspectorTab === "json" ? (
             <pre className="json-preview">{draftFlow ? JSON.stringify(draftFlow, null, 2) : "{}"}</pre>
@@ -635,6 +780,94 @@ function NodeInspector({
         </div>
       ) : null}
       {node.llm ? <pre className="mini-json">{JSON.stringify(node.llm, null, 2)}</pre> : null}
+    </div>
+  );
+}
+
+function AssetsPanel({
+  flow,
+  selectedPromptId,
+  selectedSchemaId,
+  promptContent,
+  schemaContent,
+  promptDirty,
+  schemaDirty,
+  onPromptSelect,
+  onSchemaSelect,
+  onPromptChange,
+  onSchemaChange,
+  onPromptSave,
+  onSchemaSave,
+}: {
+  flow: AgentFlow | null;
+  selectedPromptId: string;
+  selectedSchemaId: string;
+  promptContent: string;
+  schemaContent: string;
+  promptDirty: boolean;
+  schemaDirty: boolean;
+  onPromptSelect: (value: string) => void;
+  onSchemaSelect: (value: string) => void;
+  onPromptChange: (value: string) => void;
+  onSchemaChange: (value: string) => void;
+  onPromptSave: () => void;
+  onSchemaSave: () => void;
+}) {
+  if (!flow) {
+    return (
+      <div className="empty-state">
+        <AlertCircle size={18} aria-hidden="true" />
+        <span>Nenhum flow carregado.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="assets-body">
+      <section className="asset-section">
+        <div className="sandbox-header">
+          <strong>Prompt</strong>
+          <span>{promptDirty ? "alterado" : "salvo"}</span>
+        </div>
+        <select className="asset-select" value={selectedPromptId} onChange={(event) => onPromptSelect(event.target.value)}>
+          {flow.prompts.map((prompt) => (
+            <option value={prompt.id} key={prompt.id}>
+              {prompt.id} · {prompt.path}
+            </option>
+          ))}
+        </select>
+        <textarea
+          className="asset-editor prompt-editor"
+          value={promptContent}
+          onChange={(event) => onPromptChange(event.target.value)}
+          spellCheck={false}
+        />
+        <button type="button" className="command-button primary full-width" onClick={onPromptSave} disabled={!selectedPromptId || !promptDirty}>
+          Salvar prompt
+        </button>
+      </section>
+
+      <section className="asset-section">
+        <div className="sandbox-header">
+          <strong>Schema</strong>
+          <span>{schemaDirty ? "alterado" : "salvo"}</span>
+        </div>
+        <select className="asset-select" value={selectedSchemaId} onChange={(event) => onSchemaSelect(event.target.value)}>
+          {flow.schemas.map((schema) => (
+            <option value={schema.id} key={schema.id}>
+              {schema.id} · {schema.path}
+            </option>
+          ))}
+        </select>
+        <textarea
+          className="asset-editor schema-editor"
+          value={schemaContent}
+          onChange={(event) => onSchemaChange(event.target.value)}
+          spellCheck={false}
+        />
+        <button type="button" className="command-button primary full-width" onClick={onSchemaSave} disabled={!selectedSchemaId || !schemaDirty}>
+          Salvar schema
+        </button>
+      </section>
     </div>
   );
 }

@@ -31,6 +31,12 @@ export interface SaveFlowResult {
   flowPath: string;
 }
 
+export interface FlowAssetContent {
+  id: string;
+  path: string;
+  content: string;
+}
+
 export class WorkspaceError extends Error {
   constructor(
     message: string,
@@ -174,6 +180,97 @@ export async function saveFlow(workspaceRoot: string, flowId: string, value: unk
     flow,
     flowPath: existing.relativePath,
   };
+}
+
+export async function readPrompt(workspaceRoot: string, flowId: string, promptId: string): Promise<FlowAssetContent> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const prompt = loaded.flow.prompts.find((item) => item.id === promptId);
+  if (!prompt) {
+    throw new WorkspaceError(`Prompt não encontrado: ${promptId}`, 404);
+  }
+  const absolutePath = safeResolveFlowAsset(loaded.flowRoot, prompt.path);
+  return {
+    id: prompt.id,
+    path: prompt.path,
+    content: await readFile(absolutePath, "utf-8"),
+  };
+}
+
+export async function savePrompt(
+  workspaceRoot: string,
+  flowId: string,
+  promptId: string,
+  content: unknown,
+): Promise<FlowAssetContent> {
+  if (typeof content !== "string") {
+    throw new WorkspaceError("Conteúdo do prompt deve ser string.", 400);
+  }
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const prompt = loaded.flow.prompts.find((item) => item.id === promptId);
+  if (!prompt) {
+    throw new WorkspaceError(`Prompt não encontrado: ${promptId}`, 404);
+  }
+  const absolutePath = safeResolveFlowAsset(loaded.flowRoot, prompt.path);
+  await writeFile(absolutePath, content, "utf-8");
+  return {
+    id: prompt.id,
+    path: prompt.path,
+    content,
+  };
+}
+
+export async function readSchemaAsset(workspaceRoot: string, flowId: string, schemaId: string): Promise<FlowAssetContent> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const schema = loaded.flow.schemas.find((item) => item.id === schemaId);
+  if (!schema) {
+    throw new WorkspaceError(`Schema não encontrado: ${schemaId}`, 404);
+  }
+  const absolutePath = safeResolveFlowAsset(loaded.flowRoot, schema.path);
+  return {
+    id: schema.id,
+    path: schema.path,
+    content: await readFile(absolutePath, "utf-8"),
+  };
+}
+
+export async function saveSchemaAsset(
+  workspaceRoot: string,
+  flowId: string,
+  schemaId: string,
+  content: unknown,
+): Promise<FlowAssetContent> {
+  if (typeof content !== "string") {
+    throw new WorkspaceError("Conteúdo do schema deve ser string.", 400);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    throw new WorkspaceError("Schema deve ser JSON válido.", 422, error);
+  }
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const schema = loaded.flow.schemas.find((item) => item.id === schemaId);
+  if (!schema) {
+    throw new WorkspaceError(`Schema não encontrado: ${schemaId}`, 404);
+  }
+  const formatted = `${JSON.stringify(parsed, null, 2)}\n`;
+  const absolutePath = safeResolveFlowAsset(loaded.flowRoot, schema.path);
+  await writeFile(absolutePath, formatted, "utf-8");
+  return {
+    id: schema.id,
+    path: schema.path,
+    content: formatted,
+  };
+}
+
+function safeResolveFlowAsset(flowRoot: string, assetPath: string): string {
+  const root = path.resolve(flowRoot);
+  const resolved = path.resolve(root, assetPath);
+  const relativePath = path.relative(root, resolved);
+  if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new WorkspaceError(`Asset fora do diretório do flow: ${assetPath}`, 400);
+  }
+  return resolved;
 }
 
 export async function generateRuntime(

@@ -336,7 +336,7 @@ button:disabled {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 12px;
   border-bottom: 1px solid #d7ddd8;
   gap: 6px;
@@ -354,6 +354,51 @@ button:disabled {
   border-color: #c4cdc8;
   color: #17211f;
   background: #ffffff;
+}
+
+.assets-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.asset-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.asset-select {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid #c4cdc8;
+  border-radius: 7px;
+  color: #17211f;
+  background: #fbfcfa;
+  font: inherit;
+  font-size: 12px;
+}
+
+.asset-editor {
+  width: 100%;
+  min-height: 230px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid #c4cdc8;
+  border-radius: 7px;
+  color: #17211f;
+  background: #fbfcfa;
+  font-family: ui-monospace, "Cascadia Code", "Segoe UI Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.schema-editor {
+  min-height: 280px;
 }
 
 .inspector-body {

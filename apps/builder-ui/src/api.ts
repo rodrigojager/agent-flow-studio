@@ -1,5 +1,6 @@
 import type {
   EventView,
+  FlowAssetContent,
   FlowSummary,
   GenerateResult,
   AgentFlow,
@@ -30,6 +31,30 @@ export async function saveFlow(flowId: string, flow: AgentFlow): Promise<LoadedF
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(flow),
+  });
+}
+
+export async function loadPromptAsset(flowId: string, promptId: string): Promise<FlowAssetContent> {
+  return request<FlowAssetContent>(`/flows/${encodeURIComponent(flowId)}/prompts/${encodeURIComponent(promptId)}`);
+}
+
+export async function savePromptAsset(flowId: string, promptId: string, content: string): Promise<FlowAssetContent> {
+  return request<FlowAssetContent>(`/flows/${encodeURIComponent(flowId)}/prompts/${encodeURIComponent(promptId)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function loadSchemaAsset(flowId: string, schemaId: string): Promise<FlowAssetContent> {
+  return request<FlowAssetContent>(`/flows/${encodeURIComponent(flowId)}/schemas/${encodeURIComponent(schemaId)}`);
+}
+
+export async function saveSchemaAsset(flowId: string, schemaId: string, content: string): Promise<FlowAssetContent> {
+  return request<FlowAssetContent>(`/flows/${encodeURIComponent(flowId)}/schemas/${encodeURIComponent(schemaId)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content }),
   });
 }
 

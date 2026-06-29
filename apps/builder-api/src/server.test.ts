@@ -108,6 +108,64 @@ test("Builder API saves a valid flow and rejects id mismatch", async (t) => {
   assert.equal(mismatch.json().error, "workspace_error");
 });
 
+test("Builder API edits prompt and schema assets referenced by a flow", async (t) => {
+  const workspaceRoot = await createWorkspaceFixture();
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const app = buildApp({ workspaceRoot });
+  t.after(() => app.close());
+
+  const prompt = await app.inject({ method: "GET", url: "/flows/reference-interview/prompts/system" });
+  assert.equal(prompt.statusCode, 200);
+  assert.match(prompt.json().content, /agente de referência/);
+
+  const savedPrompt = await app.inject({
+    method: "PUT",
+    url: "/flows/reference-interview/prompts/system",
+    headers: { "content-type": "application/json" },
+    payload: { content: "# Prompt editado\n\nVocê é um agente editado.\n" },
+  });
+  assert.equal(savedPrompt.statusCode, 200);
+  assert.match(savedPrompt.json().content, /agente editado/);
+
+  const schema = await app.inject({ method: "GET", url: "/flows/reference-interview/schemas/session_state" });
+  assert.equal(schema.statusCode, 200);
+  assert.match(schema.json().content, /object/);
+
+  const savedSchema = await app.inject({
+    method: "PUT",
+    url: "/flows/reference-interview/schemas/session_state",
+    headers: { "content-type": "application/json" },
+    payload: { content: "{\"type\":\"object\",\"properties\":{\"edited\":{\"type\":\"boolean\"}}}" },
+  });
+  assert.equal(savedSchema.statusCode, 200);
+  assert.match(savedSchema.json().content, /edited/);
+
+  const invalidSchema = await app.inject({
+    method: "PUT",
+    url: "/flows/reference-interview/schemas/session_state",
+    headers: { "content-type": "application/json" },
+    payload: { content: "{invalid" },
+  });
+  assert.equal(invalidSchema.statusCode, 422);
+  assert.equal(invalidSchema.json().error, "workspace_error");
+
+  const loaded = await app.inject({ method: "GET", url: "/flows/reference-interview" });
+  const flow = loaded.json().flow;
+  flow.prompts[0].path = "../escape.md";
+  const savedEscapingFlow = await app.inject({
+    method: "PUT",
+    url: "/flows/reference-interview",
+    headers: { "content-type": "application/json" },
+    payload: flow,
+  });
+  assert.equal(savedEscapingFlow.statusCode, 200);
+
+  const escapedPrompt = await app.inject({ method: "GET", url: "/flows/reference-interview/prompts/system" });
+  assert.equal(escapedPrompt.statusCode, 400);
+  assert.equal(escapedPrompt.json().error, "workspace_error");
+});
+
 test("Builder API exposes sandbox status and validates runtime directories", async (t) => {
   const workspaceRoot = await createWorkspaceFixture();
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
