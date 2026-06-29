@@ -22,6 +22,12 @@ interface RuntimeNodeConfig {
   responsePath?: string;
   inputPath?: string;
   outputPath?: string;
+  query?: string;
+  table?: string;
+  dataPath?: string;
+  paramsPath?: string;
+  resultPath?: string;
+  maxRows?: number;
   timeoutSeconds?: number;
 }
 
@@ -183,6 +189,12 @@ function runtimeNodeConfig(flow: AgentFlow, node: FlowNode, defaultPromptPath: s
     responsePath: optionalString(node, "responsePath"),
     inputPath: optionalString(node, "inputPath"),
     outputPath: optionalString(node, "outputPath"),
+    query: optionalString(node, "query"),
+    table: optionalString(node, "table"),
+    dataPath: optionalString(node, "dataPath"),
+    paramsPath: optionalString(node, "paramsPath"),
+    resultPath: optionalString(node, "resultPath"),
+    maxRows: optionalNumber(node, "maxRows"),
     timeoutSeconds: optionalNumber(node, "timeoutSeconds"),
   };
 }
@@ -634,6 +646,16 @@ class AgentEvent(Base):
     )
 
     agent_session = relationship("AgentSession", back_populates="events")
+
+
+class AgentNodeRecord(Base):
+    __tablename__ = "agent_node_records"
+
+    record_id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False)
+    node_id = Column(String, nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class IdempotencyRecord(Base):
@@ -1162,12 +1184,18 @@ function renderGraph(flow: AgentFlow, plan: RuntimePlan): string {
 import json
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Literal, TypedDict
+from uuid import uuid4
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy import text
 
+from app.db import session_scope
 from app.llm import LLMClient, load_prompt
+from app.models import AgentNodeRecord
 from app.safety import SafetyGate
 from app.settings import Settings
 
@@ -1181,6 +1209,17 @@ DIRECT_NODE_EDGES_RAW = json.loads(${pyJson(plan.directNodeEdges)})
 NODE_ROUTE_MAP_RAW = json.loads(${pyJson(plan.nodeRouteMap)})
 NODE_ROUTE_CONDITIONS = json.loads(${pyJson(plan.nodeRouteConditions)})
 START_MESSAGE = ${pyString(`Olá! Este é o ${flow.name}. Envie uma mensagem para eu ecoar o fluxo com segurança, LLM e estado.`)}
+CURRENT_DB_SESSION = ContextVar("CURRENT_DB_SESSION", default=None)
+
+
+@contextmanager
+def graph_session_scope():
+    current = CURRENT_DB_SESSION.get()
+    if current is not None:
+        yield current
+    else:
+        with session_scope() as db:
+            yield db
 
 
 def _node_ids(*, node_type: str, stage: str | None = None) -> list[str]:
@@ -1208,6 +1247,8 @@ SWITCH_NODE_IDS = _node_ids(node_type="switch")
 HUMAN_INPUT_NODE_IDS = _node_ids(node_type="human_input")
 HTTP_REQUEST_NODE_IDS = _node_ids(node_type="http_request")
 TRANSFORM_JSON_NODE_IDS = _node_ids(node_type="transform_json")
+DATABASE_QUERY_NODE_IDS = _node_ids(node_type="database_query")
+DATABASE_SAVE_NODE_IDS = _node_ids(node_type="database_save")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -1224,6 +1265,7 @@ class ReferenceState(TypedDict, total=False):
     llm: dict[str, Any]
     http: dict[str, Any]
     transforms: dict[str, Any]
+    database: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -1319,6 +1361,38 @@ def build_graph(
                 current[part] = child
             current = child
         current[parts[-1]] = value
+
+    def jsonable(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, (list, tuple)):
+            return [jsonable(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): jsonable(item) for key, item in value.items()}
+        return str(value)
+
+    def normalized_params(value: Any, state: ReferenceState) -> dict[str, Any]:
+        if value is None:
+            params: dict[str, Any] = {}
+        elif isinstance(value, dict):
+            params = dict(value)
+        else:
+            params = {"value": value}
+        params.setdefault("session_id", state.get("session_id"))
+        return params
+
+    def is_sql_identifier(value: str) -> bool:
+        first = value[:1]
+        return bool(first) and (first.isalpha() or first == "_") and all(part.isalnum() or part == "_" for part in value)
+
+    def remember_database_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        database_results = dict(state.get("database") or {})
+        database_results[node_id] = result
+        updates["database"] = database_results
+        if result_path != f"database.{node_id}":
+            assign_state_path(updates, state, result_path, result)
+        return mark_node(state, node_id, updates)
 
     def make_start_node(config: dict[str, Any]):
         node_id = config["id"]
@@ -1556,6 +1630,116 @@ def build_graph(
 
         return run
 
+    def make_database_query_node(config: dict[str, Any]):
+        node_id = config["id"]
+        query = str(config.get("query") or "")
+        params_path = str(config.get("paramsPath") or "")
+        result_path = str(config.get("resultPath") or f"database.{node_id}")
+        max_rows = int(config.get("maxRows") or 50)
+
+        def run(state: ReferenceState) -> ReferenceState:
+            if not query.strip():
+                result_payload = {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "query_not_configured",
+                }
+                return remember_database_result(state, node_id, result_path, result_payload)
+
+            params_value = state_path_value(state, params_path) if params_path else {}
+            params = normalized_params(params_value, state)
+            try:
+                with graph_session_scope() as db:
+                    result = db.execute(text(query), params)
+                    if result.returns_rows:
+                        rows = [dict(row) for row in result.mappings().fetchmany(max_rows)]
+                        result_payload = {
+                            "ok": True,
+                            "rows": jsonable(rows),
+                            "row_count": len(rows),
+                            "max_rows": max_rows,
+                        }
+                    else:
+                        result_payload = {
+                            "ok": True,
+                            "rows": [],
+                            "row_count": result.rowcount,
+                            "max_rows": max_rows,
+                        }
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "error": str(exc),
+                }
+            return remember_database_result(state, node_id, result_path, result_payload)
+
+        return run
+
+    def make_database_save_node(config: dict[str, Any]):
+        node_id = config["id"]
+        table = str(config.get("table") or "agent_node_records")
+        query = str(config.get("query") or "")
+        data_path = str(config.get("dataPath") or "assistant_message")
+        params_path = str(config.get("paramsPath") or data_path)
+        result_path = str(config.get("resultPath") or f"database.{node_id}")
+
+        def run(state: ReferenceState) -> ReferenceState:
+            data_value = jsonable(state_path_value(state, data_path))
+            params = normalized_params(state_path_value(state, params_path), state)
+            try:
+                with graph_session_scope() as db:
+                    if query.strip():
+                        result = db.execute(text(query), params)
+                        result_payload = {
+                            "ok": True,
+                            "mode": "query",
+                            "row_count": result.rowcount,
+                        }
+                    elif table == "agent_node_records":
+                        record_id = str(uuid4())
+                        db.add(
+                            AgentNodeRecord(
+                                record_id=record_id,
+                                session_id=str(state.get("session_id") or ""),
+                                node_id=node_id,
+                                payload_json=data_value,
+                            )
+                        )
+                        db.flush()
+                        result_payload = {
+                            "ok": True,
+                            "mode": "node_record",
+                            "table": table,
+                            "record_id": record_id,
+                        }
+                    else:
+                        if not is_sql_identifier(table):
+                            raise ValueError("Tabela configurada não é um identificador SQL simples.")
+                        if not isinstance(data_value, dict):
+                            raise ValueError("database_save em tabela customizada exige dataPath apontando para objeto JSON.")
+                        columns = sorted(data_value)
+                        for column in columns:
+                            if not is_sql_identifier(column):
+                                raise ValueError(f"Coluna inválida para insert: {column}")
+                        column_sql = ", ".join(columns)
+                        values_sql = ", ".join(f":{column}" for column in columns)
+                        db.execute(text(f"INSERT INTO {table} ({column_sql}) VALUES ({values_sql})"), data_value)
+                        result_payload = {
+                            "ok": True,
+                            "mode": "insert",
+                            "table": table,
+                            "row_count": 1,
+                        }
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "table": table,
+                    "error": str(exc),
+                }
+            return remember_database_result(state, node_id, result_path, result_payload)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -1595,6 +1779,10 @@ def build_graph(
             return make_http_request_node(config)
         if node_type == "transform_json":
             return make_transform_json_node(config)
+        if node_type == "database_query":
+            return make_database_query_node(config)
+        if node_type == "database_save":
+            return make_database_save_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)
@@ -1769,6 +1957,9 @@ from app import repo
 from app.cache import recent_key
 from app.graph import (
     CODE_NODE_IDS,
+    CURRENT_DB_SESSION,
+    DATABASE_QUERY_NODE_IDS,
+    DATABASE_SAVE_NODE_IDS,
     FINISH_NODE_IDS,
     HUMAN_INPUT_NODE_IDS,
     HTTP_REQUEST_NODE_IDS,
@@ -1865,6 +2056,7 @@ class ReferenceAgentService:
             return {"session": session_view(row), "messages": [message_view(item) for item in existing_messages]}
 
         result = self._invoke_graph(
+            db,
             {
                 "action": "start",
                 "session_id": row.session_id,
@@ -1915,6 +2107,7 @@ class ReferenceAgentService:
         recent_messages = self._recent_messages(db, row.session_id)
         recent_messages.append({"role": "user", "content": user_message})
         result = self._invoke_graph(
+            db,
             {
                 "action": "turn",
                 "session_id": row.session_id,
@@ -1965,6 +2158,7 @@ class ReferenceAgentService:
             return {"session": session_view(row), "message": None}
 
         result = self._invoke_graph(
+            db,
             {
                 "action": "finish",
                 "session_id": row.session_id,
@@ -2004,13 +2198,17 @@ class ReferenceAgentService:
         self.get_session(db, session_id)
         return [event_view(row) for row in repo.get_events(db, session_id, from_seq=from_seq)]
 
-    def _invoke_graph(self, state: dict[str, Any], session_id: str) -> dict[str, Any]:
-        return dict(
-            self.graph.invoke(
-                state,
-                config={"configurable": {"thread_id": session_id}},
+    def _invoke_graph(self, db: Session, state: dict[str, Any], session_id: str) -> dict[str, Any]:
+        token = CURRENT_DB_SESSION.set(db)
+        try:
+            return dict(
+                self.graph.invoke(
+                    state,
+                    config={"configurable": {"thread_id": session_id}},
+                )
             )
-        )
+        finally:
+            CURRENT_DB_SESSION.reset(token)
 
     def _recent_messages(self, db: Session, session_id: str) -> list[dict[str, str]]:
         cached = self.cache.get_json(recent_key(session_id))
@@ -2085,6 +2283,14 @@ class ReferenceAgentService:
                 event_type = "transform_json_completed"
                 payload["handler"] = "transform_json"
                 payload["transform"] = (result.get("transforms") or {}).get(node_id, {})
+            elif node_id in DATABASE_QUERY_NODE_IDS:
+                event_type = "database_query_completed"
+                payload["handler"] = "database_query"
+                payload["database"] = (result.get("database") or {}).get(node_id, {})
+            elif node_id in DATABASE_SAVE_NODE_IDS:
+                event_type = "database_save_completed"
+                payload["handler"] = "database_save"
+                payload["database"] = (result.get("database") or {}).get(node_id, {})
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:
@@ -2538,6 +2744,14 @@ CREATE TABLE IF NOT EXISTS agent_events (
   payload JSON,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_agent_event_seq UNIQUE (session_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS agent_node_records (
+  record_id VARCHAR PRIMARY KEY,
+  session_id VARCHAR NOT NULL,
+  node_id VARCHAR NOT NULL,
+  payload_json JSON NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS idempotency_records (

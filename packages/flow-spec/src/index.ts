@@ -12,6 +12,8 @@ export const NodeTypeSchema = z.enum([
   "safety_gate",
   "http_request",
   "transform_json",
+  "database_query",
+  "database_save",
 ]);
 
 export const PromptRefSchema = z.object({
@@ -145,6 +147,12 @@ export const NodeSchema = z
     responsePath: z.string().min(1).optional(),
     inputPath: z.string().min(1).optional(),
     outputPath: z.string().min(1).optional(),
+    query: z.string().min(1).optional(),
+    table: z.string().min(1).optional(),
+    dataPath: z.string().min(1).optional(),
+    paramsPath: z.string().min(1).optional(),
+    resultPath: z.string().min(1).optional(),
+    maxRows: z.number().int().positive().max(500).optional(),
     timeoutSeconds: z.number().int().positive().max(120).optional(),
     position: NodePositionSchema.optional(),
   })
@@ -488,6 +496,64 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
         });
       }
     }
+    if (node.type === "database_query") {
+      if (!node.query) {
+        add({
+          severity: "warning",
+          code: "missing_database_query",
+          message: `Nó de consulta ${node.id} não declara query SQL.`,
+          path: `nodes.${node.id}.query`,
+          nodeId: node.id,
+        });
+      }
+      if (node.paramsPath && !isValidStatePath(node.paramsPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_database_params_path",
+          message: `paramsPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.paramsPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.resultPath && !isValidStatePath(node.resultPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_database_result_path",
+          message: `resultPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.resultPath`,
+          nodeId: node.id,
+        });
+      }
+    }
+    if (node.type === "database_save") {
+      if (node.table && !isValidSqlIdentifier(node.table)) {
+        add({
+          severity: "warning",
+          code: "invalid_database_table",
+          message: `Tabela do nó ${node.id} deve usar identificador SQL simples.`,
+          path: `nodes.${node.id}.table`,
+          nodeId: node.id,
+        });
+      }
+      if (node.dataPath && !isValidStatePath(node.dataPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_database_data_path",
+          message: `dataPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.dataPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.resultPath && !isValidStatePath(node.resultPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_database_save_result_path",
+          message: `resultPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.resultPath`,
+          nodeId: node.id,
+        });
+      }
+    }
   }
 
   for (const [nodeId, count] of nodeCounts.entries()) {
@@ -668,6 +734,10 @@ function validateLlmAdapter(
 
 function isValidStatePath(value: string): boolean {
   return /^(state\.)?[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(value);
+}
+
+function isValidSqlIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }
 
 function traverse(start: string, outgoing: Map<string, string[]>): Set<string> {

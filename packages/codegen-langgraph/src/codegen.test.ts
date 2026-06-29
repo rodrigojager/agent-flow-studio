@@ -287,6 +287,110 @@ def test_http_and_transform_events(tmp_path):
   });
 });
 
+test("generated runtime executes database query and save nodes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-database-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente com banco");
+
+  const flow: AgentFlow = {
+    ...simpleFlow("database-agent", "Agente Banco"),
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      {
+        id: "save_response",
+        type: "database_save",
+        table: "agent_node_records",
+        dataPath: "assistant_message",
+        resultPath: "database.save_response",
+      },
+      {
+        id: "load_saved_response",
+        type: "database_query",
+        query: "SELECT node_id, payload_json FROM agent_node_records WHERE session_id = :session_id ORDER BY created_at DESC",
+        resultPath: "database.load_saved_response",
+      },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "llm_step", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "llm_step", to: "save_response" },
+      { from: "save_response", to: "load_saved_response" },
+      { from: "load_saved_response", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /DATABASE_QUERY_NODE_IDS/);
+  assert.match(graph, /DATABASE_SAVE_NODE_IDS/);
+  assert.match(graph, /AgentNodeRecord/);
+  await writeFile(
+    path.join(outDir, "tests", "test_database_nodes.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "database.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_database_query_and_save_events(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
+    session_id = create_resp.json()["session"]["session_id"]
+    client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "grave isto"},
+    )
+    assert turn_resp.status_code == 200
+    assert turn_resp.json()["assistant_message"]["code"] == "ECHO"
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    by_type = {item["event_type"]: item for item in events}
+    saved = by_type["database_save_completed"]["payload"]["database"]
+    loaded = by_type["database_query_completed"]["payload"]["database"]
+    assert saved["ok"] is True
+    assert saved["table"] == "agent_node_records"
+    assert loaded["ok"] is True
+    assert loaded["row_count"] == 1
+    assert loaded["rows"][0]["node_id"] == "save_response"
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated multiagent manifest bundle mounts agents in one FastAPI process", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-multi-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

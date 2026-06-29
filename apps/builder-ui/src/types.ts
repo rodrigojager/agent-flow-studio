@@ -34,6 +34,12 @@ export interface FlowNode {
   responsePath?: string;
   inputPath?: string;
   outputPath?: string;
+  query?: string;
+  table?: string;
+  dataPath?: string;
+  paramsPath?: string;
+  resultPath?: string;
+  maxRows?: number;
   timeoutSeconds?: number;
   position?: {
     x: number;

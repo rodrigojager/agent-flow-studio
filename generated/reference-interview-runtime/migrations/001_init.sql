@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS agent_events (
   CONSTRAINT uq_agent_event_seq UNIQUE (session_id, seq)
 );
 
+CREATE TABLE IF NOT EXISTS agent_node_records (
+  record_id VARCHAR PRIMARY KEY,
+  session_id VARCHAR NOT NULL,
+  node_id VARCHAR NOT NULL,
+  payload_json JSON NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS idempotency_records (
   record_id VARCHAR PRIMARY KEY,
   idempotency_key VARCHAR NOT NULL,

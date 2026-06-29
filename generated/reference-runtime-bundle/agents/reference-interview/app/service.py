@@ -7,6 +7,9 @@ from app import repo
 from app.cache import recent_key
 from app.graph import (
     CODE_NODE_IDS,
+    CURRENT_DB_SESSION,
+    DATABASE_QUERY_NODE_IDS,
+    DATABASE_SAVE_NODE_IDS,
     FINISH_NODE_IDS,
     HUMAN_INPUT_NODE_IDS,
     HTTP_REQUEST_NODE_IDS,
@@ -103,6 +106,7 @@ class ReferenceAgentService:
             return {"session": session_view(row), "messages": [message_view(item) for item in existing_messages]}
 
         result = self._invoke_graph(
+            db,
             {
                 "action": "start",
                 "session_id": row.session_id,
@@ -153,6 +157,7 @@ class ReferenceAgentService:
         recent_messages = self._recent_messages(db, row.session_id)
         recent_messages.append({"role": "user", "content": user_message})
         result = self._invoke_graph(
+            db,
             {
                 "action": "turn",
                 "session_id": row.session_id,
@@ -203,6 +208,7 @@ class ReferenceAgentService:
             return {"session": session_view(row), "message": None}
 
         result = self._invoke_graph(
+            db,
             {
                 "action": "finish",
                 "session_id": row.session_id,
@@ -242,13 +248,17 @@ class ReferenceAgentService:
         self.get_session(db, session_id)
         return [event_view(row) for row in repo.get_events(db, session_id, from_seq=from_seq)]
 
-    def _invoke_graph(self, state: dict[str, Any], session_id: str) -> dict[str, Any]:
-        return dict(
-            self.graph.invoke(
-                state,
-                config={"configurable": {"thread_id": session_id}},
+    def _invoke_graph(self, db: Session, state: dict[str, Any], session_id: str) -> dict[str, Any]:
+        token = CURRENT_DB_SESSION.set(db)
+        try:
+            return dict(
+                self.graph.invoke(
+                    state,
+                    config={"configurable": {"thread_id": session_id}},
+                )
             )
-        )
+        finally:
+            CURRENT_DB_SESSION.reset(token)
 
     def _recent_messages(self, db: Session, session_id: str) -> list[dict[str, str]]:
         cached = self.cache.get_json(recent_key(session_id))
@@ -323,6 +333,14 @@ class ReferenceAgentService:
                 event_type = "transform_json_completed"
                 payload["handler"] = "transform_json"
                 payload["transform"] = (result.get("transforms") or {}).get(node_id, {})
+            elif node_id in DATABASE_QUERY_NODE_IDS:
+                event_type = "database_query_completed"
+                payload["handler"] = "database_query"
+                payload["database"] = (result.get("database") or {}).get(node_id, {})
+            elif node_id in DATABASE_SAVE_NODE_IDS:
+                event_type = "database_save_completed"
+                payload["handler"] = "database_save"
+                payload["database"] = (result.get("database") or {}).get(node_id, {})
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:

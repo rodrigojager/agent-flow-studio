@@ -2,12 +2,18 @@ import atexit
 import json
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Literal, TypedDict
+from uuid import uuid4
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy import text
 
+from app.db import session_scope
 from app.llm import LLMClient, load_prompt
+from app.models import AgentNodeRecord
 from app.safety import SafetyGate
 from app.settings import Settings
 
@@ -21,6 +27,17 @@ DIRECT_NODE_EDGES_RAW = json.loads("{\n  \"start_node\": \"end\",\n  \"llm_step\
 NODE_ROUTE_MAP_RAW = json.loads("{\n  \"input_safety_check\": {\n    \"route_0\": \"llm_step\",\n    \"route_1\": \"end\"\n  }\n}")
 NODE_ROUTE_CONDITIONS = json.loads("{\n  \"input_safety_check\": [\n    {\n      \"key\": \"route_0\",\n      \"kind\": \"safety_decision\",\n      \"value\": \"allow\"\n    },\n    {\n      \"key\": \"route_1\",\n      \"kind\": \"safety_blocked\",\n      \"value\": true\n    }\n  ]\n}")
 START_MESSAGE = "Olá! Este é o Agente de Referência. Envie uma mensagem para eu ecoar o fluxo com segurança, LLM e estado."
+CURRENT_DB_SESSION = ContextVar("CURRENT_DB_SESSION", default=None)
+
+
+@contextmanager
+def graph_session_scope():
+    current = CURRENT_DB_SESSION.get()
+    if current is not None:
+        yield current
+    else:
+        with session_scope() as db:
+            yield db
 
 
 def _node_ids(*, node_type: str, stage: str | None = None) -> list[str]:
@@ -48,6 +65,8 @@ SWITCH_NODE_IDS = _node_ids(node_type="switch")
 HUMAN_INPUT_NODE_IDS = _node_ids(node_type="human_input")
 HTTP_REQUEST_NODE_IDS = _node_ids(node_type="http_request")
 TRANSFORM_JSON_NODE_IDS = _node_ids(node_type="transform_json")
+DATABASE_QUERY_NODE_IDS = _node_ids(node_type="database_query")
+DATABASE_SAVE_NODE_IDS = _node_ids(node_type="database_save")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -64,6 +83,7 @@ class ReferenceState(TypedDict, total=False):
     llm: dict[str, Any]
     http: dict[str, Any]
     transforms: dict[str, Any]
+    database: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -159,6 +179,38 @@ def build_graph(
                 current[part] = child
             current = child
         current[parts[-1]] = value
+
+    def jsonable(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, (list, tuple)):
+            return [jsonable(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): jsonable(item) for key, item in value.items()}
+        return str(value)
+
+    def normalized_params(value: Any, state: ReferenceState) -> dict[str, Any]:
+        if value is None:
+            params: dict[str, Any] = {}
+        elif isinstance(value, dict):
+            params = dict(value)
+        else:
+            params = {"value": value}
+        params.setdefault("session_id", state.get("session_id"))
+        return params
+
+    def is_sql_identifier(value: str) -> bool:
+        first = value[:1]
+        return bool(first) and (first.isalpha() or first == "_") and all(part.isalnum() or part == "_" for part in value)
+
+    def remember_database_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        database_results = dict(state.get("database") or {})
+        database_results[node_id] = result
+        updates["database"] = database_results
+        if result_path != f"database.{node_id}":
+            assign_state_path(updates, state, result_path, result)
+        return mark_node(state, node_id, updates)
 
     def make_start_node(config: dict[str, Any]):
         node_id = config["id"]
@@ -396,6 +448,116 @@ def build_graph(
 
         return run
 
+    def make_database_query_node(config: dict[str, Any]):
+        node_id = config["id"]
+        query = str(config.get("query") or "")
+        params_path = str(config.get("paramsPath") or "")
+        result_path = str(config.get("resultPath") or f"database.{node_id}")
+        max_rows = int(config.get("maxRows") or 50)
+
+        def run(state: ReferenceState) -> ReferenceState:
+            if not query.strip():
+                result_payload = {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "query_not_configured",
+                }
+                return remember_database_result(state, node_id, result_path, result_payload)
+
+            params_value = state_path_value(state, params_path) if params_path else {}
+            params = normalized_params(params_value, state)
+            try:
+                with graph_session_scope() as db:
+                    result = db.execute(text(query), params)
+                    if result.returns_rows:
+                        rows = [dict(row) for row in result.mappings().fetchmany(max_rows)]
+                        result_payload = {
+                            "ok": True,
+                            "rows": jsonable(rows),
+                            "row_count": len(rows),
+                            "max_rows": max_rows,
+                        }
+                    else:
+                        result_payload = {
+                            "ok": True,
+                            "rows": [],
+                            "row_count": result.rowcount,
+                            "max_rows": max_rows,
+                        }
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "error": str(exc),
+                }
+            return remember_database_result(state, node_id, result_path, result_payload)
+
+        return run
+
+    def make_database_save_node(config: dict[str, Any]):
+        node_id = config["id"]
+        table = str(config.get("table") or "agent_node_records")
+        query = str(config.get("query") or "")
+        data_path = str(config.get("dataPath") or "assistant_message")
+        params_path = str(config.get("paramsPath") or data_path)
+        result_path = str(config.get("resultPath") or f"database.{node_id}")
+
+        def run(state: ReferenceState) -> ReferenceState:
+            data_value = jsonable(state_path_value(state, data_path))
+            params = normalized_params(state_path_value(state, params_path), state)
+            try:
+                with graph_session_scope() as db:
+                    if query.strip():
+                        result = db.execute(text(query), params)
+                        result_payload = {
+                            "ok": True,
+                            "mode": "query",
+                            "row_count": result.rowcount,
+                        }
+                    elif table == "agent_node_records":
+                        record_id = str(uuid4())
+                        db.add(
+                            AgentNodeRecord(
+                                record_id=record_id,
+                                session_id=str(state.get("session_id") or ""),
+                                node_id=node_id,
+                                payload_json=data_value,
+                            )
+                        )
+                        db.flush()
+                        result_payload = {
+                            "ok": True,
+                            "mode": "node_record",
+                            "table": table,
+                            "record_id": record_id,
+                        }
+                    else:
+                        if not is_sql_identifier(table):
+                            raise ValueError("Tabela configurada não é um identificador SQL simples.")
+                        if not isinstance(data_value, dict):
+                            raise ValueError("database_save em tabela customizada exige dataPath apontando para objeto JSON.")
+                        columns = sorted(data_value)
+                        for column in columns:
+                            if not is_sql_identifier(column):
+                                raise ValueError(f"Coluna inválida para insert: {column}")
+                        column_sql = ", ".join(columns)
+                        values_sql = ", ".join(f":{column}" for column in columns)
+                        db.execute(text(f"INSERT INTO {table} ({column_sql}) VALUES ({values_sql})"), data_value)
+                        result_payload = {
+                            "ok": True,
+                            "mode": "insert",
+                            "table": table,
+                            "row_count": 1,
+                        }
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "table": table,
+                    "error": str(exc),
+                }
+            return remember_database_result(state, node_id, result_path, result_payload)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -435,6 +597,10 @@ def build_graph(
             return make_http_request_node(config)
         if node_type == "transform_json":
             return make_transform_json_node(config)
+        if node_type == "database_query":
+            return make_database_query_node(config)
+        if node_type == "database_save":
+            return make_database_save_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)

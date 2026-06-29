@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Artefatos produzidos pelo codegen a partir dos flows. Esta pasta serve para inspeção e comparação durante o desenvolvimento do gerador, incluindo a saída versionada de handlers genéricos como `http_request` e `transform_json`.
+Artefatos produzidos pelo codegen a partir dos flows. Esta pasta serve para inspeção e comparação durante o desenvolvimento do gerador, incluindo a saída versionada de handlers genéricos como `http_request`, `transform_json`, `database_query` e `database_save`.
 
 ---
 

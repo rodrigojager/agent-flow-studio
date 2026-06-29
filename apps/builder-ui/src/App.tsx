@@ -114,6 +114,8 @@ const nodeTypeOptions = [
   { type: "human_input", label: "Humano", icon: Send },
   { type: "http_request", label: "HTTP", icon: Terminal },
   { type: "transform_json", label: "Transform", icon: Boxes },
+  { type: "database_query", label: "DB Query", icon: FileJson },
+  { type: "database_save", label: "DB Save", icon: Download },
   { type: "end", label: "End", icon: CircleDot },
 ] as const;
 
@@ -1605,6 +1607,8 @@ function NodeInspector({
   const isCodeNode = node.type === "code";
   const isHttpNode = node.type === "http_request";
   const isTransformNode = node.type === "transform_json";
+  const isDatabaseQueryNode = node.type === "database_query";
+  const isDatabaseSaveNode = node.type === "database_save";
   return (
     <div className="inspector-body">
       <div className="edit-group">
@@ -1773,6 +1777,51 @@ function NodeInspector({
                   value={node.outputPath ?? ""}
                   onChange={(event) => onNodeFieldChange(node.id, "outputPath", event.target.value)}
                 />
+              </label>
+            </>
+          ) : null}
+          {isDatabaseQueryNode ? (
+            <>
+              <label>
+                <span>Query SQL</span>
+                <textarea value={node.query ?? ""} onChange={(event) => onNodeFieldChange(node.id, "query", event.target.value)} rows={4} />
+              </label>
+              <label>
+                <span>Params path</span>
+                <input
+                  value={node.paramsPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "paramsPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Result path</span>
+                <input
+                  value={node.resultPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "resultPath", event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
+          {isDatabaseSaveNode ? (
+            <>
+              <label>
+                <span>Tabela</span>
+                <input value={node.table ?? ""} onChange={(event) => onNodeFieldChange(node.id, "table", event.target.value)} />
+              </label>
+              <label>
+                <span>Data path</span>
+                <input value={node.dataPath ?? ""} onChange={(event) => onNodeFieldChange(node.id, "dataPath", event.target.value)} />
+              </label>
+              <label>
+                <span>Result path</span>
+                <input
+                  value={node.resultPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "resultPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>SQL opcional</span>
+                <textarea value={node.query ?? ""} onChange={(event) => onNodeFieldChange(node.id, "query", event.target.value)} rows={3} />
               </label>
             </>
           ) : null}
@@ -2568,6 +2617,17 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
   if (node.type === "transform_json") {
     next.inputPath = node.inputPath ?? "assistant_message";
     next.outputPath = node.outputPath ?? `transforms.${node.id}`;
+  }
+  if (node.type === "database_query") {
+    next.query = node.query ?? "SELECT record_id, node_id, payload_json FROM agent_node_records WHERE session_id = :session_id ORDER BY created_at DESC";
+    next.paramsPath = node.paramsPath ?? "database_params";
+    next.resultPath = node.resultPath ?? `database.${node.id}`;
+  }
+  if (node.type === "database_save") {
+    next.table = node.table ?? "agent_node_records";
+    next.dataPath = node.dataPath ?? "assistant_message";
+    next.resultPath = node.resultPath ?? `database.${node.id}`;
+    next.query = node.query;
   }
   return next;
 }

@@ -60,6 +60,16 @@ class AgentEvent(Base):
     agent_session = relationship("AgentSession", back_populates="events")
 
 
+class AgentNodeRecord(Base):
+    __tablename__ = "agent_node_records"
+
+    record_id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False)
+    node_id = Column(String, nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class IdempotencyRecord(Base):
     __tablename__ = "idempotency_records"
 
