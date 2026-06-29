@@ -84,5 +84,7 @@ class MetadataResponse(BaseModel):
     service: str
     runtime: str
     contract: str
+    flow_id: str
+    flow_version: str
     llm_adapter: str
     supports_multi_agent_bundle: bool

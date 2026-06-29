@@ -84,6 +84,7 @@ def build_graph(
                 "phase": "safety",
                 "is_complete": decision.decision == "block",
                 "status": "completed" if decision.decision == "block" else "active",
+                "turn": int(state.get("turn") or 0) + 1,
             }
         return {
             "safety": {"blocked": False, "decision": "allow"},

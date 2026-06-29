@@ -23,6 +23,7 @@
 - Flow Spec inicial em Zod/TypeScript.
 - Codegen em TypeScript gerando runtime Python executável em `generated/reference-interview-runtime/`.
 - Validação mínima de equivalência do baseline: o runtime manual e o runtime gerado exercitam o mesmo contrato `/sessions`, idempotência, transcript, eventos, safety e fluxo LangGraph de referência.
+- Verificação automatizada de paridade estrutural em `tools/verify_runtime_parity.py`, comparando flow spec, OpenAPI, schemas principais, metadata e cenários normalizados entre baseline manual e runtime gerado.
 - Builder API mínima em `apps/builder-api/` para listar, ler, validar e gerar flows versionáveis.
 - Builder UI inicial em `apps/builder-ui/` com canvas React Flow, lista de flows, inspector, preview JSON, edição básica de propriedades, salvamento do `agent.flow.json` e ações de validar/gerar via Builder API.
 - Builder API persiste flows versionáveis com `PUT /flows/{flowId}`, valida Flow Spec antes de gravar e bloqueia divergência de `id`.
@@ -49,6 +50,7 @@ npm run typecheck
 npm run test:baseline
 npm run test:generated
 npm run test:manifest
+npm run test:parity
 npm run test:builder-api
 npm run test:codegen
 npm run build:builder-ui
@@ -67,7 +69,6 @@ Também foi validado localmente:
 ## Ainda não implementado
 
 - Codegen genérico para recursos avançados e execução real de todos os tipos futuros de nós.
-- Teste automatizado de equivalência estrutural mais estrito entre baseline manual, flow spec e runtime gerado.
 - Edição visual avançada de prompts/schemas, validação visual rica, import/export de workspace e ergonomia refinada do canvas.
 - Sandbox visual mais completo, com logs ao vivo, gerenciamento de múltiplos runtimes e seleção de portas.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.

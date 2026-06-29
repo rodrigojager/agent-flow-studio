@@ -29,11 +29,12 @@ reference-interview-runtime/
 | Alterar fluxo LangGraph | `app/graph.py` | `app/service.py` |
 | Alterar persistência | `app/models.py` | `app/repo.py` |
 | Alterar LLM ou safety | `app/llm.py`, `app/safety.py` | `app/prompts/system.md` |
-| Validar comportamento | `tests/` | `README.md` |
+| Validar comportamento | `tests/` e `../../tools/verify_runtime_parity.py` | `README.md` |
 
 ## Commands
 
 ```bash
 pip install -e ".[dev]"
 pytest -q
+npm run test:parity
 ```

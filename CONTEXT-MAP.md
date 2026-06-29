@@ -11,3 +11,4 @@
 - Decisões arquiteturais ficam em `docs/adr/`.
 - O plano consolidado fica em `docs/plan.md`.
 - As aplicações do builder ficam em `apps/` e têm roteamento próprio.
+- Verificadores transversais ficam em `tools/` e têm roteamento próprio.

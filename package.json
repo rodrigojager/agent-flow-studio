@@ -15,6 +15,7 @@
     "test:baseline": "python -m pytest -q examples/reference-interview-runtime",
     "test:generated": "python -m pytest -q generated/reference-interview-runtime",
     "test:manifest": "python -m pytest -q generated/reference-runtime-bundle/agents/reference-interview",
+    "test:parity": "python tools/verify_runtime_parity.py",
     "test:builder-api": "tsx --test apps/builder-api/src/server.test.ts",
     "test:codegen": "tsx --test packages/codegen-langgraph/src/codegen.test.ts",
     "dev:builder-api": "tsx apps/builder-api/src/server.ts",

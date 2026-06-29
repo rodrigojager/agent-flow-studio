@@ -110,7 +110,18 @@ class ReferenceAgentService:
             code=assistant["code"],
             content=assistant["text"],
         )
-        repo.append_event(db, session_id=row.session_id, event_type="node_completed", node="start_node", payload=result)
+        repo.append_event(
+            db,
+            session_id=row.session_id,
+            event_type="node_completed",
+            node="start_node",
+            payload={
+                "status": result.get("status"),
+                "phase": result.get("phase"),
+                "turn": result.get("turn"),
+                "handler": "start",
+            },
+        )
         self._cache_recent(row.session_id, [message_view(message)])
         return {"session": session_view(row), "messages": [message_view(message)]}
 
@@ -207,7 +218,18 @@ class ReferenceAgentService:
             code=assistant["code"],
             content=assistant["text"],
         )
-        repo.append_event(db, session_id=row.session_id, event_type="node_completed", node="finish_node", payload=result)
+        repo.append_event(
+            db,
+            session_id=row.session_id,
+            event_type="node_completed",
+            node="finish_node",
+            payload={
+                "status": result.get("status"),
+                "phase": result.get("phase"),
+                "turn": result.get("turn"),
+                "handler": "finish",
+            },
+        )
         repo.append_event(
             db,
             session_id=row.session_id,
@@ -251,27 +273,53 @@ class ReferenceAgentService:
             session_id=session_id,
             event_type="node_completed",
             node="input_safety_check",
-            payload={"safety": result.get("safety"), "source_message_id": user_message_id},
+            payload={
+                "status": result.get("status"),
+                "phase": result.get("phase"),
+                "turn": result.get("turn"),
+                "safety": result.get("safety"),
+                "source_message_id": user_message_id,
+            },
         )
         if not (result.get("safety") or {}).get("blocked"):
+            llm_payload = {
+                "status": result.get("status"),
+                "phase": result.get("phase"),
+                "turn": result.get("turn"),
+                "node_id": "llm_step",
+                "source_message_id": user_message_id,
+            }
+            llm_payload.update(result.get("llm") or {})
             repo.append_event(
                 db,
                 session_id=session_id,
                 event_type="llm_called",
                 node="llm_step",
-                payload=result.get("llm") or {},
+                payload=llm_payload,
             )
             repo.append_event(
                 db,
                 session_id=session_id,
                 event_type="node_completed",
                 node="output_safety_check",
-                payload={"safety": result.get("safety") or {"blocked": False, "decision": "allow"}},
+                payload={
+                    "status": result.get("status"),
+                    "phase": result.get("phase"),
+                    "turn": result.get("turn"),
+                    "safety": result.get("safety") or {"blocked": False, "decision": "allow"},
+                    "source_message_id": user_message_id,
+                },
             )
             repo.append_event(
                 db,
                 session_id=session_id,
                 event_type="node_completed",
                 node="deterministic_gate",
-                payload={"turn": result.get("turn"), "status": result.get("status"), "phase": result.get("phase")},
+                payload={
+                    "status": result.get("status"),
+                    "phase": result.get("phase"),
+                    "turn": result.get("turn"),
+                    "handler": "code",
+                    "source_message_id": user_message_id,
+                },
             )

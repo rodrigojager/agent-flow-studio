@@ -28,6 +28,7 @@ AGENTES IA/
 ├── apps/              # aplicações do builder em desenvolvimento
 ├── flows/             # fluxos versionáveis do builder
 ├── packages/          # flow spec e codegen
+├── tools/             # verificadores e scripts auxiliares
 ├── examples/          # baseline manual versionado
 ├── generated/         # artefatos gerados pelo codegen
 └── docs/
@@ -54,6 +55,7 @@ AGENTES IA/
 | Alterar Builder API | `apps/builder-api/` | `apps/builder-api/CONTEXT.md` |
 | Alterar o flow de referência | `flows/reference-interview/` | `flows/CONTEXT.md` |
 | Alterar validação ou codegen | `packages/` | `packages/CONTEXT.md` |
+| Alterar verificadores transversais | `tools/` | `tools/CONTEXT.md` |
 | Inspecionar saída gerada | `generated/reference-interview-runtime/` | `generated/CONTEXT.md` |
 
 ---
