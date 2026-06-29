@@ -2,7 +2,7 @@
 
 ## Purpose
 
-API local de desenvolvimento para listar, ler, salvar, validar com diagnósticos estruturados, importar, exportar e gerar flows versionáveis, incluindo criação/remoção de prompts e schemas, catálogo LLM, artefatos gerados, bundles por manifesto e sandboxes locais de runtime gerado. No MVP, a fonte de verdade continua sendo o filesystem do workspace.
+API local de desenvolvimento para criar, listar, ler, salvar, validar com diagnósticos estruturados, importar, exportar e gerar flows versionáveis, incluindo criação/remoção de prompts e schemas, catálogo LLM, artefatos gerados, bundles por manifesto e sandboxes locais de runtime gerado. No MVP, a fonte de verdade continua sendo o filesystem do workspace.
 
 ---
 
@@ -26,6 +26,7 @@ builder-api/
 |------|-------|------------|
 | Alterar endpoints HTTP | `src/server.ts` | `src/workspace.ts` |
 | Alterar leitura/validação estruturada de flows | `src/workspace.ts` | `../../packages/flow-spec/src/index.ts` |
+| Alterar criação de flow por template | `src/workspace.ts` e `src/server.ts` | `src/server.test.ts` |
 | Alterar catálogo LLM exposto pela API | `src/server.ts` | `../../packages/flow-spec/src/index.ts` |
 | Alterar salvamento de flows | `src/workspace.ts` | `../../packages/flow-spec/src/index.ts` |
 | Alterar import/export de workspace de flow | `src/workspace.ts` e `src/server.ts` | `src/server.test.ts` |

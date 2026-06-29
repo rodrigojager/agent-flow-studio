@@ -55,6 +55,13 @@ export interface GenerateManifestResult {
   }>;
 }
 
+export interface CreateFlowWorkspaceResult {
+  flow: AgentFlow;
+  flowPath: string;
+  prompts: FlowAssetContent[];
+  schemas: FlowAssetContent[];
+}
+
 export interface SaveFlowResult {
   flow: AgentFlow;
   flowPath: string;
@@ -227,6 +234,51 @@ export async function listFlows(workspaceRoot: string): Promise<FlowSummary[]> {
     }
   }
   return summaries.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export async function createFlowWorkspace(workspaceRoot: string, value: unknown): Promise<CreateFlowWorkspaceResult> {
+  const input = parseCreateFlowInput(value);
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const flowsDir = safeResolve(root, "flows");
+  await mkdir(flowsDir, { recursive: true });
+  const flowRoot = safeResolve(root, `flows/${input.id}`);
+  if (await pathExists(flowRoot)) {
+    throw new WorkspaceError(`Flow já existe: ${input.id}`, 409);
+  }
+
+  const flow = starterFlow(input);
+  const parsedFlow = parseAgentFlow(flow);
+  const prompt: FlowAssetContent = {
+    id: "system",
+    path: "prompts/system.md",
+    content: starterPrompt(input.name),
+  };
+  const stateSchema: FlowAssetContent = {
+    id: "session_state",
+    path: "schemas/session_state.schema.json",
+    content: `${JSON.stringify(starterStateSchema(input.name), null, 2)}\n`,
+  };
+  const tempDir = safeResolve(root, `flows/.create-${input.id}-${Date.now()}`);
+  await rm(tempDir, { recursive: true, force: true });
+  await mkdir(path.join(tempDir, "prompts"), { recursive: true });
+  await mkdir(path.join(tempDir, "schemas"), { recursive: true });
+
+  try {
+    await writeFile(path.join(tempDir, "agent.flow.json"), `${JSON.stringify(parsedFlow, null, 2)}\n`, "utf-8");
+    await writeFile(path.join(tempDir, prompt.path), prompt.content, "utf-8");
+    await writeFile(path.join(tempDir, stateSchema.path), stateSchema.content, "utf-8");
+    await rename(tempDir, flowRoot);
+  } catch (error) {
+    await rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+
+  return {
+    flow: parsedFlow,
+    flowPath: `${toWorkspaceRelative(root, flowRoot)}/agent.flow.json`,
+    prompts: [prompt],
+    schemas: [stateSchema],
+  };
 }
 
 export async function loadFlowById(workspaceRoot: string, flowId: string): Promise<LoadedFlow> {
@@ -973,6 +1025,179 @@ async function pathExists(absolutePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+interface CreateFlowInput {
+  id: string;
+  name: string;
+  resourceName: string;
+}
+
+function parseCreateFlowInput(value: unknown): CreateFlowInput {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Novo flow deve ser um objeto JSON.", 400);
+  }
+  const id = parseAssetId(value.id, "id do flow");
+  assertImportableFlowId(id);
+  const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : titleFromId(id);
+  const resourceName =
+    typeof value.resourceName === "string" && value.resourceName.trim() ? value.resourceName.trim() : "sessions";
+  if (!/^[A-Za-z0-9_-]+$/.test(resourceName)) {
+    throw new WorkspaceError("resourceName deve usar letras, números, _ ou -.", 422);
+  }
+  return { id, name, resourceName };
+}
+
+function titleFromId(id: string): string {
+  return id
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function starterFlow(input: CreateFlowInput): AgentFlow {
+  return {
+    id: input.id,
+    name: input.name,
+    version: "0.1.0",
+    runtime: "langgraph-python",
+    api: {
+      contract: "sessions-v1",
+      resourceName: input.resourceName,
+      autoStartOnCreate: false,
+    },
+    persistence: {
+      checkpointer: "postgres",
+      publicStore: "postgres",
+      cache: "redis",
+    },
+    llm: {
+      adapter: "openai",
+      model: "gpt-4.1-mini",
+      apiKeyEnv: "OPENAI_API_KEY",
+      baseUrlEnv: "OPENAI_BASE_URL",
+      mockEnv: "MOCK_LLM",
+    },
+    state: {
+      schemaRef: "session_state",
+    },
+    prompts: [
+      {
+        id: "system",
+        path: "prompts/system.md",
+        version: "v1",
+        variables: ["session_id", "turn", "max_turns", "user_message", "recent_messages"],
+      },
+    ],
+    schemas: [
+      {
+        id: "session_state",
+        path: "schemas/session_state.schema.json",
+      },
+    ],
+    nodes: [
+      {
+        id: "start_node",
+        type: "start",
+        description: "Emite a primeira mensagem do agente.",
+        position: { x: 230, y: 300 },
+      },
+      {
+        id: "input_safety_check",
+        type: "safety_gate",
+        stage: "input",
+        position: { x: 460, y: 140 },
+      },
+      {
+        id: "turn_router",
+        type: "switch",
+        description: "Roteia o turno conforme status e limite.",
+        position: { x: 690, y: 300 },
+      },
+      {
+        id: "llm_step",
+        type: "llm_prompt",
+        promptId: "system",
+        llm: {
+          adapter: "openai",
+          model: "gpt-4.1-mini",
+        },
+        position: { x: 920, y: 140 },
+      },
+      {
+        id: "output_safety_check",
+        type: "safety_gate",
+        stage: "output",
+        position: { x: 1150, y: 300 },
+      },
+      {
+        id: "wait_user_input",
+        type: "human_input",
+        description: "Pausa lógica para o próximo turno do consumidor.",
+        position: { x: 1380, y: 140 },
+      },
+      {
+        id: "deterministic_gate",
+        type: "code",
+        handler: "deterministic_gate",
+        position: { x: 1610, y: 300 },
+      },
+      {
+        id: "finish_node",
+        type: "end",
+        description: "Finaliza a sessão manualmente ou por limite.",
+        position: { x: 1840, y: 140 },
+      },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "turn_router", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "turn_router", to: "llm_step", condition: "status == 'active' and turn < max_turns" },
+      { from: "turn_router", to: "finish_node", condition: "turn >= max_turns" },
+      { from: "llm_step", to: "output_safety_check" },
+      { from: "output_safety_check", to: "wait_user_input" },
+      { from: "wait_user_input", to: "deterministic_gate" },
+      { from: "deterministic_gate", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+}
+
+function starterPrompt(name: string): string {
+  return `# ${name}
+
+Você é um agente de IA orientado a fluxo e consumido por API.
+
+Responda em português brasileiro, de forma objetiva, usando o contexto recebido no payload do turno.
+
+Mantenha a resposta adequada para continuidade da sessão. A lógica de avanço, repetição e encerramento é responsabilidade dos nós determinísticos do runtime.
+`;
+}
+
+function starterStateSchema(name: string) {
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    title: `${name} State`,
+    type: "object",
+    properties: {
+      session_id: { type: "string" },
+      turn: { type: "integer", minimum: 0 },
+      max_turns: { type: "integer", minimum: 1 },
+      user_message: { type: "string" },
+      assistant_message: { type: "object" },
+      safety: { type: "object" },
+      llm: { type: "object" },
+      executed_nodes: {
+        type: "array",
+        items: { type: "string" },
+      },
+    },
+  };
 }
 
 function parseFlowWorkspaceExport(value: unknown): FlowWorkspaceExport {

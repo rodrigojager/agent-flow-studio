@@ -112,6 +112,68 @@ test("Builder API rejects generation outside the workspace", async (t) => {
   assert.equal(response.json().error, "workspace_error");
 });
 
+test("Builder API creates a new flow workspace from the starter template", async (t) => {
+  const workspaceRoot = await createWorkspaceFixture();
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const app = buildApp({ workspaceRoot });
+  t.after(() => app.close());
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/flows",
+    headers: { "content-type": "application/json" },
+    payload: { id: "new-agent", name: "Novo Agente" },
+  });
+  assert.equal(created.statusCode, 200);
+  assert.equal(created.json().flow.id, "new-agent");
+  assert.equal(created.json().flow.name, "Novo Agente");
+  assert.equal(created.json().flow.nodes.some((node: { type: string }) => node.type === "switch"), true);
+  assert.equal(created.json().flow.nodes.some((node: { type: string }) => node.type === "human_input"), true);
+  await access(path.join(workspaceRoot, "flows", "new-agent", "agent.flow.json"));
+  await access(path.join(workspaceRoot, "flows", "new-agent", "prompts", "system.md"));
+  await access(path.join(workspaceRoot, "flows", "new-agent", "schemas", "session_state.schema.json"));
+
+  const listed = await app.inject({ method: "GET", url: "/flows" });
+  assert.ok(listed.json().flows.some((flow: { id: string }) => flow.id === "new-agent"));
+
+  const prompt = await app.inject({ method: "GET", url: "/flows/new-agent/prompts/system" });
+  assert.equal(prompt.statusCode, 200);
+  assert.match(prompt.json().content, /Novo Agente/);
+
+  const validated = await app.inject({ method: "POST", url: "/flows/new-agent/validate" });
+  assert.equal(validated.statusCode, 200);
+  assert.equal(validated.json().status, "ok");
+  assert.equal(validated.json().summary.errors, 0);
+
+  const generated = await app.inject({
+    method: "POST",
+    url: "/flows/new-agent/generate",
+    headers: { "content-type": "application/json" },
+    payload: { outDir: "generated/new-agent-runtime" },
+  });
+  assert.equal(generated.statusCode, 200);
+  await access(path.join(workspaceRoot, "generated", "new-agent-runtime", "app", "graph.py"));
+
+  const duplicate = await app.inject({
+    method: "POST",
+    url: "/flows",
+    headers: { "content-type": "application/json" },
+    payload: { id: "new-agent" },
+  });
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal(duplicate.json().error, "workspace_error");
+
+  const invalid = await app.inject({
+    method: "POST",
+    url: "/flows",
+    headers: { "content-type": "application/json" },
+    payload: { id: "../escape" },
+  });
+  assert.equal(invalid.statusCode, 422);
+  assert.equal(invalid.json().error, "workspace_error");
+});
+
 test("Builder API reads, validates and generates a runtime manifest bundle", async (t) => {
   const workspaceRoot = await createWorkspaceFixture();
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

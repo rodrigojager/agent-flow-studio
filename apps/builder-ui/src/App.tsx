@@ -39,6 +39,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   builderApiUrl,
+  createFlowWorkspace,
   createRuntimeSession,
   createPromptAsset,
   createSchemaAsset,
@@ -762,6 +763,40 @@ export default function App() {
     importInputRef.current?.click();
   }
 
+  async function handleCreateFlow() {
+    const rawId = window.prompt("ID do novo flow", "novo-agente");
+    const flowId = rawId?.trim();
+    if (!flowId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Criando flow ${flowId}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const created = await createFlowWorkspace(flowId);
+      await refreshFlows(true);
+      setSelectedFlowId(created.flow.id);
+      setLoadedFlow({ path: created.path, flow: created.flow });
+      setDraftFlow(created.flow);
+      setIsDirty(false);
+      setSelectedNodeId(created.flow.nodes[0]?.id ?? "");
+      setSelectedEdgeId("");
+      setSelectedPromptId(created.flow.prompts[0]?.id ?? "");
+      setSelectedSchemaId(created.flow.schemas[0]?.id ?? "");
+      setPromptContent(created.prompts[0]?.content ?? "");
+      setSchemaContent(created.schemas[0]?.content ?? "");
+      setPromptDirty(false);
+      setSchemaDirty(false);
+      setFlowValidation(null);
+      setArtifactListing(null);
+      setArtifactContent(null);
+      setSelectedArtifactPath("");
+      setInspectorTab("properties");
+      setStatus({ kind: "ok", message: `Flow ${created.flow.id} criado em ${created.path}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -1233,6 +1268,9 @@ export default function App() {
           </label>
           <button type="button" className="icon-button" onClick={() => refreshFlows()} title="Atualizar flows">
             <RefreshCw size={17} aria-hidden="true" />
+          </button>
+          <button type="button" className="icon-button" onClick={handleCreateFlow} title="Criar flow" aria-label="Criar flow">
+            <Plus size={17} aria-hidden="true" />
           </button>
           <button
             type="button"

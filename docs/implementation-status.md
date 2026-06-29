@@ -25,9 +25,10 @@
 - Codegen em TypeScript gerando runtime Python executável em `generated/reference-interview-runtime/`.
 - Validação mínima de equivalência do baseline: o runtime manual e o runtime gerado exercitam o mesmo contrato `/sessions`, idempotência, transcript, eventos, safety e fluxo LangGraph de referência.
 - Verificação automatizada de paridade estrutural em `tools/verify_runtime_parity.py`, comparando flow spec, OpenAPI, schemas principais, metadata e cenários normalizados entre baseline manual e runtime gerado.
-- Builder API mínima em `apps/builder-api/` para listar, ler, validar e gerar flows versionáveis.
-- Builder UI inicial em `apps/builder-ui/` com canvas React Flow, lista de flows, inspector, preview JSON, edição básica de propriedades, salvamento do `agent.flow.json` e ações de validar/gerar via Builder API.
+- Builder API em `apps/builder-api/` para criar, listar, ler, validar e gerar flows versionáveis.
+- Builder UI inicial em `apps/builder-ui/` com canvas React Flow, lista de flows, criação de flow por template inicial, inspector, preview JSON, edição básica de propriedades, salvamento do `agent.flow.json` e ações de validar/gerar via Builder API.
 - Builder API persiste flows versionáveis com `PUT /flows/{flowId}`, valida Flow Spec antes de gravar e bloqueia divergência de `id`.
+- Builder API cria novos workspaces de flow com template inicial de conversa guiada, incluindo prompt, schema de estado, safety, switch, LLM, human input, gate determinístico e finish.
 - Flow Spec expõe análise estruturada de flows com diagnósticos de grafo, referências, nós, arestas e compatibilidade inicial de codegen.
 - Builder API cria, lê, salva e remove prompts Markdown e schemas JSON referenciados pelo flow, com validação de path dentro do diretório do flow, validação JSON para schemas e bloqueio de remoção quando o asset ainda está em uso.
 - Builder API retorna validação visual rica com diagnósticos estruturados, contagem de erros/avisos e checagem de assets referenciados.

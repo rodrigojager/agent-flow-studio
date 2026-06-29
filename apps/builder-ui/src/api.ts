@@ -1,4 +1,5 @@
 import type {
+  CreatedFlowWorkspace,
   EventView,
   FlowAssetContent,
   FlowAssetDeleteResult,
@@ -35,6 +36,14 @@ export async function listFlows(): Promise<FlowSummary[]> {
 
 export async function loadFlow(flowId: string): Promise<LoadedFlow> {
   return request<LoadedFlow>(`/flows/${encodeURIComponent(flowId)}`);
+}
+
+export async function createFlowWorkspace(id: string): Promise<CreatedFlowWorkspace> {
+  return request<CreatedFlowWorkspace>("/flows", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
 }
 
 export async function listLlmAdapters(): Promise<LlmAdapterCatalogResult> {

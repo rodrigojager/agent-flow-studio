@@ -4,6 +4,7 @@ import { agentFlowJsonSchema, llmAdapterCatalog, runtimeManifestJsonSchema } fro
 import { SandboxManager } from "./sandbox.ts";
 import {
   archiveGeneratedArtifact,
+  createFlowWorkspace,
   createPrompt,
   createSchemaAsset,
   deletePrompt,
@@ -47,6 +48,12 @@ interface SchemaParams extends FlowParams {
 
 interface GenerateBody {
   outDir?: string;
+}
+
+interface CreateFlowBody {
+  id?: string;
+  name?: string;
+  resourceName?: string;
 }
 
 interface ImportFlowWorkspaceBody {
@@ -141,6 +148,17 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.get("/flows", async () => ({
     flows: await listFlows(workspaceRoot),
   }));
+
+  app.post<{ Body: CreateFlowBody }>("/flows", async (request) => {
+    const result = await createFlowWorkspace(workspaceRoot, request.body);
+    return {
+      status: "ok",
+      path: result.flowPath,
+      flow: result.flow,
+      prompts: result.prompts,
+      schemas: result.schemas,
+    };
+  });
 
   app.get<{ Params: FlowParams }>("/flows/:flowId", async (request) => {
     const loaded = await loadFlowById(workspaceRoot, request.params.flowId);

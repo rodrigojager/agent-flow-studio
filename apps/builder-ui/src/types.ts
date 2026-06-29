@@ -95,6 +95,14 @@ export interface LoadedFlow {
   flow: AgentFlow;
 }
 
+export interface CreatedFlowWorkspace {
+  status: "ok";
+  path: string;
+  flow: AgentFlow;
+  prompts: FlowAssetContent[];
+  schemas: FlowAssetContent[];
+}
+
 export type FlowDiagnosticSeverity = "error" | "warning" | "info";
 
 export interface FlowDiagnostic {
