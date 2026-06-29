@@ -3,14 +3,17 @@ import fastify, { type FastifyInstance } from "fastify";
 import { agentFlowJsonSchema, llmAdapterCatalog, runtimeManifestJsonSchema } from "@agent-flow-builder/flow-spec";
 import { SandboxManager } from "./sandbox.ts";
 import {
+  archiveGeneratedArtifact,
   exportFlowWorkspace,
   importFlowWorkspace,
   generateRuntimeManifest,
   generateRuntime,
+  listGeneratedArtifact,
   listFlows,
   loadFlowById,
   loadRuntimeManifest,
   normalizeWorkspaceRoot,
+  readGeneratedArtifactFile,
   readPrompt,
   readSchemaAsset,
   saveFlow,
@@ -56,6 +59,11 @@ interface SandboxBody {
   port?: number;
 }
 
+interface ArtifactQuery {
+  outDir?: string;
+  path?: string;
+}
+
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const workspaceRoot = normalizeWorkspaceRoot(
     options.workspaceRoot ?? process.env.AGENT_BUILDER_WORKSPACE ?? process.cwd(),
@@ -67,6 +75,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     reply.header("Access-Control-Allow-Origin", "*");
     reply.header("Access-Control-Allow-Headers", "content-type");
     reply.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
+    reply.header("Access-Control-Expose-Headers", "content-disposition");
     if (request.method === "OPTIONS") {
       return reply.status(204).send();
     }
@@ -201,6 +210,26 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     };
   });
 
+  app.get<{ Querystring: ArtifactQuery }>("/artifacts", async (request) => {
+    const outDir = requiredQueryString(request.query.outDir, "outDir");
+    return listGeneratedArtifact(workspaceRoot, outDir);
+  });
+
+  app.get<{ Querystring: ArtifactQuery }>("/artifacts/file", async (request) => {
+    const outDir = requiredQueryString(request.query.outDir, "outDir");
+    const filePath = requiredQueryString(request.query.path, "path");
+    return readGeneratedArtifactFile(workspaceRoot, outDir, filePath);
+  });
+
+  app.get<{ Querystring: ArtifactQuery }>("/artifacts/archive", async (request, reply) => {
+    const outDir = requiredQueryString(request.query.outDir, "outDir");
+    const archive = await archiveGeneratedArtifact(workspaceRoot, outDir);
+    reply.header("content-type", "application/zip");
+    reply.header("content-disposition", `attachment; filename="${archive.fileName}"`);
+    reply.header("content-length", String(archive.sizeBytes));
+    return reply.send(archive.content);
+  });
+
   app.get("/sandboxes", async () => ({
     sandboxes: sandboxManager.list(),
   }));
@@ -236,6 +265,13 @@ function serializeErrorDetails(details: unknown): unknown {
     return details.message;
   }
   return details;
+}
+
+function requiredQueryString(value: string | undefined, name: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new WorkspaceError(`${name} é obrigatório.`, 400);
+  }
+  return value;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

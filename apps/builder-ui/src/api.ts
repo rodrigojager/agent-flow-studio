@@ -5,6 +5,8 @@ import type {
   FlowWorkspaceExport,
   FlowWorkspaceImportResult,
   GenerateResult,
+  GeneratedArtifactFileContent,
+  GeneratedArtifactListing,
   AgentFlow,
   LlmAdapterCatalogResult,
   LoadedFlow,
@@ -96,6 +98,25 @@ export async function generateFlow(flowId: string, outDir?: string): Promise<Gen
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ outDir }),
   });
+}
+
+export async function listGeneratedArtifact(outDir: string): Promise<GeneratedArtifactListing> {
+  return request<GeneratedArtifactListing>(`/artifacts?${generatedArtifactQuery(outDir)}`);
+}
+
+export async function readGeneratedArtifactFile(
+  outDir: string,
+  filePath: string,
+): Promise<GeneratedArtifactFileContent> {
+  return request<GeneratedArtifactFileContent>(`/artifacts/file?${generatedArtifactQuery(outDir, filePath)}`);
+}
+
+export async function downloadGeneratedArtifactArchive(outDir: string): Promise<Blob> {
+  const response = await fetch(`${builderApiUrl()}/artifacts/archive?${generatedArtifactQuery(outDir)}`);
+  if (!response.ok) {
+    throw await responseError(response);
+  }
+  return response.blob();
 }
 
 export async function loadRuntimeManifest(): Promise<LoadedRuntimeManifest> {
@@ -233,8 +254,31 @@ async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    const message = payload?.message || payload?.error || `HTTP ${response.status}`;
-    throw new Error(message);
+    throw responseErrorFromPayload(response, payload);
   }
   return payload as T;
+}
+
+function generatedArtifactQuery(outDir: string, filePath?: string): string {
+  const params = new URLSearchParams({ outDir });
+  if (filePath) {
+    params.set("path", filePath);
+  }
+  return params.toString();
+}
+
+async function responseError(response: Response): Promise<Error> {
+  const text = await response.text();
+  let payload: unknown = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  return responseErrorFromPayload(response, payload);
+}
+
+function responseErrorFromPayload(response: Response, payload: unknown): Error {
+  const candidate = payload && typeof payload === "object" ? (payload as { message?: string; error?: string }) : null;
+  return new Error(candidate?.message || candidate?.error || `HTTP ${response.status}`);
 }

@@ -60,6 +60,39 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(generated.json().status, "ok");
   assert.equal(generated.json().outDir, "generated/reference-interview-runtime");
   await access(path.join(workspaceRoot, "generated", "reference-interview-runtime", "app", "main.py"));
+
+  const artifacts = await app.inject({
+    method: "GET",
+    url: "/artifacts?outDir=generated%2Freference-interview-runtime",
+  });
+  assert.equal(artifacts.statusCode, 200);
+  assert.ok(artifacts.json().files.some((file: { path: string }) => file.path === "app/main.py"));
+
+  const artifactFile = await app.inject({
+    method: "GET",
+    url: "/artifacts/file?outDir=generated%2Freference-interview-runtime&path=app%2Fmain.py",
+  });
+  assert.equal(artifactFile.statusCode, 200);
+  assert.match(artifactFile.json().content, /FastAPI/);
+
+  const archive = await app.inject({
+    method: "GET",
+    url: "/artifacts/archive?outDir=generated%2Freference-interview-runtime",
+  });
+  assert.equal(archive.statusCode, 200);
+  assert.match(String(archive.headers["content-type"]), /application\/zip/);
+  assert.equal(archive.body.slice(0, 2), "PK");
+
+  const outsideGenerated = await app.inject({ method: "GET", url: "/artifacts?outDir=flows%2Freference-interview" });
+  assert.equal(outsideGenerated.statusCode, 400);
+  assert.equal(outsideGenerated.json().error, "workspace_error");
+
+  const escapedArtifactFile = await app.inject({
+    method: "GET",
+    url: "/artifacts/file?outDir=generated%2Freference-interview-runtime&path=..%2Fagent.flow.json",
+  });
+  assert.equal(escapedArtifactFile.statusCode, 400);
+  assert.equal(escapedArtifactFile.json().error, "workspace_error");
 });
 
 test("Builder API rejects generation outside the workspace", async (t) => {

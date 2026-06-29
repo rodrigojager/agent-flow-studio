@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Interface visual local do builder para inspecionar flows, criar/remover/mover/conectar nós e arestas, editar propriedades básicas, editar LLM/prompts/schemas, salvar `agent.flow.json`, importar/exportar workspace de flow, validar especificações com diagnósticos visuais, operar `runtime.manifest.json`, acionar geração de runtimes pelo Builder API e testar sandboxes locais com sessões, turnos, logs e porta configurável.
+Interface visual local do builder para inspecionar flows, criar/remover/mover/conectar nós e arestas, editar propriedades básicas, editar LLM/prompts/schemas, salvar `agent.flow.json`, importar/exportar workspace de flow, validar especificações com diagnósticos visuais, operar `runtime.manifest.json`, acionar geração de runtimes pelo Builder API, pré-visualizar/baixar artefatos gerados e testar sandboxes locais com sessões, turnos, logs e porta configurável.
 
 ---
 
@@ -34,6 +34,7 @@ builder-ui/
 | Alterar edição de nós/arestas no canvas | `src/App.tsx` | `../../packages/flow-spec/src/index.ts` |
 | Alterar aba de validação visual | `src/App.tsx`, `src/api.ts` e `src/types.ts` | `../builder-api/src/workspace.ts` |
 | Alterar aba de prompts e schemas | `src/App.tsx` e `src/api.ts` | `../builder-api/src/workspace.ts` |
+| Alterar aba de artefatos gerados | `src/App.tsx`, `src/api.ts`, `src/types.ts` e `src/styles.css` | `../builder-api/src/workspace.ts` |
 | Alterar aba de runtime/manifesto | `src/App.tsx`, `src/api.ts` e `src/types.ts` | `../builder-api/src/workspace.ts` |
 | Alterar contrato com Builder API | `src/api.ts` | `../builder-api/CONTEXT.md` |
 | Alterar tipos do flow no front | `src/types.ts` | `../../packages/flow-spec/src/index.ts` |

@@ -38,11 +38,13 @@ import "@xyflow/react/dist/style.css";
 import {
   builderApiUrl,
   createRuntimeSession,
+  downloadGeneratedArtifactArchive,
   exportFlowWorkspace,
   finishRuntimeSession,
   generateFlow,
   generateRuntimeManifest,
   importFlowWorkspace,
+  listGeneratedArtifact,
   listFlows,
   listLlmAdapters,
   listSandboxes,
@@ -50,6 +52,7 @@ import {
   loadPromptAsset,
   loadRuntimeManifest,
   loadSchemaAsset,
+  readGeneratedArtifactFile,
   runtimeEvents,
   runtimeTranscript,
   sandboxStatus,
@@ -72,6 +75,8 @@ import type {
   FlowSummary,
   FlowWorkspaceExport,
   GenerateResult,
+  GeneratedArtifactFileContent,
+  GeneratedArtifactListing,
   LlmAdapterCatalogItem,
   LoadedFlow,
   LoadedRuntimeManifest,
@@ -84,7 +89,7 @@ import type {
 } from "./types.ts";
 import "./styles.css";
 
-type InspectorTab = "properties" | "files" | "validation" | "json" | "runtime" | "sandbox";
+type InspectorTab = "properties" | "files" | "validation" | "json" | "artifact" | "runtime" | "sandbox";
 type StatusKind = "idle" | "ok" | "error" | "busy";
 
 interface StatusState {
@@ -125,6 +130,9 @@ export default function App() {
   const [flowValidation, setFlowValidation] = useState<ValidationResult | null>(null);
   const [manifestValidation, setManifestValidation] = useState<RuntimeManifestValidationResult | null>(null);
   const [manifestGeneration, setManifestGeneration] = useState<RuntimeManifestGenerateResult | null>(null);
+  const [artifactListing, setArtifactListing] = useState<GeneratedArtifactListing | null>(null);
+  const [artifactContent, setArtifactContent] = useState<GeneratedArtifactFileContent | null>(null);
+  const [selectedArtifactPath, setSelectedArtifactPath] = useState("");
   const [manifestOutDir, setManifestOutDir] = useState("");
   const [selectedPromptId, setSelectedPromptId] = useState("");
   const [selectedSchemaId, setSelectedSchemaId] = useState("");
@@ -226,6 +234,9 @@ export default function App() {
   useEffect(() => {
     if (!selectedFlowId) {
       setLoadedFlow(null);
+      setArtifactListing(null);
+      setArtifactContent(null);
+      setSelectedArtifactPath("");
       return;
     }
     let active = true;
@@ -252,6 +263,9 @@ export default function App() {
         setPromptDirty(false);
         setSchemaDirty(false);
         setFlowValidation(null);
+        setArtifactListing(null);
+        setArtifactContent(null);
+        setSelectedArtifactPath("");
         setRuntimeSession(null);
         setTranscript([]);
         setRuntimeEventsData([]);
@@ -268,6 +282,9 @@ export default function App() {
         setSelectedNodeId("");
         setSelectedEdgeId("");
         setFlowValidation(null);
+        setArtifactListing(null);
+        setArtifactContent(null);
+        setSelectedArtifactPath("");
         setStatus({ kind: "error", message: errorMessage(error) });
       }
     }
@@ -847,6 +864,70 @@ export default function App() {
     }
   }
 
+  async function refreshGeneratedArtifact(outDir: string, preferredPath?: string): Promise<GeneratedArtifactListing> {
+    const listing = await listGeneratedArtifact(outDir);
+    setArtifactListing(listing);
+    const nextPath =
+      (preferredPath && listing.files.some((file) => file.path === preferredPath) ? preferredPath : "") ||
+      (listing.files.some((file) => file.path === "README.md") ? "README.md" : "") ||
+      listing.files[0]?.path ||
+      "";
+    setSelectedArtifactPath(nextPath);
+    if (nextPath) {
+      const file = await readGeneratedArtifactFile(listing.outDir, nextPath);
+      setArtifactContent(file);
+    } else {
+      setArtifactContent(null);
+    }
+    return listing;
+  }
+
+  async function handleSelectArtifactFile(filePath: string) {
+    if (!artifactListing) {
+      return;
+    }
+    setSelectedArtifactPath(filePath);
+    setStatus({ kind: "busy", message: `Carregando ${filePath}.` });
+    try {
+      const file = await readGeneratedArtifactFile(artifactListing.outDir, filePath);
+      setArtifactContent(file);
+      setStatus({ kind: "ok", message: `${file.path} carregado.` });
+    } catch (error) {
+      setArtifactContent(null);
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleRefreshArtifact() {
+    if (!artifactListing) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Atualizando artefato ${artifactListing.outDir}.` });
+    try {
+      const listing = await refreshGeneratedArtifact(artifactListing.outDir, selectedArtifactPath);
+      setStatus({ kind: "ok", message: `Artefato atualizado com ${listing.files.length} arquivo(s).` });
+    } catch (error) {
+      setArtifactListing(null);
+      setArtifactContent(null);
+      setSelectedArtifactPath("");
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleDownloadArtifact() {
+    if (!artifactListing) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Preparando ${artifactListing.outDir}.zip.` });
+    try {
+      const blob = await downloadGeneratedArtifactArchive(artifactListing.outDir);
+      downloadBlobFile(`${artifactBaseName(artifactListing.outDir)}.zip`, blob);
+      setStatus({ kind: "ok", message: `Download preparado para ${artifactListing.outDir}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleGenerate() {
     if (!selectedFlowId) {
       return;
@@ -862,7 +943,9 @@ export default function App() {
       }
       await saveDirtyAssets();
       const result = await generateFlow(selectedFlowId);
-      setStatus({ kind: "ok", message: generateMessage(result) });
+      const listing = await refreshGeneratedArtifact(result.outDir, "README.md");
+      setInspectorTab("artifact");
+      setStatus({ kind: "ok", message: `${generateMessage(result)} ${listing.files.length} arquivo(s) prontos.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
@@ -885,7 +968,9 @@ export default function App() {
     try {
       const result = await generateRuntimeManifest(manifestOutDir.trim() || undefined);
       setManifestGeneration(result);
-      setStatus({ kind: "ok", message: manifestGenerateMessage(result) });
+      const listing = await refreshGeneratedArtifact(result.outDir, "README.md");
+      setInspectorTab("artifact");
+      setStatus({ kind: "ok", message: `${manifestGenerateMessage(result)} ${listing.files.length} arquivo(s) prontos.` });
     } catch (error) {
       setManifestGeneration(null);
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -1202,6 +1287,13 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={inspectorTab === "artifact" ? "active" : ""}
+              onClick={() => setInspectorTab("artifact")}
+            >
+              Artefato
+            </button>
+            <button
+              type="button"
               className={inspectorTab === "runtime" ? "active" : ""}
               onClick={() => setInspectorTab("runtime")}
             >
@@ -1275,6 +1367,15 @@ export default function App() {
             />
           ) : inspectorTab === "json" ? (
             <pre className="json-preview">{draftFlow ? JSON.stringify(draftFlow, null, 2) : "{}"}</pre>
+          ) : inspectorTab === "artifact" ? (
+            <GeneratedArtifactPanel
+              listing={artifactListing}
+              content={artifactContent}
+              selectedPath={selectedArtifactPath}
+              onSelectFile={handleSelectArtifactFile}
+              onRefresh={handleRefreshArtifact}
+              onDownload={handleDownloadArtifact}
+            />
           ) : inspectorTab === "runtime" ? (
             <RuntimeManifestPanel
               loaded={runtimeManifest}
@@ -1748,6 +1849,99 @@ function ValidationPanel({
   );
 }
 
+function GeneratedArtifactPanel({
+  listing,
+  content,
+  selectedPath,
+  onSelectFile,
+  onRefresh,
+  onDownload,
+}: {
+  listing: GeneratedArtifactListing | null;
+  content: GeneratedArtifactFileContent | null;
+  selectedPath: string;
+  onSelectFile: (path: string) => void;
+  onRefresh: () => void;
+  onDownload: () => void;
+}) {
+  if (!listing) {
+    return (
+      <div className="empty-state">
+        <AlertCircle size={18} aria-hidden="true" />
+        <span>Nenhum artefato gerado carregado.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="runtime-manifest-body">
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Artefato gerado</strong>
+          <span className="runtime-pill running">{listing.files.length}</span>
+        </div>
+        <dl className="kv-list inspector-list">
+          <Field label="Diretório" value={listing.outDir} />
+          <Field label="Tamanho" value={formatBytes(listing.totalSizeBytes)} />
+        </dl>
+        <div className="sandbox-actions">
+          <button type="button" className="command-button" onClick={onRefresh}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Atualizar
+          </button>
+          <button type="button" className="command-button primary" onClick={onDownload}>
+            <Download size={16} aria-hidden="true" />
+            Baixar zip
+          </button>
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Arquivos</strong>
+          <span>{formatBytes(listing.totalSizeBytes)}</span>
+        </div>
+        <div className="artifact-file-list">
+          {listing.files.map((file) => (
+            <button
+              type="button"
+              className={`artifact-file-button ${file.path === selectedPath ? "selected" : ""}`}
+              key={file.path}
+              onClick={() => onSelectFile(file.path)}
+            >
+              <strong>{file.path}</strong>
+              <span>{formatBytes(file.sizeBytes)}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>{content?.path ?? "Preview"}</strong>
+          <span>{content ? formatBytes(content.sizeBytes) : "-"}</span>
+        </div>
+        {content ? (
+          <>
+            <pre className="mini-json artifact-preview">{content.content}</pre>
+            {content.truncated ? (
+              <div className="runtime-item">
+                <strong>Preview truncado</strong>
+                <span>Somente parte do arquivo foi carregada.</span>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="runtime-item">
+            <strong>Nenhum arquivo selecionado</strong>
+            <span>Nenhum conteúdo carregado.</span>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function RuntimeManifestPanel({
   loaded,
   validation,
@@ -2181,6 +2375,20 @@ function parseSandboxPort(value: string): number | undefined {
   return port;
 }
 
+function formatBytes(sizeBytes: number): string {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function artifactBaseName(outDir: string): string {
+  return outDir.split(/[\\/]/).filter(Boolean).at(-1) || "runtime-artifact";
+}
+
 function llmAdapterOptions(adapters: LlmAdapterCatalogItem[], selectedAdapter: string): LlmAdapterCatalogItem[] {
   const selected = selectedAdapter.trim();
   if (!selected) {
@@ -2220,6 +2428,10 @@ function isFlowWorkspaceExport(value: unknown): value is FlowWorkspaceExport {
 
 function downloadJsonFile(fileName: string, value: unknown): void {
   const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: "application/json" });
+  downloadBlobFile(fileName, blob);
+}
+
+function downloadBlobFile(fileName: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

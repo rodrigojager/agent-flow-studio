@@ -571,6 +571,49 @@ button:disabled {
   max-height: 180px;
 }
 
+.artifact-file-list {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.artifact-file-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid #e1e6e2;
+  border-radius: 7px;
+  color: #263331;
+  text-align: left;
+  background: #fbfcfa;
+}
+
+.artifact-file-button.selected {
+  border-color: #0d5e52;
+  background: #eef8f3;
+}
+
+.artifact-file-button strong,
+.artifact-file-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-file-button strong {
+  font-size: 12px;
+}
+
+.artifact-file-button span {
+  color: #63736f;
+  font-size: 11px;
+}
+
 .diagnostic-list {
   display: grid;
   gap: 8px;
@@ -707,6 +750,10 @@ button:disabled {
   border: 1px solid #d7ddd8;
   border-radius: 8px;
   font-size: 12px;
+}
+
+.artifact-preview {
+  max-height: 360px;
 }
 
 .statusbar {

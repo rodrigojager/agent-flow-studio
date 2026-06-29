@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   generateLangGraphRuntime,
@@ -109,7 +109,37 @@ export interface FlowValidationResult {
   };
 }
 
+export interface GeneratedArtifactFileSummary {
+  path: string;
+  sizeBytes: number;
+}
+
+export interface GeneratedArtifactListing {
+  outDir: string;
+  files: GeneratedArtifactFileSummary[];
+  totalSizeBytes: number;
+}
+
+export interface GeneratedArtifactFileContent {
+  outDir: string;
+  path: string;
+  content: string;
+  sizeBytes: number;
+  truncated: boolean;
+}
+
+export interface GeneratedArtifactArchive {
+  outDir: string;
+  fileName: string;
+  content: Buffer;
+  sizeBytes: number;
+}
+
 const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
+const GENERATED_ARTIFACT_MAX_FILES = 1000;
+const GENERATED_ARTIFACT_MAX_PREVIEW_BYTES = 512 * 1024;
+const GENERATED_ARTIFACT_IGNORED_DIRS = new Set([".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modules"]);
+const GENERATED_ARTIFACT_IGNORED_EXTENSIONS = new Set([".pyc", ".pyo"]);
 
 export class WorkspaceError extends Error {
   constructor(
@@ -567,6 +597,73 @@ export async function importFlowWorkspace(
   };
 }
 
+export async function listGeneratedArtifact(workspaceRoot: string, outDir: string): Promise<GeneratedArtifactListing> {
+  const artifact = await resolveGeneratedArtifactRoot(workspaceRoot, outDir);
+  const files = await collectGeneratedArtifactFiles(artifact.absoluteOutDir);
+  return {
+    outDir: artifact.relativeOutDir,
+    files,
+    totalSizeBytes: files.reduce((total, file) => total + file.sizeBytes, 0),
+  };
+}
+
+export async function readGeneratedArtifactFile(
+  workspaceRoot: string,
+  outDir: string,
+  filePath: string,
+): Promise<GeneratedArtifactFileContent> {
+  const artifact = await resolveGeneratedArtifactRoot(workspaceRoot, outDir);
+  const relativePath = normalizeArtifactRelativePath(filePath);
+  const absolutePath = safeResolveArtifactFile(artifact.absoluteOutDir, relativePath);
+  let fileStat;
+  try {
+    fileStat = await stat(absolutePath);
+  } catch (error) {
+    throw new WorkspaceError(`Arquivo gerado não encontrado: ${relativePath}`, 404, error);
+  }
+  if (!fileStat.isFile()) {
+    throw new WorkspaceError(`Path do artefato não é arquivo: ${relativePath}`, 400);
+  }
+
+  const bytesToRead = Math.min(fileStat.size, GENERATED_ARTIFACT_MAX_PREVIEW_BYTES);
+  const handle = await open(absolutePath, "r");
+  try {
+    const buffer = Buffer.alloc(bytesToRead);
+    const result = await handle.read(buffer, 0, bytesToRead, 0);
+    return {
+      outDir: artifact.relativeOutDir,
+      path: relativePath,
+      content: buffer.subarray(0, result.bytesRead).toString("utf-8"),
+      sizeBytes: fileStat.size,
+      truncated: fileStat.size > result.bytesRead,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function archiveGeneratedArtifact(
+  workspaceRoot: string,
+  outDir: string,
+): Promise<GeneratedArtifactArchive> {
+  const artifact = await resolveGeneratedArtifactRoot(workspaceRoot, outDir);
+  const files = await collectGeneratedArtifactFiles(artifact.absoluteOutDir);
+  const archiveRootName = path.basename(artifact.relativeOutDir) || "runtime-artifact";
+  const archiveFiles = await Promise.all(
+    files.map(async (file) => ({
+      path: `${archiveRootName}/${file.path}`,
+      content: await readFile(path.join(artifact.absoluteOutDir, file.path)),
+    })),
+  );
+  const content = writeZipArchive(archiveFiles);
+  return {
+    outDir: artifact.relativeOutDir,
+    fileName: `${sanitizeFileName(archiveRootName)}.zip`,
+    content,
+    sizeBytes: content.byteLength,
+  };
+}
+
 function safeResolveFlowAsset(flowRoot: string, assetPath: string): string {
   const root = path.resolve(flowRoot);
   const resolved = path.resolve(root, assetPath);
@@ -694,8 +791,192 @@ function assertImportableFlowId(flowId: string): void {
   }
 }
 
+async function resolveGeneratedArtifactRoot(
+  workspaceRoot: string,
+  outDir: string,
+): Promise<{ absoluteOutDir: string; relativeOutDir: string }> {
+  const requestedOutDir = outDir.trim();
+  if (!requestedOutDir) {
+    throw new WorkspaceError("outDir do artefato gerado é obrigatório.", 400);
+  }
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const absoluteOutDir = safeResolve(root, requestedOutDir);
+  const relativeOutDir = toWorkspaceRelative(root, absoluteOutDir);
+  if (relativeOutDir !== "generated" && !relativeOutDir.startsWith("generated/")) {
+    throw new WorkspaceError("Artefatos gerados só podem ser lidos dentro de generated/.", 400);
+  }
+
+  let outDirStat;
+  try {
+    outDirStat = await stat(absoluteOutDir);
+  } catch (error) {
+    throw new WorkspaceError(`Diretório gerado não encontrado: ${relativeOutDir}`, 404, error);
+  }
+  if (!outDirStat.isDirectory()) {
+    throw new WorkspaceError(`outDir do artefato não é diretório: ${relativeOutDir}`, 400);
+  }
+  return { absoluteOutDir, relativeOutDir };
+}
+
+async function collectGeneratedArtifactFiles(
+  artifactRoot: string,
+  currentDir = "",
+  result: GeneratedArtifactFileSummary[] = [],
+): Promise<GeneratedArtifactFileSummary[]> {
+  if (result.length > GENERATED_ARTIFACT_MAX_FILES) {
+    throw new WorkspaceError(`Artefato gerado excede ${GENERATED_ARTIFACT_MAX_FILES} arquivos.`, 422);
+  }
+
+  const absoluteDir = path.join(artifactRoot, currentDir);
+  const entries = (await readdir(absoluteDir, { withFileTypes: true })).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+  for (const entry of entries) {
+    const relativePath = currentDir ? `${currentDir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (!GENERATED_ARTIFACT_IGNORED_DIRS.has(entry.name)) {
+        await collectGeneratedArtifactFiles(artifactRoot, relativePath, result);
+      }
+      continue;
+    }
+    if (!entry.isFile() || GENERATED_ARTIFACT_IGNORED_EXTENSIONS.has(path.extname(entry.name))) {
+      continue;
+    }
+    const fileStat = await stat(path.join(artifactRoot, relativePath));
+    result.push({
+      path: relativePath.replaceAll(path.sep, "/"),
+      sizeBytes: fileStat.size,
+    });
+  }
+  return result;
+}
+
+function normalizeArtifactRelativePath(filePath: string): string {
+  const normalized = filePath.trim().replaceAll("\\", "/").replace(/^\.\/+/, "");
+  if (!normalized) {
+    throw new WorkspaceError("path do arquivo gerado é obrigatório.", 400);
+  }
+  if (normalized.includes("\0") || path.isAbsolute(normalized) || normalized.split("/").includes("..")) {
+    throw new WorkspaceError(`Path de arquivo gerado inválido: ${filePath}`, 400);
+  }
+  return normalized;
+}
+
+function safeResolveArtifactFile(artifactRoot: string, filePath: string): string {
+  const root = path.resolve(artifactRoot);
+  const resolved = path.resolve(root, filePath);
+  const relativePath = path.relative(root, resolved);
+  if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new WorkspaceError(`Arquivo fora do artefato gerado: ${filePath}`, 400);
+  }
+  return resolved;
+}
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "runtime-artifact";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+interface ZipArchiveFile {
+  path: string;
+  content: Buffer;
+}
+
+function writeZipArchive(files: ZipArchiveFile[]): Buffer {
+  const chunks: Buffer[] = [];
+  const centralDirectory: Buffer[] = [];
+  let offset = 0;
+  const timestamp = dosDateTime(new Date());
+
+  for (const file of files) {
+    const fileName = Buffer.from(file.path.replaceAll("\\", "/"), "utf-8");
+    const checksum = crc32(file.content);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0x0800, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(timestamp.time, 10);
+    localHeader.writeUInt16LE(timestamp.date, 12);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(file.content.byteLength, 18);
+    localHeader.writeUInt32LE(file.content.byteLength, 22);
+    localHeader.writeUInt16LE(fileName.byteLength, 26);
+    localHeader.writeUInt16LE(0, 28);
+    chunks.push(localHeader, fileName, file.content);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0x0800, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(timestamp.time, 12);
+    centralHeader.writeUInt16LE(timestamp.date, 14);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(file.content.byteLength, 20);
+    centralHeader.writeUInt32LE(file.content.byteLength, 24);
+    centralHeader.writeUInt16LE(fileName.byteLength, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralDirectory.push(centralHeader, fileName);
+
+    offset += localHeader.byteLength + fileName.byteLength + file.content.byteLength;
+  }
+
+  const centralDirectoryOffset = offset;
+  const centralDirectoryBuffer = Buffer.concat(centralDirectory);
+  chunks.push(centralDirectoryBuffer);
+  offset += centralDirectoryBuffer.byteLength;
+
+  const endRecord = Buffer.alloc(22);
+  endRecord.writeUInt32LE(0x06054b50, 0);
+  endRecord.writeUInt16LE(0, 4);
+  endRecord.writeUInt16LE(0, 6);
+  endRecord.writeUInt16LE(files.length, 8);
+  endRecord.writeUInt16LE(files.length, 10);
+  endRecord.writeUInt32LE(centralDirectoryBuffer.byteLength, 12);
+  endRecord.writeUInt32LE(centralDirectoryOffset, 16);
+  endRecord.writeUInt16LE(0, 20);
+  chunks.push(endRecord);
+  return Buffer.concat(chunks, offset + endRecord.byteLength);
+}
+
+function dosDateTime(date: Date): { date: number; time: number } {
+  const year = Math.max(date.getFullYear(), 1980);
+  return {
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+  };
+}
+
+const CRC32_TABLE = createCrc32Table();
+
+function createCrc32Table(): Uint32Array {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 async function resolveManifestAgents(workspaceRoot: string, manifest: RuntimeManifest): Promise<ManifestAgentRuntime[]> {

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-API local de desenvolvimento para listar, ler, salvar, validar com diagnósticos estruturados, importar, exportar e gerar flows versionáveis, incluindo prompts, schemas, catálogo LLM, bundles por manifesto e sandboxes locais de runtime gerado. No MVP, a fonte de verdade continua sendo o filesystem do workspace.
+API local de desenvolvimento para listar, ler, salvar, validar com diagnósticos estruturados, importar, exportar e gerar flows versionáveis, incluindo prompts, schemas, catálogo LLM, artefatos gerados, bundles por manifesto e sandboxes locais de runtime gerado. No MVP, a fonte de verdade continua sendo o filesystem do workspace.
 
 ---
 
@@ -31,6 +31,7 @@ builder-api/
 | Alterar import/export de workspace de flow | `src/workspace.ts` e `src/server.ts` | `src/server.test.ts` |
 | Alterar leitura/salvamento de prompts e schemas | `src/workspace.ts` | `src/server.ts` |
 | Alterar geração pelo builder | `src/workspace.ts` | `../../packages/codegen-langgraph/src/index.ts` |
+| Alterar listagem, preview ou zip de artefatos gerados | `src/workspace.ts` e `src/server.ts` | `src/server.test.ts` |
 | Alterar manifesto de runtime | `src/workspace.ts` e `src/server.ts` | `../../runtime.manifest.json` |
 | Alterar sandbox local, status, logs, portas e listagem de runtimes | `src/sandbox.ts` | `src/server.ts` |
 

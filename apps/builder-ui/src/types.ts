@@ -181,6 +181,25 @@ export interface RuntimeManifestGenerateResult {
   agents: RuntimeManifestAgent[];
 }
 
+export interface GeneratedArtifactFileSummary {
+  path: string;
+  sizeBytes: number;
+}
+
+export interface GeneratedArtifactListing {
+  outDir: string;
+  files: GeneratedArtifactFileSummary[];
+  totalSizeBytes: number;
+}
+
+export interface GeneratedArtifactFileContent {
+  outDir: string;
+  path: string;
+  content: string;
+  sizeBytes: number;
+  truncated: boolean;
+}
+
 export interface FlowAssetContent {
   id: string;
   path: string;
