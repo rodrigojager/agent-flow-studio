@@ -3,6 +3,8 @@ import fastify, { type FastifyInstance } from "fastify";
 import { agentFlowJsonSchema, runtimeManifestJsonSchema } from "@agent-flow-builder/flow-spec";
 import { SandboxManager } from "./sandbox.ts";
 import {
+  exportFlowWorkspace,
+  importFlowWorkspace,
   generateRuntimeManifest,
   generateRuntime,
   listFlows,
@@ -38,6 +40,11 @@ interface SchemaParams extends FlowParams {
 
 interface GenerateBody {
   outDir?: string;
+}
+
+interface ImportFlowWorkspaceBody {
+  workspace?: unknown;
+  overwrite?: boolean;
 }
 
 interface AssetBody {
@@ -123,6 +130,27 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     return {
       path: loaded.relativePath,
       flow: loaded.flow,
+    };
+  });
+
+  app.get<{ Params: FlowParams }>("/flows/:flowId/export", async (request) => {
+    return exportFlowWorkspace(workspaceRoot, request.params.flowId);
+  });
+
+  app.post<{ Body: ImportFlowWorkspaceBody }>("/flows/import", async (request) => {
+    const body = request.body ?? {};
+    const payload =
+      body && typeof body === "object" && "workspace" in body ? (body as ImportFlowWorkspaceBody).workspace : body;
+    if (body && typeof body === "object" && "overwrite" in body && typeof body.overwrite !== "boolean") {
+      throw new WorkspaceError("overwrite deve ser boolean quando informado.", 400);
+    }
+    const result = await importFlowWorkspace(workspaceRoot, payload, { overwrite: body.overwrite });
+    return {
+      status: "ok",
+      path: result.flowPath,
+      flow: result.flow,
+      prompts: result.prompts,
+      schemas: result.schemas,
     };
   });
 

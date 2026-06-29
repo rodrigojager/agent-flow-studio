@@ -146,6 +146,26 @@ export interface FlowAssetContent {
   content: string;
 }
 
+export interface FlowWorkspaceExport {
+  format: "agent-flow-builder.flow-workspace.v1";
+  exportedAt: string;
+  source: {
+    flowId: string;
+    flowPath: string;
+  };
+  flow: AgentFlow;
+  prompts: FlowAssetContent[];
+  schemas: FlowAssetContent[];
+}
+
+export interface FlowWorkspaceImportResult {
+  status: "ok";
+  path: string;
+  flow: AgentFlow;
+  prompts: number;
+  schemas: number;
+}
+
 export interface SandboxStatus {
   flowId: string;
   running: boolean;

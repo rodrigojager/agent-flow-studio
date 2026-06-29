@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   generateLangGraphRuntime,
@@ -58,6 +58,31 @@ export interface FlowAssetContent {
   path: string;
   content: string;
 }
+
+export interface FlowWorkspaceExport {
+  format: typeof FLOW_WORKSPACE_EXPORT_FORMAT;
+  exportedAt: string;
+  source: {
+    flowId: string;
+    flowPath: string;
+  };
+  flow: AgentFlow;
+  prompts: FlowAssetContent[];
+  schemas: FlowAssetContent[];
+}
+
+export interface ImportFlowWorkspaceOptions {
+  overwrite?: boolean;
+}
+
+export interface ImportFlowWorkspaceResult {
+  flow: AgentFlow;
+  flowPath: string;
+  prompts: number;
+  schemas: number;
+}
+
+const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
 
 export class WorkspaceError extends Error {
   constructor(
@@ -327,6 +352,95 @@ export async function saveSchemaAsset(
   };
 }
 
+export async function exportFlowWorkspace(workspaceRoot: string, flowId: string): Promise<FlowWorkspaceExport> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const prompts = await Promise.all(
+    loaded.flow.prompts.map(async (prompt) => ({
+      id: prompt.id,
+      path: prompt.path,
+      content: await readReferencedAsset(loaded.flowRoot, prompt.path, `prompt ${prompt.id}`),
+    })),
+  );
+  const schemas = await Promise.all(
+    loaded.flow.schemas.map(async (schema) => ({
+      id: schema.id,
+      path: schema.path,
+      content: await readReferencedAsset(loaded.flowRoot, schema.path, `schema ${schema.id}`),
+    })),
+  );
+
+  return {
+    format: FLOW_WORKSPACE_EXPORT_FORMAT,
+    exportedAt: new Date().toISOString(),
+    source: {
+      flowId: loaded.flow.id,
+      flowPath: loaded.relativePath,
+    },
+    flow: loaded.flow,
+    prompts,
+    schemas,
+  };
+}
+
+export async function importFlowWorkspace(
+  workspaceRoot: string,
+  value: unknown,
+  options: ImportFlowWorkspaceOptions = {},
+): Promise<ImportFlowWorkspaceResult> {
+  const workspace = parseFlowWorkspaceExport(value);
+  const flow = workspace.flow;
+  assertImportableFlowId(flow.id);
+  const promptAssets = assetsForRefs(flow.prompts, workspace.prompts, "prompt");
+  const schemaAssets = assetsForRefs(flow.schemas, workspace.schemas, "schema");
+  for (const schema of schemaAssets) {
+    try {
+      JSON.parse(schema.content);
+    } catch (error) {
+      throw new WorkspaceError(`Schema ${schema.id} importado não é JSON válido.`, 422, error);
+    }
+  }
+  assertNoPathContentConflicts([...promptAssets, ...schemaAssets]);
+  assertNoReservedAssetPaths([...promptAssets, ...schemaAssets]);
+
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const flowsDir = safeResolve(root, "flows");
+  await mkdir(flowsDir, { recursive: true });
+  const targetDir = safeResolve(root, `flows/${flow.id}`);
+  const flowPath = `${toWorkspaceRelative(root, targetDir)}/agent.flow.json`;
+  const targetExists = await pathExists(targetDir);
+  if (targetExists && !options.overwrite) {
+    throw new WorkspaceError(`Flow já existe: ${flow.id}`, 409);
+  }
+
+  const tempDir = safeResolve(root, `flows/.import-${flow.id}-${Date.now()}`);
+  await rm(tempDir, { recursive: true, force: true });
+  await mkdir(tempDir, { recursive: true });
+
+  try {
+    await writeFile(path.join(tempDir, "agent.flow.json"), `${JSON.stringify(flow, null, 2)}\n`, "utf-8");
+    for (const asset of promptAssets) {
+      await writeImportedAsset(tempDir, asset.path, asset.content);
+    }
+    for (const asset of schemaAssets) {
+      await writeImportedAsset(tempDir, asset.path, `${JSON.stringify(JSON.parse(asset.content), null, 2)}\n`);
+    }
+    if (targetExists) {
+      await rm(targetDir, { recursive: true, force: true });
+    }
+    await rename(tempDir, targetDir);
+  } catch (error) {
+    await rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+
+  return {
+    flow,
+    flowPath,
+    prompts: promptAssets.length,
+    schemas: schemaAssets.length,
+  };
+}
+
 function safeResolveFlowAsset(flowRoot: string, assetPath: string): string {
   const root = path.resolve(flowRoot);
   const resolved = path.resolve(root, assetPath);
@@ -335,6 +449,127 @@ function safeResolveFlowAsset(flowRoot: string, assetPath: string): string {
     throw new WorkspaceError(`Asset fora do diretório do flow: ${assetPath}`, 400);
   }
   return resolved;
+}
+
+async function readReferencedAsset(flowRoot: string, assetPath: string, label: string): Promise<string> {
+  try {
+    return await readFile(safeResolveFlowAsset(flowRoot, assetPath), "utf-8");
+  } catch (error) {
+    if (error instanceof WorkspaceError) {
+      throw error;
+    }
+    throw new WorkspaceError(`Asset referenciado não encontrado: ${label} (${assetPath}).`, 422, error);
+  }
+}
+
+async function writeImportedAsset(flowRoot: string, assetPath: string, content: string): Promise<void> {
+  const absolutePath = safeResolveFlowAsset(flowRoot, assetPath);
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, content, "utf-8");
+}
+
+async function pathExists(absolutePath: string): Promise<boolean> {
+  try {
+    await access(absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseFlowWorkspaceExport(value: unknown): FlowWorkspaceExport {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Pacote de flow deve ser um objeto JSON.", 422);
+  }
+  if (value.format !== FLOW_WORKSPACE_EXPORT_FORMAT) {
+    throw new WorkspaceError(`Formato de pacote inválido: ${String(value.format)}`, 422);
+  }
+  const flow = parseAgentFlow(value.flow);
+  const prompts = parseAssetList(value.prompts, "prompts");
+  const schemas = parseAssetList(value.schemas, "schemas");
+  return {
+    format: FLOW_WORKSPACE_EXPORT_FORMAT,
+    exportedAt: typeof value.exportedAt === "string" ? value.exportedAt : new Date().toISOString(),
+    source: isRecord(value.source) && typeof value.source.flowId === "string" && typeof value.source.flowPath === "string"
+      ? { flowId: value.source.flowId, flowPath: value.source.flowPath }
+      : { flowId: flow.id, flowPath: `flows/${flow.id}/agent.flow.json` },
+    flow,
+    prompts,
+    schemas,
+  };
+}
+
+function parseAssetList(value: unknown, field: string): FlowAssetContent[] {
+  if (!Array.isArray(value)) {
+    throw new WorkspaceError(`${field} deve ser uma lista.`, 422);
+  }
+  return value.map((item, index) => {
+    if (!isRecord(item) || typeof item.id !== "string" || typeof item.path !== "string" || typeof item.content !== "string") {
+      throw new WorkspaceError(`${field}[${index}] deve conter id, path e content como strings.`, 422);
+    }
+    return {
+      id: item.id,
+      path: item.path,
+      content: item.content,
+    };
+  });
+}
+
+function assetsForRefs<T extends { id: string; path: string }>(
+  refs: T[],
+  assets: FlowAssetContent[],
+  kind: string,
+): FlowAssetContent[] {
+  const byId = new Map<string, FlowAssetContent>();
+  for (const asset of assets) {
+    if (byId.has(asset.id)) {
+      throw new WorkspaceError(`Asset duplicado no pacote: ${kind} ${asset.id}.`, 422);
+    }
+    byId.set(asset.id, asset);
+  }
+  return refs.map((ref) => {
+    const asset = byId.get(ref.id);
+    if (!asset) {
+      throw new WorkspaceError(`Pacote não contém ${kind} referenciado: ${ref.id}.`, 422);
+    }
+    if (asset.path !== ref.path) {
+      throw new WorkspaceError(
+        `Path do ${kind} ${ref.id} diverge do flow: pacote=${asset.path}, flow=${ref.path}.`,
+        422,
+      );
+    }
+    return asset;
+  });
+}
+
+function assertNoPathContentConflicts(assets: FlowAssetContent[]): void {
+  const byPath = new Map<string, string>();
+  for (const asset of assets) {
+    const existing = byPath.get(asset.path);
+    if (existing !== undefined && existing !== asset.content) {
+      throw new WorkspaceError(`Assets importados usam o mesmo path com conteúdos diferentes: ${asset.path}.`, 422);
+    }
+    byPath.set(asset.path, asset.content);
+  }
+}
+
+function assertNoReservedAssetPaths(assets: FlowAssetContent[]): void {
+  for (const asset of assets) {
+    const normalized = asset.path.replaceAll("\\", "/").replace(/^\.\/+/, "");
+    if (normalized === "agent.flow.json") {
+      throw new WorkspaceError("Assets importados não podem sobrescrever agent.flow.json.", 422);
+    }
+  }
+}
+
+function assertImportableFlowId(flowId: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(flowId)) {
+    throw new WorkspaceError("ID de flow importado deve usar letras, números, _ ou -.", 422);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function resolveManifestAgents(workspaceRoot: string, manifest: RuntimeManifest): Promise<ManifestAgentRuntime[]> {

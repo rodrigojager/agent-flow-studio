@@ -2,6 +2,8 @@ import type {
   EventView,
   FlowAssetContent,
   FlowSummary,
+  FlowWorkspaceExport,
+  FlowWorkspaceImportResult,
   GenerateResult,
   AgentFlow,
   LoadedFlow,
@@ -35,6 +37,21 @@ export async function saveFlow(flowId: string, flow: AgentFlow): Promise<LoadedF
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(flow),
+  });
+}
+
+export async function exportFlowWorkspace(flowId: string): Promise<FlowWorkspaceExport> {
+  return request<FlowWorkspaceExport>(`/flows/${encodeURIComponent(flowId)}/export`);
+}
+
+export async function importFlowWorkspace(
+  workspace: FlowWorkspaceExport,
+  overwrite: boolean,
+): Promise<FlowWorkspaceImportResult> {
+  return request<FlowWorkspaceImportResult>("/flows/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspace, overwrite }),
   });
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   Background,
   Controls,
@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   CircleDot,
   Code2,
+  Download,
   FileJson,
   GitBranch,
   Play,
@@ -31,14 +32,17 @@ import {
   ShieldCheck,
   Sparkles,
   Terminal,
+  Upload,
 } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 import {
   builderApiUrl,
   createRuntimeSession,
+  exportFlowWorkspace,
   finishRuntimeSession,
   generateFlow,
   generateRuntimeManifest,
+  importFlowWorkspace,
   listFlows,
   listSandboxes,
   loadFlow,
@@ -64,6 +68,7 @@ import type {
   FlowEdge,
   FlowNode,
   FlowSummary,
+  FlowWorkspaceExport,
   GenerateResult,
   LoadedFlow,
   LoadedRuntimeManifest,
@@ -127,6 +132,7 @@ export default function App() {
     kind: "idle",
     message: "Builder API aguardando ação.",
   });
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const refreshFlows = useCallback(async (silent = false) => {
     if (!silent) {
@@ -607,6 +613,76 @@ export default function App() {
     }
   }
 
+  async function saveCurrentWorkspaceIfNeeded() {
+    if (!selectedFlowId) {
+      return;
+    }
+    if (isDirty && draftFlow) {
+      const saved = await saveFlow(selectedFlowId, draftFlow);
+      setLoadedFlow(saved);
+      setDraftFlow(saved.flow);
+      setIsDirty(false);
+      await refreshFlows(true);
+    }
+    await saveDirtyAssets();
+  }
+
+  async function handleExportFlow() {
+    if (!selectedFlowId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Exportando ${selectedFlowId}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const workspace = await exportFlowWorkspace(selectedFlowId);
+      downloadJsonFile(`${workspace.flow.id}-flow-workspace.json`, workspace);
+      setStatus({
+        kind: "ok",
+        message: `Workspace ${workspace.flow.id} exportado com ${workspace.prompts.length} prompt(s) e ${workspace.schemas.length} schema(s).`,
+      });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  function handleImportClick() {
+    importInputRef.current?.click();
+  }
+
+  async function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Importando ${file.name}.` });
+    try {
+      if ((isDirty || promptDirty || schemaDirty) && !window.confirm("Há alterações locais não salvas. Continuar importação?")) {
+        setStatus({ kind: "idle", message: "Importação cancelada." });
+        return;
+      }
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!isFlowWorkspaceExport(parsed)) {
+        throw new Error("Arquivo não é um workspace de flow válido.");
+      }
+      const exists = flows.some((flow) => flow.id === parsed.flow.id);
+      const overwrite = exists ? window.confirm(`Flow ${parsed.flow.id} já existe. Substituir?`) : false;
+      if (exists && !overwrite) {
+        setStatus({ kind: "idle", message: "Importação cancelada." });
+        return;
+      }
+      const imported = await importFlowWorkspace(parsed, overwrite);
+      await refreshFlows(true);
+      setSelectedFlowId(imported.flow.id);
+      setStatus({
+        kind: "ok",
+        message: `Workspace ${imported.flow.id} importado em ${imported.path}.`,
+      });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleSavePrompt() {
     if (!selectedFlowId || !selectedPromptId) {
       return;
@@ -829,6 +905,13 @@ export default function App() {
         </div>
 
         <div className="toolbar">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="visually-hidden"
+            onChange={handleImportFile}
+          />
           <label className="flow-select">
             <span>Flow</span>
             <select value={selectedFlowId} onChange={(event) => setSelectedFlowId(event.target.value)}>
@@ -841,6 +924,19 @@ export default function App() {
           </label>
           <button type="button" className="icon-button" onClick={() => refreshFlows()} title="Atualizar flows">
             <RefreshCw size={17} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={handleExportFlow}
+            disabled={!selectedFlowId}
+            title="Exportar workspace"
+            aria-label="Exportar workspace"
+          >
+            <Download size={17} aria-hidden="true" />
+          </button>
+          <button type="button" className="icon-button" onClick={handleImportClick} title="Importar workspace" aria-label="Importar workspace">
+            <Upload size={17} aria-hidden="true" />
           </button>
           <button type="button" className="command-button" onClick={handleValidate} disabled={!selectedFlowId}>
             <CheckCircle2 size={17} aria-hidden="true" />
@@ -1785,6 +1881,31 @@ function parseSandboxPort(value: string): number | undefined {
     throw new Error("Porta do sandbox deve ser um inteiro entre 1024 e 65535.");
   }
   return port;
+}
+
+function isFlowWorkspaceExport(value: unknown): value is FlowWorkspaceExport {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as FlowWorkspaceExport;
+  return (
+    candidate.format === "agent-flow-builder.flow-workspace.v1" &&
+    Boolean(candidate.flow?.id) &&
+    Array.isArray(candidate.prompts) &&
+    Array.isArray(candidate.schemas)
+  );
+}
+
+function downloadJsonFile(fileName: string, value: unknown): void {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function errorMessage(error: unknown): string {

@@ -28,7 +28,9 @@
 - Builder UI inicial em `apps/builder-ui/` com canvas React Flow, lista de flows, inspector, preview JSON, edição básica de propriedades, salvamento do `agent.flow.json` e ações de validar/gerar via Builder API.
 - Builder API persiste flows versionáveis com `PUT /flows/{flowId}`, valida Flow Spec antes de gravar e bloqueia divergência de `id`.
 - Builder API lê e salva prompts Markdown e schemas JSON referenciados pelo flow, com validação de path dentro do diretório do flow e validação JSON para schemas.
+- Builder API exporta e importa pacotes JSON versionados de workspace de flow, contendo `agent.flow.json`, prompts e schemas referenciados, com proteção contra conflito e path traversal.
 - Builder UI possui aba `Arquivos` para editar prompts e schemas referenciados pelo flow antes de validar, gerar ou iniciar sandbox.
+- Builder UI permite exportar e importar workspace de flow pela toolbar, salvando alterações pendentes antes de exportar.
 - Builder UI permite criar, remover, mover, conectar e reconectar nós/arestas no canvas, com posições persistidas no `agent.flow.json`.
 - Flow Spec aceita `position` opcional em nós para preservar layout visual sem afetar o runtime gerado.
 - Codegen LangGraph monta o grafo gerado a partir dos nós e arestas do `agent.flow.json`, com handlers por tipo de nó e eventos baseados nos nós realmente executados.
@@ -69,7 +71,7 @@ Também foi validado localmente:
 ## Ainda não implementado
 
 - Codegen genérico para recursos avançados e execução real de todos os tipos futuros de nós.
-- Edição visual avançada de prompts/schemas, validação visual rica, import/export de workspace e ergonomia refinada do canvas.
+- Edição visual avançada de prompts/schemas, validação visual rica e ergonomia refinada do canvas.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Catálogo real de adapters além do OpenAI/OpenAI-compatible.
 - Safety Harness completo.

@@ -221,6 +221,58 @@ test("Builder API edits prompt and schema assets referenced by a flow", async (t
   assert.equal(escapedPrompt.json().error, "workspace_error");
 });
 
+test("Builder API exports and imports a flow workspace package", async (t) => {
+  const workspaceRoot = await createWorkspaceFixture();
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const app = buildApp({ workspaceRoot });
+  t.after(() => app.close());
+
+  const exported = await app.inject({ method: "GET", url: "/flows/reference-interview/export" });
+  assert.equal(exported.statusCode, 200);
+  assert.equal(exported.json().format, "agent-flow-builder.flow-workspace.v1");
+  assert.equal(exported.json().flow.id, "reference-interview");
+  assert.ok(exported.json().prompts.some((prompt: { id: string }) => prompt.id === "system"));
+  assert.ok(exported.json().schemas.some((schema: { id: string }) => schema.id === "session_state"));
+
+  const conflict = await app.inject({
+    method: "POST",
+    url: "/flows/import",
+    headers: { "content-type": "application/json" },
+    payload: { workspace: exported.json() },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error, "workspace_error");
+
+  const importedPackage = exported.json();
+  importedPackage.flow.id = "imported-reference";
+  importedPackage.flow.name = "Referência Importada";
+  importedPackage.flow.api.resourceName = "imported_sessions";
+  importedPackage.prompts = importedPackage.prompts.map((prompt: { id: string; content: string }) =>
+    prompt.id === "system" ? { ...prompt, content: "# Prompt importado\n\nVocê é um agente importado.\n" } : prompt,
+  );
+
+  const imported = await app.inject({
+    method: "POST",
+    url: "/flows/import",
+    headers: { "content-type": "application/json" },
+    payload: { workspace: importedPackage },
+  });
+  assert.equal(imported.statusCode, 200);
+  assert.equal(imported.json().status, "ok");
+  assert.equal(imported.json().flow.id, "imported-reference");
+  assert.equal(imported.json().prompts, importedPackage.prompts.length);
+  assert.equal(imported.json().schemas, importedPackage.schemas.length);
+  await access(path.join(workspaceRoot, "flows", "imported-reference", "agent.flow.json"));
+
+  const flows = await app.inject({ method: "GET", url: "/flows" });
+  assert.ok(flows.json().flows.some((flow: { id: string }) => flow.id === "imported-reference"));
+
+  const prompt = await app.inject({ method: "GET", url: "/flows/imported-reference/prompts/system" });
+  assert.equal(prompt.statusCode, 200);
+  assert.match(prompt.json().content, /agente importado/);
+});
+
 test("Builder API exposes sandbox status and validates runtime directories", async (t) => {
   const workspaceRoot = await createWorkspaceFixture();
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
