@@ -76,14 +76,36 @@ export interface LoadedFlow {
   flow: AgentFlow;
 }
 
+export type FlowDiagnosticSeverity = "error" | "warning" | "info";
+
+export interface FlowDiagnostic {
+  severity: FlowDiagnosticSeverity;
+  code: string;
+  message: string;
+  path?: string;
+  nodeId?: string;
+  edgeIndex?: number;
+  assetId?: string;
+}
+
 export interface ValidationResult {
-  status: "ok";
+  status: "ok" | "error";
   id: string;
   name: string;
   version: string;
   nodes: number;
   edges: number;
   contract: string;
+  diagnostics: FlowDiagnostic[];
+  summary: {
+    nodes: number;
+    edges: number;
+    prompts: number;
+    schemas: number;
+    errors: number;
+    warnings: number;
+    infos: number;
+  };
 }
 
 export interface GenerateResult {

@@ -351,7 +351,7 @@ button:disabled {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 12px;
   border-bottom: 1px solid #d7ddd8;
   gap: 6px;
@@ -515,6 +515,12 @@ button:disabled {
   background: #eef8f3;
 }
 
+.runtime-pill.error {
+  border-color: #9b2c2c;
+  color: #9b2c2c;
+  background: #fff7f7;
+}
+
 .sandbox-actions {
   display: flex;
   flex-wrap: wrap;
@@ -563,6 +569,56 @@ button:disabled {
 
 .runtime-list.compact-list {
   max-height: 180px;
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.diagnostic-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #e1e6e2;
+  border-radius: 7px;
+  color: #24302e;
+  text-align: left;
+  background: #fbfcfa;
+}
+
+.diagnostic-item.error {
+  border-color: #e0aaaa;
+  background: #fff7f7;
+}
+
+.diagnostic-item.warning {
+  border-color: #d4c18c;
+  background: #fffaf0;
+}
+
+.diagnostic-item strong,
+.diagnostic-item span,
+.diagnostic-item small {
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-item strong {
+  font-size: 12px;
+}
+
+.diagnostic-item span {
+  color: #43504d;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.diagnostic-item small {
+  color: #63736f;
+  font-size: 11px;
 }
 
 .runtime-item {

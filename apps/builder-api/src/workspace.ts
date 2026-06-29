@@ -5,7 +5,14 @@ import {
   generateManifestRuntime as generateManifestRuntimeBundle,
   type ManifestAgentRuntime,
 } from "@agent-flow-builder/codegen-langgraph";
-import { type AgentFlow, parseAgentFlow, parseRuntimeManifest, type RuntimeManifest } from "@agent-flow-builder/flow-spec";
+import {
+  analyzeAgentFlow,
+  type AgentFlow,
+  type FlowDiagnostic,
+  parseAgentFlow,
+  parseRuntimeManifest,
+  type RuntimeManifest,
+} from "@agent-flow-builder/flow-spec";
 
 export interface FlowSummary {
   id: string;
@@ -80,6 +87,26 @@ export interface ImportFlowWorkspaceResult {
   flowPath: string;
   prompts: number;
   schemas: number;
+}
+
+export interface FlowValidationResult {
+  status: "ok" | "error";
+  id: string;
+  name: string;
+  version: string;
+  nodes: number;
+  edges: number;
+  contract: string;
+  diagnostics: FlowDiagnostic[];
+  summary: {
+    nodes: number;
+    edges: number;
+    prompts: number;
+    schemas: number;
+    errors: number;
+    warnings: number;
+    infos: number;
+  };
 }
 
 const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
@@ -190,16 +217,33 @@ export async function loadFlowByPath(workspaceRoot: string, relativePath: string
   }
 }
 
-export async function validateFlow(workspaceRoot: string, flowId: string) {
+export async function validateFlow(workspaceRoot: string, flowId: string): Promise<FlowValidationResult> {
   const loaded = await loadFlowById(workspaceRoot, flowId);
+  const diagnostics = [
+    ...analyzeAgentFlow(loaded.flow).diagnostics,
+    ...(await validateReferencedAssets(loaded)),
+  ];
+  const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
+  const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
+  const infos = diagnostics.filter((diagnostic) => diagnostic.severity === "info").length;
   return {
-    status: "ok" as const,
+    status: errors ? "error" : "ok",
     id: loaded.flow.id,
     name: loaded.flow.name,
     version: loaded.flow.version,
     nodes: loaded.flow.nodes.length,
     edges: loaded.flow.edges.length,
     contract: loaded.flow.api.contract,
+    diagnostics,
+    summary: {
+      nodes: loaded.flow.nodes.length,
+      edges: loaded.flow.edges.length,
+      prompts: loaded.flow.prompts.length,
+      schemas: loaded.flow.schemas.length,
+      errors,
+      warnings,
+      infos,
+    },
   };
 }
 
@@ -349,6 +393,88 @@ export async function saveSchemaAsset(
     id: schema.id,
     path: schema.path,
     content: formatted,
+  };
+}
+
+async function validateReferencedAssets(loaded: LoadedFlow): Promise<FlowDiagnostic[]> {
+  const diagnostics: FlowDiagnostic[] = [];
+  const promptBasenames = new Map<string, string>();
+  const schemaBasenames = new Map<string, string>();
+
+  for (const prompt of loaded.flow.prompts) {
+    const basename = path.basename(prompt.path);
+    const existing = promptBasenames.get(basename);
+    if (existing && existing !== prompt.id) {
+      diagnostics.push({
+        severity: "warning",
+        code: "codegen_prompt_basename_conflict",
+        message: `Prompts ${existing} e ${prompt.id} usam o mesmo nome de arquivo ${basename} no runtime gerado.`,
+        path: `prompts.${prompt.id}.path`,
+        assetId: prompt.id,
+      });
+    }
+    promptBasenames.set(basename, prompt.id);
+
+    try {
+      const content = await readFile(safeResolveFlowAsset(loaded.flowRoot, prompt.path), "utf-8");
+      if (!content.trim()) {
+        diagnostics.push({
+          severity: "warning",
+          code: "empty_prompt_file",
+          message: `Prompt ${prompt.id} está vazio.`,
+          path: `prompts.${prompt.id}.path`,
+          assetId: prompt.id,
+        });
+      }
+    } catch (error) {
+      diagnostics.push(assetReadDiagnostic("missing_prompt_file", prompt.id, prompt.path, error));
+    }
+  }
+
+  for (const schema of loaded.flow.schemas) {
+    const basename = path.basename(schema.path);
+    const existing = schemaBasenames.get(basename);
+    if (existing && existing !== schema.id) {
+      diagnostics.push({
+        severity: "warning",
+        code: "codegen_schema_basename_conflict",
+        message: `Schemas ${existing} e ${schema.id} usam o mesmo nome de arquivo ${basename} no runtime gerado.`,
+        path: `schemas.${schema.id}.path`,
+        assetId: schema.id,
+      });
+    }
+    schemaBasenames.set(basename, schema.id);
+
+    let content: string;
+    try {
+      content = await readFile(safeResolveFlowAsset(loaded.flowRoot, schema.path), "utf-8");
+    } catch (error) {
+      diagnostics.push(assetReadDiagnostic("missing_schema_file", schema.id, schema.path, error));
+      continue;
+    }
+    try {
+      JSON.parse(content);
+    } catch (error) {
+      diagnostics.push(assetReadDiagnostic("invalid_schema_file", schema.id, schema.path, error));
+    }
+  }
+
+  return diagnostics;
+}
+
+function assetReadDiagnostic(code: string, assetId: string, assetPath: string, error: unknown): FlowDiagnostic {
+  const message =
+    error instanceof WorkspaceError
+      ? error.message
+      : code === "invalid_schema_file"
+        ? `Schema ${assetId} não é um JSON válido em ${assetPath}.`
+        : `Asset ${assetId} não foi encontrado em ${assetPath}.`;
+  return {
+    severity: "error",
+    code,
+    message,
+    path: assetPath,
+    assetId,
   };
 }
 

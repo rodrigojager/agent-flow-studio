@@ -66,6 +66,7 @@ import type {
   AgentFlow,
   EventView,
   FlowEdge,
+  FlowDiagnostic,
   FlowNode,
   FlowSummary,
   FlowWorkspaceExport,
@@ -81,7 +82,7 @@ import type {
 } from "./types.ts";
 import "./styles.css";
 
-type InspectorTab = "properties" | "files" | "json" | "runtime" | "sandbox";
+type InspectorTab = "properties" | "files" | "validation" | "json" | "runtime" | "sandbox";
 type StatusKind = "idle" | "ok" | "error" | "busy";
 
 interface StatusState {
@@ -119,6 +120,7 @@ export default function App() {
   const [runtimeEventsData, setRuntimeEventsData] = useState<EventView[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
+  const [flowValidation, setFlowValidation] = useState<ValidationResult | null>(null);
   const [manifestValidation, setManifestValidation] = useState<RuntimeManifestValidationResult | null>(null);
   const [manifestGeneration, setManifestGeneration] = useState<RuntimeManifestGenerateResult | null>(null);
   const [manifestOutDir, setManifestOutDir] = useState("");
@@ -234,6 +236,7 @@ export default function App() {
         setSchemaContent("");
         setPromptDirty(false);
         setSchemaDirty(false);
+        setFlowValidation(null);
         setRuntimeSession(null);
         setTranscript([]);
         setRuntimeEventsData([]);
@@ -249,6 +252,7 @@ export default function App() {
         setIsDirty(false);
         setSelectedNodeId("");
         setSelectedEdgeId("");
+        setFlowValidation(null);
         setStatus({ kind: "error", message: errorMessage(error) });
       }
     }
@@ -368,6 +372,7 @@ export default function App() {
       const next = mutator(current);
       if (next !== current) {
         setIsDirty(true);
+        setFlowValidation(null);
       }
       return next;
     });
@@ -590,6 +595,7 @@ export default function App() {
       setLoadedFlow(saved);
       setDraftFlow(saved.flow);
       setIsDirty(false);
+      setFlowValidation(null);
       await refreshFlows(true);
       setStatus({ kind: "ok", message: `${saved.flow.name} salvo em ${saved.path}.` });
     } catch (error) {
@@ -605,11 +611,13 @@ export default function App() {
       const savedPrompt = await savePromptAsset(selectedFlowId, selectedPromptId, promptContent);
       setPromptContent(savedPrompt.content);
       setPromptDirty(false);
+      setFlowValidation(null);
     }
     if (schemaDirty && selectedSchemaId) {
       const savedSchema = await saveSchemaAsset(selectedFlowId, selectedSchemaId, schemaContent);
       setSchemaContent(savedSchema.content);
       setSchemaDirty(false);
+      setFlowValidation(null);
     }
   }
 
@@ -692,6 +700,7 @@ export default function App() {
       const saved = await savePromptAsset(selectedFlowId, selectedPromptId, promptContent);
       setPromptContent(saved.content);
       setPromptDirty(false);
+      setFlowValidation(null);
       setStatus({ kind: "ok", message: `Prompt salvo em ${saved.path}.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -707,6 +716,7 @@ export default function App() {
       const saved = await saveSchemaAsset(selectedFlowId, selectedSchemaId, schemaContent);
       setSchemaContent(saved.content);
       setSchemaDirty(false);
+      setFlowValidation(null);
       setStatus({ kind: "ok", message: `Schema salvo em ${saved.path}.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -719,10 +729,39 @@ export default function App() {
     }
     setStatus({ kind: "busy", message: `Validando ${selectedFlowId}.` });
     try {
+      await saveCurrentWorkspaceIfNeeded();
       const result = await validateFlow(selectedFlowId);
-      setStatus({ kind: "ok", message: validationMessage(result) });
+      setFlowValidation(result);
+      setInspectorTab("validation");
+      setStatus({ kind: result.status === "ok" ? "ok" : "error", message: validationMessage(result) });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  function handleSelectDiagnostic(diagnostic: FlowDiagnostic) {
+    if (diagnostic.nodeId) {
+      setSelectedNodeId(diagnostic.nodeId);
+      setSelectedEdgeId("");
+      setInspectorTab("properties");
+      return;
+    }
+    if (draftFlow && diagnostic.edgeIndex !== undefined && draftFlow.edges[diagnostic.edgeIndex]) {
+      setSelectedNodeId("");
+      setSelectedEdgeId(edgeId(draftFlow.edges[diagnostic.edgeIndex], diagnostic.edgeIndex));
+      setInspectorTab("properties");
+      return;
+    }
+    if (draftFlow && diagnostic.assetId) {
+      if (draftFlow.prompts.some((prompt) => prompt.id === diagnostic.assetId)) {
+        setSelectedPromptId(diagnostic.assetId);
+        setInspectorTab("files");
+        return;
+      }
+      if (draftFlow.schemas.some((schema) => schema.id === diagnostic.assetId)) {
+        setSelectedSchemaId(diagnostic.assetId);
+        setInspectorTab("files");
+      }
     }
   }
 
@@ -737,6 +776,7 @@ export default function App() {
         setLoadedFlow(saved);
         setDraftFlow(saved.flow);
         setIsDirty(false);
+        setFlowValidation(null);
       }
       await saveDirtyAssets();
       const result = await generateFlow(selectedFlowId);
@@ -1068,6 +1108,13 @@ export default function App() {
             >
               Arquivos
             </button>
+            <button
+              type="button"
+              className={inspectorTab === "validation" ? "active" : ""}
+              onClick={() => setInspectorTab("validation")}
+            >
+              Validação
+            </button>
             <button type="button" className={inspectorTab === "json" ? "active" : ""} onClick={() => setInspectorTab("json")}>
               JSON
             </button>
@@ -1122,13 +1169,22 @@ export default function App() {
               onPromptChange={(value) => {
                 setPromptContent(value);
                 setPromptDirty(true);
+                setFlowValidation(null);
               }}
               onSchemaChange={(value) => {
                 setSchemaContent(value);
                 setSchemaDirty(true);
+                setFlowValidation(null);
               }}
               onPromptSave={handleSavePrompt}
               onSchemaSave={handleSaveSchema}
+            />
+          ) : inspectorTab === "validation" ? (
+            <ValidationPanel
+              flow={draftFlow}
+              validation={flowValidation}
+              onValidate={handleValidate}
+              onSelectDiagnostic={handleSelectDiagnostic}
             />
           ) : inspectorTab === "json" ? (
             <pre className="json-preview">{draftFlow ? JSON.stringify(draftFlow, null, 2) : "{}"}</pre>
@@ -1449,6 +1505,93 @@ function AssetsPanel({
           Salvar schema
         </button>
       </section>
+    </div>
+  );
+}
+
+function ValidationPanel({
+  flow,
+  validation,
+  onValidate,
+  onSelectDiagnostic,
+}: {
+  flow: AgentFlow | null;
+  validation: ValidationResult | null;
+  onValidate: () => void;
+  onSelectDiagnostic: (diagnostic: FlowDiagnostic) => void;
+}) {
+  if (!flow) {
+    return (
+      <div className="empty-state">
+        <AlertCircle size={18} aria-hidden="true" />
+        <span>Nenhum flow carregado.</span>
+      </div>
+    );
+  }
+
+  const diagnostics = validation?.diagnostics ?? [];
+  return (
+    <div className="runtime-manifest-body">
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>{flow.name}</strong>
+          <span className={validation?.status === "error" ? "runtime-pill error" : "runtime-pill running"}>
+            {validation?.status ?? "pendente"}
+          </span>
+        </div>
+        <dl className="kv-list inspector-list">
+          <Field label="Flow" value={flow.id} />
+          <Field label="Nós" value={String(validation?.summary.nodes ?? flow.nodes.length)} />
+          <Field label="Arestas" value={String(validation?.summary.edges ?? flow.edges.length)} />
+          <Field label="Prompts" value={String(validation?.summary.prompts ?? flow.prompts.length)} />
+          <Field label="Schemas" value={String(validation?.summary.schemas ?? flow.schemas.length)} />
+        </dl>
+        <button type="button" className="command-button primary full-width" onClick={onValidate}>
+          <CheckCircle2 size={16} aria-hidden="true" />
+          Validar flow
+        </button>
+      </section>
+
+      {validation ? (
+        <section className="sandbox-section">
+          <div className="sandbox-header">
+            <strong>Diagnósticos</strong>
+            <span>
+              {validation.summary.errors} erro(s), {validation.summary.warnings} aviso(s)
+            </span>
+          </div>
+          {diagnostics.length ? (
+            <div className="diagnostic-list">
+              {diagnostics.map((diagnostic, index) => (
+                <button
+                  type="button"
+                  className={`diagnostic-item ${diagnostic.severity}`}
+                  key={`${diagnostic.code}-${index}`}
+                  onClick={() => onSelectDiagnostic(diagnostic)}
+                >
+                  <strong>
+                    {diagnostic.severity} · {diagnostic.code}
+                  </strong>
+                  <span>{diagnostic.message}</span>
+                  {diagnostic.path ? <small>{diagnostic.path}</small> : null}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="runtime-item">
+              <strong>Nenhum diagnóstico</strong>
+              <span>O flow passou nas validações estruturais e de assets.</span>
+            </div>
+          )}
+        </section>
+      ) : (
+        <section className="sandbox-section">
+          <div className="runtime-item">
+            <strong>Validação pendente</strong>
+            <span>Sem resultado de validação para este flow.</span>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -1856,6 +1999,9 @@ function edgeIndexFromId(id: string): number {
 }
 
 function validationMessage(result: ValidationResult): string {
+  if (result.summary.errors || result.summary.warnings) {
+    return `${result.name}: ${result.summary.errors} erro(s), ${result.summary.warnings} aviso(s).`;
+  }
   return `${result.name}: ${result.nodes} nós, ${result.edges} arestas, contrato ${result.contract}.`;
 }
 

@@ -43,6 +43,8 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(validated.statusCode, 200);
   assert.equal(validated.json().status, "ok");
   assert.equal(validated.json().nodes, 6);
+  assert.equal(validated.json().summary.errors, 0);
+  assert.equal(validated.json().diagnostics.length, 0);
 
   const generated = await app.inject({
     method: "POST",
@@ -219,6 +221,11 @@ test("Builder API edits prompt and schema assets referenced by a flow", async (t
   const escapedPrompt = await app.inject({ method: "GET", url: "/flows/reference-interview/prompts/system" });
   assert.equal(escapedPrompt.statusCode, 400);
   assert.equal(escapedPrompt.json().error, "workspace_error");
+
+  const analyzed = await app.inject({ method: "POST", url: "/flows/reference-interview/validate" });
+  assert.equal(analyzed.statusCode, 200);
+  assert.equal(analyzed.json().status, "error");
+  assert.ok(analyzed.json().diagnostics.some((item: { code: string }) => item.code === "missing_prompt_file"));
 });
 
 test("Builder API exports and imports a flow workspace package", async (t) => {
