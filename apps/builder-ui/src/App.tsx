@@ -27,17 +27,23 @@ import {
   FileJson,
   GitBranch,
   Play,
+  Plus,
   RefreshCw,
   Send,
   ShieldCheck,
   Sparkles,
   Terminal,
+  Trash2,
   Upload,
 } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 import {
   builderApiUrl,
   createRuntimeSession,
+  createPromptAsset,
+  createSchemaAsset,
+  deletePromptAsset,
+  deleteSchemaAsset,
   downloadGeneratedArtifactArchive,
   exportFlowWorkspace,
   finishRuntimeSession,
@@ -822,6 +828,102 @@ export default function App() {
     }
   }
 
+  async function handleCreatePrompt(promptId: string) {
+    const id = promptId.trim();
+    if (!selectedFlowId || !id) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Criando prompt ${id}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const created = await createPromptAsset(selectedFlowId, id);
+      setLoadedFlow({ path: created.path, flow: created.flow });
+      setDraftFlow(created.flow);
+      setIsDirty(false);
+      setSelectedPromptId(created.prompt?.id ?? id);
+      setPromptContent(created.prompt?.content ?? "");
+      setPromptDirty(false);
+      setFlowValidation(null);
+      await refreshFlows(true);
+      setStatus({ kind: "ok", message: `Prompt criado em ${created.prompt?.path ?? `prompts/${id}.md`}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleDeletePrompt() {
+    if (!selectedFlowId || !selectedPromptId) {
+      return;
+    }
+    if (!window.confirm(`Remover prompt ${selectedPromptId}?`)) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Removendo prompt ${selectedPromptId}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const removed = await deletePromptAsset(selectedFlowId, selectedPromptId);
+      setLoadedFlow({ path: removed.path, flow: removed.flow });
+      setDraftFlow(removed.flow);
+      setIsDirty(false);
+      setSelectedPromptId(removed.flow.prompts[0]?.id ?? "");
+      setPromptContent("");
+      setPromptDirty(false);
+      setFlowValidation(null);
+      await refreshFlows(true);
+      setStatus({ kind: "ok", message: `Prompt ${removed.deleted.id} removido.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleCreateSchema(schemaId: string) {
+    const id = schemaId.trim();
+    if (!selectedFlowId || !id) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Criando schema ${id}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const created = await createSchemaAsset(selectedFlowId, id);
+      setLoadedFlow({ path: created.path, flow: created.flow });
+      setDraftFlow(created.flow);
+      setIsDirty(false);
+      setSelectedSchemaId(created.schema?.id ?? id);
+      setSchemaContent(created.schema?.content ?? "");
+      setSchemaDirty(false);
+      setFlowValidation(null);
+      await refreshFlows(true);
+      setStatus({ kind: "ok", message: `Schema criado em ${created.schema?.path ?? `schemas/${id}.schema.json`}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleDeleteSchema() {
+    if (!selectedFlowId || !selectedSchemaId) {
+      return;
+    }
+    if (!window.confirm(`Remover schema ${selectedSchemaId}?`)) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Removendo schema ${selectedSchemaId}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const removed = await deleteSchemaAsset(selectedFlowId, selectedSchemaId);
+      setLoadedFlow({ path: removed.path, flow: removed.flow });
+      setDraftFlow(removed.flow);
+      setIsDirty(false);
+      setSelectedSchemaId(removed.flow.schemas[0]?.id ?? "");
+      setSchemaContent("");
+      setSchemaDirty(false);
+      setFlowValidation(null);
+      await refreshFlows(true);
+      setStatus({ kind: "ok", message: `Schema ${removed.deleted.id} removido.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleValidate() {
     if (!selectedFlowId) {
       return;
@@ -1355,7 +1457,11 @@ export default function App() {
                 setSchemaDirty(true);
                 setFlowValidation(null);
               }}
+              onPromptCreate={handleCreatePrompt}
+              onPromptDelete={handleDeletePrompt}
               onPromptSave={handleSavePrompt}
+              onSchemaCreate={handleCreateSchema}
+              onSchemaDelete={handleDeleteSchema}
               onSchemaSave={handleSaveSchema}
             />
           ) : inspectorTab === "validation" ? (
@@ -1689,7 +1795,11 @@ function AssetsPanel({
   onSchemaSelect,
   onPromptChange,
   onSchemaChange,
+  onPromptCreate,
+  onPromptDelete,
   onPromptSave,
+  onSchemaCreate,
+  onSchemaDelete,
   onSchemaSave,
 }: {
   flow: AgentFlow | null;
@@ -1703,9 +1813,15 @@ function AssetsPanel({
   onSchemaSelect: (value: string) => void;
   onPromptChange: (value: string) => void;
   onSchemaChange: (value: string) => void;
+  onPromptCreate: (value: string) => void;
+  onPromptDelete: () => void;
   onPromptSave: () => void;
+  onSchemaCreate: (value: string) => void;
+  onSchemaDelete: () => void;
   onSchemaSave: () => void;
 }) {
+  const [newPromptId, setNewPromptId] = useState("");
+  const [newSchemaId, setNewSchemaId] = useState("");
   if (!flow) {
     return (
       <div className="empty-state">
@@ -1720,6 +1836,32 @@ function AssetsPanel({
         <div className="sandbox-header">
           <strong>Prompt</strong>
           <span>{promptDirty ? "alterado" : "salvo"}</span>
+        </div>
+        <div className="asset-create">
+          <input value={newPromptId} onChange={(event) => setNewPromptId(event.target.value)} placeholder="novo_prompt" />
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => {
+              onPromptCreate(newPromptId);
+              setNewPromptId("");
+            }}
+            disabled={!newPromptId.trim()}
+            title="Criar prompt"
+            aria-label="Criar prompt"
+          >
+            <Plus size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onPromptDelete}
+            disabled={!selectedPromptId}
+            title="Remover prompt"
+            aria-label="Remover prompt"
+          >
+            <Trash2 size={16} aria-hidden="true" />
+          </button>
         </div>
         <select className="asset-select" value={selectedPromptId} onChange={(event) => onPromptSelect(event.target.value)}>
           {flow.prompts.map((prompt) => (
@@ -1743,6 +1885,32 @@ function AssetsPanel({
         <div className="sandbox-header">
           <strong>Schema</strong>
           <span>{schemaDirty ? "alterado" : "salvo"}</span>
+        </div>
+        <div className="asset-create">
+          <input value={newSchemaId} onChange={(event) => setNewSchemaId(event.target.value)} placeholder="novo_schema" />
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => {
+              onSchemaCreate(newSchemaId);
+              setNewSchemaId("");
+            }}
+            disabled={!newSchemaId.trim()}
+            title="Criar schema"
+            aria-label="Criar schema"
+          >
+            <Plus size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onSchemaDelete}
+            disabled={!selectedSchemaId}
+            title="Remover schema"
+            aria-label="Remover schema"
+          >
+            <Trash2 size={16} aria-hidden="true" />
+          </button>
         </div>
         <select className="asset-select" value={selectedSchemaId} onChange={(event) => onSchemaSelect(event.target.value)}>
           {flow.schemas.map((schema) => (

@@ -206,6 +206,24 @@ export interface FlowAssetContent {
   content: string;
 }
 
+export interface FlowAssetMutationResult {
+  status: "ok";
+  path: string;
+  flow: AgentFlow;
+  prompt?: FlowAssetContent;
+  schema?: FlowAssetContent;
+}
+
+export interface FlowAssetDeleteResult {
+  status: "ok";
+  path: string;
+  flow: AgentFlow;
+  deleted: {
+    id: string;
+    path: string;
+  };
+}
+
 export interface FlowWorkspaceExport {
   format: "agent-flow-builder.flow-workspace.v1";
   exportedAt: string;

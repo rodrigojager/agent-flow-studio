@@ -29,12 +29,12 @@
 - Builder UI inicial em `apps/builder-ui/` com canvas React Flow, lista de flows, inspector, preview JSON, edição básica de propriedades, salvamento do `agent.flow.json` e ações de validar/gerar via Builder API.
 - Builder API persiste flows versionáveis com `PUT /flows/{flowId}`, valida Flow Spec antes de gravar e bloqueia divergência de `id`.
 - Flow Spec expõe análise estruturada de flows com diagnósticos de grafo, referências, nós, arestas e compatibilidade inicial de codegen.
-- Builder API lê e salva prompts Markdown e schemas JSON referenciados pelo flow, com validação de path dentro do diretório do flow e validação JSON para schemas.
+- Builder API cria, lê, salva e remove prompts Markdown e schemas JSON referenciados pelo flow, com validação de path dentro do diretório do flow, validação JSON para schemas e bloqueio de remoção quando o asset ainda está em uso.
 - Builder API retorna validação visual rica com diagnósticos estruturados, contagem de erros/avisos e checagem de assets referenciados.
 - Builder API expõe catálogo de adapters LLM via `/llm-adapters`.
 - Builder API exporta e importa pacotes JSON versionados de workspace de flow, contendo `agent.flow.json`, prompts e schemas referenciados, com proteção contra conflito e path traversal.
 - Builder API lista, lê e empacota artefatos gerados dentro de `generated/` via `/artifacts`, `/artifacts/file` e `/artifacts/archive`.
-- Builder UI possui aba `Arquivos` para editar prompts e schemas referenciados pelo flow antes de validar, gerar ou iniciar sandbox.
+- Builder UI possui aba `Arquivos` para criar, remover e editar prompts e schemas referenciados pelo flow antes de validar, gerar ou iniciar sandbox.
 - Builder UI permite exportar e importar workspace de flow pela toolbar, salvando alterações pendentes antes de exportar.
 - Builder UI possui aba `Artefato` para pré-visualizar arquivos do runtime ou bundle gerado e baixar um zip do projeto.
 - Builder UI possui aba `Validação` para exibir diagnósticos estruturados e navegar para nós, arestas, prompts ou schemas afetados.
@@ -81,7 +81,7 @@ Também foi validado localmente:
 ## Ainda não implementado
 
 - Codegen genérico para recursos avançados e execução real de nós futuros como RAG, PDF, HTTP, banco, approval, scoring e analytics.
-- Edição visual avançada de prompts/schemas e ergonomia refinada do canvas.
+- Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
 - Jobs pós-finalização com worker.

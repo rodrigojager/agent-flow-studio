@@ -387,6 +387,24 @@ button:disabled {
   background: #ffffff;
 }
 
+.asset-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
+  gap: 8px;
+}
+
+.asset-create input {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid #c4cdc8;
+  border-radius: 7px;
+  color: #17211f;
+  background: #fbfcfa;
+  font: inherit;
+  font-size: 12px;
+}
+
 .asset-select {
   width: 100%;
   min-height: 34px;

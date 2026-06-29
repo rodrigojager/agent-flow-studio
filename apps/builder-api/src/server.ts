@@ -4,6 +4,10 @@ import { agentFlowJsonSchema, llmAdapterCatalog, runtimeManifestJsonSchema } fro
 import { SandboxManager } from "./sandbox.ts";
 import {
   archiveGeneratedArtifact,
+  createPrompt,
+  createSchemaAsset,
+  deletePrompt,
+  deleteSchemaAsset,
   exportFlowWorkspace,
   importFlowWorkspace,
   generateRuntimeManifest,
@@ -74,7 +78,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.addHook("onRequest", async (request, reply) => {
     reply.header("Access-Control-Allow-Origin", "*");
     reply.header("Access-Control-Allow-Headers", "content-type");
-    reply.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
+    reply.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
     reply.header("Access-Control-Expose-Headers", "content-disposition");
     if (request.method === "OPTIONS") {
       return reply.status(204).send();
@@ -180,16 +184,56 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     return readPrompt(workspaceRoot, request.params.flowId, request.params.promptId);
   });
 
+  app.post<{ Params: FlowParams; Body: unknown }>("/flows/:flowId/prompts", async (request) => {
+    const result = await createPrompt(workspaceRoot, request.params.flowId, request.body);
+    return {
+      status: "ok",
+      path: result.flowPath,
+      flow: result.flow,
+      prompt: result.asset,
+    };
+  });
+
   app.put<{ Params: PromptParams; Body: AssetBody }>("/flows/:flowId/prompts/:promptId", async (request) => {
     return savePrompt(workspaceRoot, request.params.flowId, request.params.promptId, request.body?.content);
+  });
+
+  app.delete<{ Params: PromptParams }>("/flows/:flowId/prompts/:promptId", async (request) => {
+    const result = await deletePrompt(workspaceRoot, request.params.flowId, request.params.promptId);
+    return {
+      status: "ok",
+      path: result.flowPath,
+      flow: result.flow,
+      deleted: result.deleted,
+    };
   });
 
   app.get<{ Params: SchemaParams }>("/flows/:flowId/schemas/:schemaId", async (request) => {
     return readSchemaAsset(workspaceRoot, request.params.flowId, request.params.schemaId);
   });
 
+  app.post<{ Params: FlowParams; Body: unknown }>("/flows/:flowId/schemas", async (request) => {
+    const result = await createSchemaAsset(workspaceRoot, request.params.flowId, request.body);
+    return {
+      status: "ok",
+      path: result.flowPath,
+      flow: result.flow,
+      schema: result.asset,
+    };
+  });
+
   app.put<{ Params: SchemaParams; Body: AssetBody }>("/flows/:flowId/schemas/:schemaId", async (request) => {
     return saveSchemaAsset(workspaceRoot, request.params.flowId, request.params.schemaId, request.body?.content);
+  });
+
+  app.delete<{ Params: SchemaParams }>("/flows/:flowId/schemas/:schemaId", async (request) => {
+    const result = await deleteSchemaAsset(workspaceRoot, request.params.flowId, request.params.schemaId);
+    return {
+      status: "ok",
+      path: result.flowPath,
+      flow: result.flow,
+      deleted: result.deleted,
+    };
   });
 
   app.post<{ Params: FlowParams }>("/flows/:flowId/validate", async (request) => {

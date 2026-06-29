@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { access, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -243,6 +243,73 @@ test("Builder API edits prompt and schema assets referenced by a flow", async (t
   });
   assert.equal(invalidSchema.statusCode, 422);
   assert.equal(invalidSchema.json().error, "workspace_error");
+
+  const createdPrompt = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/prompts",
+    headers: { "content-type": "application/json" },
+    payload: {
+      id: "draft_prompt",
+      path: "prompts/draft_prompt.md",
+      version: "v1",
+      variables: ["user_message"],
+      content: "# Prompt novo\n\nVocê é um prompt criado pela API.\n",
+    },
+  });
+  assert.equal(createdPrompt.statusCode, 200);
+  assert.equal(createdPrompt.json().prompt.id, "draft_prompt");
+  assert.ok(createdPrompt.json().flow.prompts.some((item: { id: string }) => item.id === "draft_prompt"));
+  assert.match(await readFile(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "draft_prompt.md"), "utf-8"), /Prompt novo/);
+
+  const duplicatePrompt = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/prompts",
+    headers: { "content-type": "application/json" },
+    payload: { id: "draft_prompt", path: "prompts/other.md" },
+  });
+  assert.equal(duplicatePrompt.statusCode, 409);
+  assert.equal(duplicatePrompt.json().error, "workspace_error");
+
+  const deleteReferencedPrompt = await app.inject({ method: "DELETE", url: "/flows/reference-interview/prompts/system" });
+  assert.equal(deleteReferencedPrompt.statusCode, 409);
+  assert.equal(deleteReferencedPrompt.json().error, "workspace_error");
+
+  const deletedPrompt = await app.inject({ method: "DELETE", url: "/flows/reference-interview/prompts/draft_prompt" });
+  assert.equal(deletedPrompt.statusCode, 200);
+  assert.equal(deletedPrompt.json().deleted.id, "draft_prompt");
+  await assert.rejects(access(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "draft_prompt.md")));
+
+  const createdSchema = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/schemas",
+    headers: { "content-type": "application/json" },
+    payload: {
+      id: "draft_schema",
+      path: "schemas/draft.schema.json",
+      content: "{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}}}",
+    },
+  });
+  assert.equal(createdSchema.statusCode, 200);
+  assert.equal(createdSchema.json().schema.id, "draft_schema");
+  assert.ok(createdSchema.json().flow.schemas.some((item: { id: string }) => item.id === "draft_schema"));
+
+  const deleteStateSchema = await app.inject({ method: "DELETE", url: "/flows/reference-interview/schemas/session_state" });
+  assert.equal(deleteStateSchema.statusCode, 409);
+  assert.equal(deleteStateSchema.json().error, "workspace_error");
+
+  const deletedSchema = await app.inject({ method: "DELETE", url: "/flows/reference-interview/schemas/draft_schema" });
+  assert.equal(deletedSchema.statusCode, 200);
+  assert.equal(deletedSchema.json().deleted.id, "draft_schema");
+  await assert.rejects(access(path.join(workspaceRoot, "flows", "reference-interview", "schemas", "draft.schema.json")));
+
+  const escapedCreate = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/prompts",
+    headers: { "content-type": "application/json" },
+    payload: { id: "escaped_prompt", path: "../escape.md" },
+  });
+  assert.equal(escapedCreate.statusCode, 400);
+  assert.equal(escapedCreate.json().error, "workspace_error");
 
   const loaded = await app.inject({ method: "GET", url: "/flows/reference-interview" });
   const flow = loaded.json().flow;

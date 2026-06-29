@@ -66,6 +66,23 @@ export interface FlowAssetContent {
   content: string;
 }
 
+export interface DeletedFlowAsset {
+  id: string;
+  path: string;
+}
+
+export interface FlowAssetMutationResult {
+  flow: AgentFlow;
+  flowPath: string;
+  asset: FlowAssetContent;
+}
+
+export interface FlowAssetDeleteResult {
+  flow: AgentFlow;
+  flowPath: string;
+  deleted: DeletedFlowAsset;
+}
+
 export interface FlowWorkspaceExport {
   format: typeof FLOW_WORKSPACE_EXPORT_FORMAT;
   exportedAt: string;
@@ -382,6 +399,75 @@ export async function savePrompt(
   };
 }
 
+export async function createPrompt(
+  workspaceRoot: string,
+  flowId: string,
+  value: unknown,
+): Promise<FlowAssetMutationResult> {
+  const input = parsePromptAssetInput(value);
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  if (loaded.flow.prompts.some((prompt) => prompt.id === input.id)) {
+    throw new WorkspaceError(`Prompt já existe: ${input.id}`, 409);
+  }
+  assertUniqueAssetPath(loaded.flow, input.path);
+  const absolutePath = safeResolveFlowAsset(loaded.flowRoot, input.path);
+  assertAssetPathPrefix(input.path, "prompts");
+  if (await pathExists(absolutePath)) {
+    throw new WorkspaceError(`Arquivo de prompt já existe: ${input.path}`, 409);
+  }
+
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    prompts: [...loaded.flow.prompts, { id: input.id, path: input.path, version: input.version, variables: input.variables }],
+  });
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, input.content, "utf-8");
+  await writeFlowFile(loaded, flow);
+  return {
+    flow,
+    flowPath: loaded.relativePath,
+    asset: {
+      id: input.id,
+      path: input.path,
+      content: input.content,
+    },
+  };
+}
+
+export async function deletePrompt(
+  workspaceRoot: string,
+  flowId: string,
+  promptId: string,
+): Promise<FlowAssetDeleteResult> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const prompt = loaded.flow.prompts.find((item) => item.id === promptId);
+  if (!prompt) {
+    throw new WorkspaceError(`Prompt não encontrado: ${promptId}`, 404);
+  }
+  if (loaded.flow.prompts.length <= 1) {
+    throw new WorkspaceError("Flow precisa manter ao menos um prompt.", 409);
+  }
+  const referencingNode = loaded.flow.nodes.find((node) => node.promptId === promptId);
+  if (referencingNode) {
+    throw new WorkspaceError(`Prompt ${promptId} ainda é usado pelo nó ${referencingNode.id}.`, 409);
+  }
+
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    prompts: loaded.flow.prompts.filter((item) => item.id !== promptId),
+  });
+  await writeFlowFile(loaded, flow);
+  await removeAssetFileIfUnreferenced(loaded.flowRoot, flow, prompt.path);
+  return {
+    flow,
+    flowPath: loaded.relativePath,
+    deleted: {
+      id: prompt.id,
+      path: prompt.path,
+    },
+  };
+}
+
 export async function readSchemaAsset(workspaceRoot: string, flowId: string, schemaId: string): Promise<FlowAssetContent> {
   const loaded = await loadFlowById(workspaceRoot, flowId);
   const schema = loaded.flow.schemas.find((item) => item.id === schemaId);
@@ -423,6 +509,76 @@ export async function saveSchemaAsset(
     id: schema.id,
     path: schema.path,
     content: formatted,
+  };
+}
+
+export async function createSchemaAsset(
+  workspaceRoot: string,
+  flowId: string,
+  value: unknown,
+): Promise<FlowAssetMutationResult> {
+  const input = parseSchemaAssetInput(value);
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  if (loaded.flow.schemas.some((schema) => schema.id === input.id)) {
+    throw new WorkspaceError(`Schema já existe: ${input.id}`, 409);
+  }
+  assertUniqueAssetPath(loaded.flow, input.path);
+  const absolutePath = safeResolveFlowAsset(loaded.flowRoot, input.path);
+  assertAssetPathPrefix(input.path, "schemas");
+  if (await pathExists(absolutePath)) {
+    throw new WorkspaceError(`Arquivo de schema já existe: ${input.path}`, 409);
+  }
+
+  const formatted = `${JSON.stringify(input.parsed, null, 2)}\n`;
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    schemas: [...loaded.flow.schemas, { id: input.id, path: input.path }],
+  });
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, formatted, "utf-8");
+  await writeFlowFile(loaded, flow);
+  return {
+    flow,
+    flowPath: loaded.relativePath,
+    asset: {
+      id: input.id,
+      path: input.path,
+      content: formatted,
+    },
+  };
+}
+
+export async function deleteSchemaAsset(
+  workspaceRoot: string,
+  flowId: string,
+  schemaId: string,
+): Promise<FlowAssetDeleteResult> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const schema = loaded.flow.schemas.find((item) => item.id === schemaId);
+  if (!schema) {
+    throw new WorkspaceError(`Schema não encontrado: ${schemaId}`, 404);
+  }
+  if (loaded.flow.state.schemaRef === schema.id || loaded.flow.state.schemaRef === schema.path) {
+    throw new WorkspaceError(`Schema ${schemaId} é o schema de estado do flow.`, 409);
+  }
+  const referencingNode = loaded.flow.nodes.find((node) => node.outputSchema === schema.id || node.outputSchema === schema.path);
+  if (referencingNode) {
+    throw new WorkspaceError(`Schema ${schemaId} ainda é usado pelo nó ${referencingNode.id}.`, 409);
+  }
+
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    schemas: loaded.flow.schemas.filter((item) => item.id !== schemaId),
+  });
+  await writeFlowFile(loaded, flow);
+  await removeAssetFileIfUnreferenced(loaded.flowRoot, flow, schema.path);
+  return {
+    flow,
+    flowPath: loaded.relativePath,
+    deleted: {
+      id: schema.id,
+      path: schema.path,
+    },
   };
 }
 
@@ -672,6 +828,125 @@ function safeResolveFlowAsset(flowRoot: string, assetPath: string): string {
     throw new WorkspaceError(`Asset fora do diretório do flow: ${assetPath}`, 400);
   }
   return resolved;
+}
+
+async function writeFlowFile(loaded: LoadedFlow, flow: AgentFlow): Promise<void> {
+  const serialized = `${JSON.stringify(flow, null, 2)}\n`;
+  const tempPath = `${loaded.absolutePath}.tmp-${Date.now()}`;
+  await writeFile(tempPath, serialized, "utf-8");
+  await rename(tempPath, loaded.absolutePath);
+}
+
+interface PromptAssetInput {
+  id: string;
+  path: string;
+  version: string;
+  variables: string[];
+  content: string;
+}
+
+interface SchemaAssetInput {
+  id: string;
+  path: string;
+  parsed: unknown;
+}
+
+function parsePromptAssetInput(value: unknown): PromptAssetInput {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Prompt deve ser um objeto JSON.", 400);
+  }
+  const id = parseAssetId(value.id, "id do prompt");
+  const promptPath = typeof value.path === "string" && value.path.trim() ? value.path.trim() : `prompts/${id}.md`;
+  const version = typeof value.version === "string" && value.version.trim() ? value.version.trim() : "v1";
+  const variables = value.variables === undefined ? [] : parseStringList(value.variables, "variables");
+  const content =
+    typeof value.content === "string"
+      ? value.content
+      : `# ${id}\n\nDefina o prompt deste nó em português brasileiro.\n`;
+  return {
+    id,
+    path: normalizeAssetPath(promptPath),
+    version,
+    variables,
+    content,
+  };
+}
+
+function parseSchemaAssetInput(value: unknown): SchemaAssetInput {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Schema deve ser um objeto JSON.", 400);
+  }
+  const id = parseAssetId(value.id, "id do schema");
+  const schemaPath = typeof value.path === "string" && value.path.trim() ? value.path.trim() : `schemas/${id}.schema.json`;
+  const content = typeof value.content === "string" && value.content.trim()
+    ? value.content
+    : '{"type":"object","properties":{}}';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    throw new WorkspaceError("Schema deve ser JSON válido.", 422, error);
+  }
+  return {
+    id,
+    path: normalizeAssetPath(schemaPath),
+    parsed,
+  };
+}
+
+function parseAssetId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new WorkspaceError(`${label} é obrigatório.`, 400);
+  }
+  const id = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) {
+    throw new WorkspaceError(`${label} deve usar letras, números, _ ou -.`, 422);
+  }
+  return id;
+}
+
+function parseStringList(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new WorkspaceError(`${label} deve ser uma lista de strings.`, 400);
+  }
+  return value.map((item, index) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new WorkspaceError(`${label}[${index}] deve ser uma string não vazia.`, 400);
+    }
+    return item.trim();
+  });
+}
+
+function normalizeAssetPath(assetPath: string): string {
+  const normalized = assetPath.replaceAll("\\", "/").replace(/^\.\/+/, "");
+  if (!normalized || normalized.includes("\0") || normalized.split("/").includes("..") || path.isAbsolute(normalized)) {
+    throw new WorkspaceError(`Path de asset inválido: ${assetPath}`, 400);
+  }
+  if (normalized === "agent.flow.json") {
+    throw new WorkspaceError("Asset não pode sobrescrever agent.flow.json.", 422);
+  }
+  return normalized;
+}
+
+function assertAssetPathPrefix(assetPath: string, prefix: "prompts" | "schemas"): void {
+  if (assetPath !== prefix && !assetPath.startsWith(`${prefix}/`)) {
+    throw new WorkspaceError(`Path de asset deve ficar em ${prefix}/.`, 422);
+  }
+}
+
+function assertUniqueAssetPath(flow: AgentFlow, assetPath: string): void {
+  const existing = [...flow.prompts, ...flow.schemas].find((asset) => normalizeAssetPath(asset.path) === assetPath);
+  if (existing) {
+    throw new WorkspaceError(`Já existe asset usando o path ${assetPath}.`, 409);
+  }
+}
+
+async function removeAssetFileIfUnreferenced(flowRoot: string, flow: AgentFlow, assetPath: string): Promise<void> {
+  const normalized = normalizeAssetPath(assetPath);
+  const stillReferenced = [...flow.prompts, ...flow.schemas].some((asset) => normalizeAssetPath(asset.path) === normalized);
+  if (!stillReferenced) {
+    await rm(safeResolveFlowAsset(flowRoot, normalized), { force: true });
+  }
 }
 
 async function readReferencedAsset(flowRoot: string, assetPath: string, label: string): Promise<string> {
