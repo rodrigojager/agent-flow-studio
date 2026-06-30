@@ -62,6 +62,23 @@ for (const theme of themes) {
     await expect(page.getByText("blocked by safety gate").first()).toBeVisible();
     await expect(page.locator(".app-shell")).toHaveAttribute("data-theme", theme);
 
+    await page.getByRole("button", { name: /ui-audit-ok/ }).click();
+    await page.getByRole("button", { name: /#4\s+llm_completed/ }).click();
+    const promptSection = page.locator(".node-context-section", { hasText: "Prompt renderizado" });
+    await expect(promptSection).toBeVisible();
+    await expect(promptSection.getByText("prompts/system.md", { exact: true })).toBeVisible();
+    await expect(promptSection.getByText(/Aumentar conversões em onboarding\./)).toBeVisible();
+    const metricsSection = page.locator(".node-context-section", { hasText: "Métricas do nó" });
+    await expect(metricsSection).toBeVisible();
+    await expect(metricsSection.getByText("total_tokens", { exact: true })).toBeVisible();
+    await expect(metricsSection.getByText("168", { exact: true })).toBeVisible();
+    await expect(metricsSection.getByText("total_usd", { exact: true })).toBeVisible();
+    await expect(metricsSection.getByText("$0.002400", { exact: true })).toBeVisible();
+    const spansSection = page.locator(".node-context-section", { hasText: "Spans estruturados" });
+    await expect(spansSection).toBeVisible();
+    await expect(spansSection.getByText("llm_call", { exact: true })).toBeVisible();
+    await expect(spansSection.getByText("168 tokens")).toBeVisible();
+
     await expectNoDocumentHorizontalOverflow(page);
     await expectTopbarControlsToFit(page);
     expect(pageErrors, `Unexpected browser errors in studio runs ${theme}`).toEqual([]);
@@ -212,7 +229,25 @@ async function seedStudioRuns(request) {
         { seq: 1, event_type: "session_started", node: "start", payload: { turn: 0, status: "running", phase: "created" } },
         { seq: 2, event_type: "node_completed", node: "start_node", payload: { turn: 0, status: "ok", phase: "routing", custom: { next: "input_safety_check" } } },
         { seq: 3, event_type: "node_completed", node: "input_safety_check", payload: { turn: 1, status: "ok", phase: "safety", safety: { blocked: false } } },
-        { seq: 4, event_type: "llm_completed", node: "llm_step", payload: { turn: 1, status: "ok", phase: "generation", custom: { answer: "Pergunta gerada" } } },
+        {
+          seq: 4,
+          event_type: "llm_completed",
+          node: "llm_step",
+          payload: {
+            turn: 1,
+            status: "ok",
+            phase: "generation",
+            durationMs: 812,
+            usage: { prompt_tokens: 123, completion_tokens: 45, total_tokens: 168 },
+            cost: { total_usd: 0.0024 },
+            llm: { adapter: "openai", model: "gpt-4.1-mini" },
+            custom: { answer: "Pergunta gerada", output: { assistant_message: "Pergunta gerada" } },
+            spans: [
+              { name: "prompt_render", status: "ok", durationMs: 12 },
+              { name: "llm_call", status: "ok", durationMs: 800, tokens: 168, costUsd: 0.0024 },
+            ],
+          },
+        },
         { seq: 5, event_type: "node_completed", node: "output_safety_check", payload: { turn: 1, status: "ok", phase: "safety", safety: { blocked: false } } },
         { seq: 6, event_type: "node_completed", node: "deterministic_gate", payload: { turn: 2, status: "ok", phase: "completed", custom: { approved: true } } },
       ],

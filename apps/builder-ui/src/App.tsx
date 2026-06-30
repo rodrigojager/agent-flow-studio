@@ -188,6 +188,32 @@ interface StudioNodeDebugContext {
   output: unknown;
   diffs: StudioStateSnapshot["diff"];
   logs: string[];
+  metrics: StudioNodeMetric[];
+  spans: StudioNodeSpan[];
+}
+
+interface StudioNodeMetric {
+  label: string;
+  value: string;
+  detail: string;
+}
+
+interface StudioNodeSpan {
+  name: string;
+  status: string;
+  durationMs: number | null;
+  tokens: number | null;
+  cost: string | null;
+  eventSeq: number;
+}
+
+interface RenderedPromptPreview {
+  promptId: string;
+  path: string;
+  version: string;
+  content: string | null;
+  variables: Record<string, unknown>;
+  missingVariables: string[];
 }
 
 const nodeTypeOptions = [
@@ -2694,6 +2720,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           ) : (
             <SandboxPanel
               flow={draftFlow}
+              selectedPromptId={selectedPromptId}
+              promptContent={promptContent}
               sandbox={sandbox}
               sandboxes={activeSandboxes}
               sandboxPort={sandboxPort}
@@ -4223,6 +4251,8 @@ function RuntimeManifestPanel({
 
 function SandboxPanel({
   flow,
+  selectedPromptId,
+  promptContent,
   sandbox,
   sandboxes,
   sandboxPort,
@@ -4287,6 +4317,8 @@ function SandboxPanel({
   onCompareRuns,
 }: {
   flow: AgentFlow | null;
+  selectedPromptId: string;
+  promptContent: string;
   sandbox: SandboxStatus | null;
   sandboxes: SandboxStatus[];
   sandboxPort: string;
@@ -4364,6 +4396,23 @@ function SandboxPanel({
     sandbox?.logs ?? [],
     studioRunCausalAnalysis,
   );
+  const selectedFlowNode =
+    flow?.nodes.find((node) => node.id === selectedNodeContext?.nodeId) ??
+    (selectedNodeContext?.nodeId === "start" ? ({ id: "start", type: "start" } as FlowNode) : null);
+  const selectedPromptRef =
+    selectedFlowNode?.promptId && flow
+      ? flow.prompts.find((prompt) => prompt.id === selectedFlowNode.promptId) ?? null
+      : null;
+  const selectedPromptText = selectedPromptRef?.id === selectedPromptId ? promptContent : "";
+  const selectedNodeLlm = selectedFlowNode && isLlmLikeNode(selectedFlowNode)
+    ? {
+        ...(flow?.llm ?? {}),
+        ...(selectedFlowNode.llm ?? {}),
+      }
+    : null;
+  const renderedPromptPreview = selectedPromptRef && selectedNodeContext
+    ? buildRenderedPromptPreview(selectedPromptRef, selectedPromptText, selectedNodeContext, session, transcript)
+    : null;
   const hasCausalAnalysis = studioRunCausalAnalysis.failedNode !== null;
   const selectedScenario = studioScenarios.find((scenario) => scenario.id === studioSelectedScenarioId);
   const pinnedScenario = studioScenarios.find((scenario) => scenario.isPinned);
@@ -4969,6 +5018,21 @@ function SandboxPanel({
                 <span>#{selectedNodeContext.latestSnapshot?.seq ?? "-"}</span>
                 <small>{selectedNodeContext.diffs.length} diff(s) do nó</small>
               </article>
+              <article className="node-context-card">
+                <strong>Definição</strong>
+                <span>{selectedFlowNode?.type ?? "runtime"}</span>
+                <small>{selectedFlowNode?.description ?? selectedFlowNode?.handler ?? selectedFlowNode?.id ?? "-"}</small>
+              </article>
+              <article className="node-context-card">
+                <strong>Prompt</strong>
+                <span>{selectedPromptRef?.id ?? "-"}</span>
+                <small>{selectedPromptRef ? `${selectedPromptRef.version} · ${selectedPromptRef.path}` : "sem prompt vinculado"}</small>
+              </article>
+              <article className="node-context-card">
+                <strong>LLM</strong>
+                <span>{formatLlmContextValue(selectedNodeLlm, "model")}</span>
+                <small>{formatLlmContextValue(selectedNodeLlm, "adapter")}</small>
+              </article>
             </div>
 
             <div className="node-context-events">
@@ -5000,6 +5064,64 @@ function SandboxPanel({
                 <pre className="mini-json">{formatInspectorValue(selectedNodeContext.nodeState)}</pre>
               </div>
             </div>
+
+            {renderedPromptPreview ? (
+              <div className="node-context-section">
+                <div className="node-context-section-header">
+                  <strong>Prompt renderizado</strong>
+                  <span>{renderedPromptPreview.path}</span>
+                </div>
+                <pre className="mini-json">
+                  {formatInspectorValue({
+                    promptId: renderedPromptPreview.promptId,
+                    version: renderedPromptPreview.version,
+                    content: renderedPromptPreview.content,
+                    variables: renderedPromptPreview.variables,
+                    missingVariables: renderedPromptPreview.missingVariables,
+                  })}
+                </pre>
+              </div>
+            ) : null}
+
+            {selectedNodeContext.metrics.length ? (
+              <div className="node-context-section">
+                <div className="node-context-section-header">
+                  <strong>Métricas do nó</strong>
+                  <span>{selectedNodeContext.metrics.length}</span>
+                </div>
+                <div className="node-context-metrics">
+                  {selectedNodeContext.metrics.map((metric) => (
+                    <article className="node-context-metric" key={`${metric.label}-${metric.detail}`}>
+                      <strong>{metric.label}</strong>
+                      <span>{metric.value}</span>
+                      <small>{metric.detail}</small>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {selectedNodeContext.spans.length ? (
+              <div className="node-context-section">
+                <div className="node-context-section-header">
+                  <strong>Spans estruturados</strong>
+                  <span>{selectedNodeContext.spans.length}</span>
+                </div>
+                <div className="node-context-spans">
+                  {selectedNodeContext.spans.slice(-8).map((span, index) => (
+                    <article className="node-context-span" key={`${span.eventSeq}-${span.name}-${index}`}>
+                      <strong>{span.name}</strong>
+                      <span>{span.status}</span>
+                      <small>
+                        #{span.eventSeq} · {span.durationMs === null ? "-" : formatRunDuration(span.durationMs)}
+                        {span.tokens === null ? "" : ` · ${span.tokens} tokens`}
+                        {span.cost ? ` · ${span.cost}` : ""}
+                      </small>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {selectedNodeContext.diffs.length ? (
               <div className="state-diff-list">
@@ -5294,7 +5416,267 @@ function buildStudioNodeContext(
     output: nodeOutput !== undefined ? nodeOutput : latestEvent ? inferEventOutput(latestEvent.payload) : null,
     diffs: relatedDiffs.length ? relatedDiffs : latestSnapshot?.diff.slice(0, 6) ?? [],
     logs: filterNodeLogs(selectedNodeId, latestEvent, logs),
+    metrics: collectStudioNodeMetrics(nodeEvents),
+    spans: collectStudioNodeSpans(nodeEvents),
   };
+}
+
+function isLlmLikeNode(node: FlowNode): boolean {
+  return node.type.startsWith("llm_") || Boolean(node.promptId) || Boolean(node.llm);
+}
+
+function formatLlmContextValue(llm: Record<string, unknown> | null, key: "adapter" | "model"): string {
+  const value = llm?.[key];
+  return typeof value === "string" && value.trim() ? value : "-";
+}
+
+function buildRenderedPromptPreview(
+  prompt: AgentFlow["prompts"][number],
+  promptContent: string,
+  context: StudioNodeDebugContext,
+  session: SessionView | null,
+  transcript: MessageView[],
+): RenderedPromptPreview {
+  const latestPayload = context.latestEvent?.payload ?? {};
+  const lastUserMessage = [...transcript].reverse().find((message) => message.role === "user") ?? null;
+  const variableValues: Record<string, unknown> = {
+    session_id: session?.session_id ?? latestPayload.session_id ?? null,
+    turn: session?.turn ?? latestPayload.turn ?? null,
+    max_turns: session?.max_turns ?? latestPayload.max_turns ?? null,
+    user_message: lastUserMessage?.content ?? null,
+    recent_messages: transcript.slice(-6).map((message) => ({
+      role: message.role,
+      code: message.code ?? null,
+      content: message.content,
+    })),
+    node_input: context.input,
+    node_output: context.output,
+  };
+  const scopedVariables = Object.fromEntries(
+    prompt.variables.map((name) => [name, Object.prototype.hasOwnProperty.call(variableValues, name) ? variableValues[name] : null]),
+  );
+  const missingVariables = prompt.variables.filter((name) => scopedVariables[name] === null || scopedVariables[name] === undefined);
+  const rendered = renderPromptTemplate(promptContent.trim(), scopedVariables);
+
+  return {
+    promptId: prompt.id,
+    path: prompt.path,
+    version: prompt.version,
+    content: rendered || null,
+    variables: scopedVariables,
+    missingVariables,
+  };
+}
+
+function renderPromptTemplate(content: string, variables: Record<string, unknown>): string {
+  if (!content) {
+    return "";
+  }
+  let rendered = content;
+  for (const [name, value] of Object.entries(variables)) {
+    const replacement = renderPromptVariable(value);
+    rendered = rendered
+      .replaceAll(`{{${name}}}`, replacement)
+      .replaceAll(`{{ ${name} }}`, replacement)
+      .replaceAll(`{${name}}`, replacement);
+  }
+  return rendered;
+}
+
+function renderPromptVariable(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function collectStudioNodeMetrics(events: EventView[]): StudioNodeMetric[] {
+  const metrics = new Map<string, StudioNodeMetric>();
+  const upsert = (label: string, value: unknown, detail: string, kind: "number" | "duration" | "cost" | "text" = "text") => {
+    if (value === null || value === undefined || value === "") {
+      return;
+    }
+    const formatted = formatStudioMetricValue(value, kind);
+    if (formatted === null) {
+      return;
+    }
+    metrics.set(label, { label, value: formatted, detail });
+  };
+
+  for (const event of events) {
+    const payload = event.payload;
+    const detail = `evento #${event.seq}`;
+    upsert("status", payload.status, detail);
+    upsert("fase", payload.phase, detail);
+    upsert("modelo", readFirstString(payload, ["model", "modelName", "model_name"]), detail);
+    upsert("provider", readFirstString(payload, ["provider", "adapter"]), detail);
+    upsert("duration_ms", readFirstNumber(payload, ["durationMs", "duration_ms", "latencyMs", "latency_ms", "elapsedMs"]), detail, "duration");
+    collectUsageMetrics(metrics, payload.usage, detail);
+    collectUsageMetrics(metrics, isRecord(payload.llm) ? payload.llm.usage : undefined, detail);
+    collectUsageMetrics(metrics, isRecord(payload.custom) ? payload.custom.usage : undefined, detail);
+    collectCostMetrics(metrics, payload.cost, detail);
+    collectCostMetrics(metrics, isRecord(payload.llm) ? payload.llm.cost : undefined, detail);
+    collectCostMetrics(metrics, isRecord(payload.custom) ? payload.custom.cost : undefined, detail);
+    upsert("total_tokens", readFirstNumber(payload, ["totalTokens", "total_tokens", "tokens"]), detail, "number");
+    upsert("cost_usd", readFirstNumber(payload, ["costUsd", "cost_usd", "totalCostUsd", "total_cost_usd"]), detail, "cost");
+  }
+
+  return Array.from(metrics.values());
+}
+
+function collectUsageMetrics(metrics: Map<string, StudioNodeMetric>, usage: unknown, detail: string): void {
+  if (!isRecord(usage)) {
+    return;
+  }
+  for (const key of [
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "cached_tokens",
+  ]) {
+    const value = usage[key] ?? usage[toCamelCase(key)];
+    const formatted = formatStudioMetricValue(value, "number");
+    if (formatted !== null) {
+      metrics.set(key, { label: key, value: formatted, detail });
+    }
+  }
+}
+
+function collectCostMetrics(metrics: Map<string, StudioNodeMetric>, cost: unknown, detail: string): void {
+  if (typeof cost === "number" || typeof cost === "string") {
+    const formatted = formatStudioMetricValue(cost, "cost");
+    if (formatted !== null) {
+      metrics.set("cost_usd", { label: "cost_usd", value: formatted, detail });
+    }
+    return;
+  }
+  if (!isRecord(cost)) {
+    return;
+  }
+  for (const key of ["total_usd", "cost_usd", "input_usd", "output_usd"]) {
+    const value = cost[key] ?? cost[toCamelCase(key)];
+    const formatted = formatStudioMetricValue(value, "cost");
+    if (formatted !== null) {
+      metrics.set(key, { label: key, value: formatted, detail });
+    }
+  }
+}
+
+function collectStudioNodeSpans(events: EventView[]): StudioNodeSpan[] {
+  const spans: StudioNodeSpan[] = [];
+  for (const event of events) {
+    const candidates = collectSpanCandidates(event.payload);
+    for (const candidate of candidates) {
+      spans.push({
+        name: readFirstString(candidate, ["name", "span", "operation", "type"]) ?? event.event_type,
+        status: readFirstString(candidate, ["status", "result", "outcome"]) ?? readFirstString(event.payload, ["status"]) ?? "-",
+        durationMs: readFirstNumber(candidate, ["durationMs", "duration_ms", "latencyMs", "latency_ms", "elapsedMs"]),
+        tokens: readSpanTokens(candidate),
+        cost: readSpanCost(candidate),
+        eventSeq: event.seq,
+      });
+    }
+  }
+  return spans;
+}
+
+function collectSpanCandidates(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const candidates: Record<string, unknown>[] = [];
+  appendSpanCandidate(candidates, payload.span);
+  appendSpanCandidate(candidates, payload.spans);
+  if (isRecord(payload.custom)) {
+    appendSpanCandidate(candidates, payload.custom.span);
+    appendSpanCandidate(candidates, payload.custom.spans);
+  }
+  if (isRecord(payload.llm)) {
+    appendSpanCandidate(candidates, payload.llm.span);
+    appendSpanCandidate(candidates, payload.llm.spans);
+  }
+  return candidates;
+}
+
+function appendSpanCandidate(target: Record<string, unknown>[], value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (isRecord(item)) {
+        target.push(item);
+      }
+    }
+    return;
+  }
+  if (isRecord(value)) {
+    target.push(value);
+  }
+}
+
+function readSpanTokens(span: Record<string, unknown>): number | null {
+  const direct = readFirstNumber(span, ["tokens", "totalTokens", "total_tokens", "inputTokens", "outputTokens"]);
+  if (direct !== null) {
+    return direct;
+  }
+  if (isRecord(span.usage)) {
+    return readFirstNumber(span.usage, ["total_tokens", "totalTokens", "tokens"]);
+  }
+  return null;
+}
+
+function readSpanCost(span: Record<string, unknown>): string | null {
+  const direct = readFirstNumber(span, ["costUsd", "cost_usd", "totalUsd", "total_usd"]);
+  if (direct !== null) {
+    return formatStudioMetricValue(direct, "cost");
+  }
+  if (typeof span.cost === "number" || typeof span.cost === "string" || isRecord(span.cost)) {
+    if (isRecord(span.cost)) {
+      return formatStudioMetricValue(readFirstNumber(span.cost, ["total_usd", "cost_usd", "totalUsd", "costUsd"]), "cost");
+    }
+    return formatStudioMetricValue(span.cost, "cost");
+  }
+  return null;
+}
+
+function readFirstString(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readFirstNumber(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+      return Number(value);
+    }
+  }
+  return null;
+}
+
+function formatStudioMetricValue(value: unknown, kind: "number" | "duration" | "cost" | "text"): string | null {
+  if (kind === "duration") {
+    const numberValue = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(numberValue) ? formatRunDuration(numberValue) : null;
+  }
+  if (kind === "number") {
+    const numberValue = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(numberValue) ? String(Math.round(numberValue)) : null;
+  }
+  if (kind === "cost") {
+    const numberValue = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(numberValue) ? `$${numberValue.toFixed(6)}` : null;
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function toCamelCase(value: string): string {
+  return value.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
 function snapshotHasNode(snapshot: StudioStateSnapshot, nodeId: string): boolean {

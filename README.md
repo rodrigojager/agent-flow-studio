@@ -78,7 +78,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
 - Logs recentes.
 - Comparação entre runs.
 - Destaque causal no grafo: upstream, nó de falha, impacto e cascata.
-- Painel "Contexto do nó" com status, papel causal, erro relacionado, eventos recentes, input/output, estado, diffs e logs correlacionados.
+- Painel "Contexto do nó" com status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output, estado, métricas, spans estruturados, diffs e logs correlacionados.
 
 ### Aprovação E Runtime Docker
 
@@ -138,7 +138,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 ### Médio Prazo
 
 - Playground avançado com forms derivados de schema, output render/raw e secrets locais mascarados.
-- Prompt renderizado, resposta bruta, tokens e custo quando disponíveis.
+- Reexecução comparável com métricas agregadas, tokens/custo por run e alertas de regressão.
 - Fork/reexecução por checkpoint.
 - Catálogo local de templates, tools, skills e agents reutilizáveis.
 - Editor visual de manifesto multiagente.

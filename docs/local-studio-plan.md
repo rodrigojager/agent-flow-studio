@@ -371,7 +371,8 @@ Status 2026-06-30:
 - Builder UI lista runs locais, salva snapshots após execução e recarrega um run para replay básico com timeline, state e diff do evento selecionado;
 - implementado: comparação entre runs com diffs semânticos por nó, cadeia causal visual (upstream/impact), pinning de cenário e execução reprodutível;
 - implementado: progresso incremental de build no histórico e painel de progresso no artefato;
-- pendente: refinamento de drill-down contextual por nó (inputs/outputs/logs no clique) e filtros avançados de histórico operacional.
+- implementado: drill-down contextual por nó com input/output, eventos, diffs, logs correlacionados, prompt renderizado, metadados LLM, métricas de usage/custo/duração e spans estruturados;
+- pendente: filtros avançados de histórico operacional e reexecução/fork por checkpoint.
 
 ### Fase 7.5: Grafo Interativo de Execução
 
@@ -460,10 +461,10 @@ Mas a ferramenta não deve depender disso para operar.
 
 ### Prioridade 1 (semana atual)
 
-1. completar drill-down contextual no Studio:
+1. aprofundar o drill-down contextual no Studio:
    - abrir node-io e eventos no mesmo clique do nó falho/impactado;
-   - destacar caminhos upstream/impact com trilha ordenada;
-   - explicar causa provável e próximas ações no inspector.
+   - explicar causa provável e próximas ações no inspector;
+   - permitir reexecução/fork a partir de checkpoint ou evento selecionado.
 2. melhorar inspeção de execução longa:
    - histórico operacional com filtro por nível;
    - status persistente de build/up/smoke com alertas visuais de regressão.
