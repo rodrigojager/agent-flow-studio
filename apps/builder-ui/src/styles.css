@@ -1506,7 +1506,8 @@ button:disabled {
 [data-theme] .command-button.danger,
 [data-theme] .runtime-pill.error,
 [data-theme] .runtime-pill.stopped,
-[data-theme] .diagnostic-item.error {
+[data-theme] .diagnostic-item.error,
+[data-theme] .runtime-item.error {
   border-color: var(--danger);
   color: var(--danger);
   background: var(--danger-soft);

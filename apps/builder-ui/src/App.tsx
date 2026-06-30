@@ -237,6 +237,22 @@ interface StudioScenarioReplayFixture {
   };
 }
 
+interface StudioScenarioBatchResult {
+  scenarioId: string;
+  label: string;
+  status: "ok" | "error";
+  sessionId: string | null;
+  message: string;
+  durationMs: number | null;
+  completedAt: string;
+}
+
+interface StudioScenarioRunResult {
+  sessionId: string;
+  message: string;
+  durationMs: number;
+}
+
 interface StudioNodePinDraft {
   nodeId: string;
   nodeType: string;
@@ -401,6 +417,7 @@ export default function App() {
   const [studioScenarioUseNodePins, setStudioScenarioUseNodePins] = useState(false);
   const [studioScenarioRegressionThresholds, setStudioScenarioRegressionThresholds] =
     useState<StudioScenarioRegressionThresholds>({ ...defaultStudioRegressionThresholds });
+  const [studioScenarioBatchResults, setStudioScenarioBatchResults] = useState<StudioScenarioBatchResult[]>([]);
   const [studioNodePins, setStudioNodePins] = useState<StudioNodePin[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
@@ -574,6 +591,7 @@ export default function App() {
       setStudioScenarioUseNodePins(false);
       setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
       setStudioNodePins([]);
+      setStudioScenarioBatchResults([]);
       return;
     }
     let active = true;
@@ -598,6 +616,7 @@ export default function App() {
         const nodePins = loadStudioNodePins(loaded.flow.id);
         setStudioScenarios(scenarios);
         setStudioNodePins(nodePins);
+        setStudioScenarioBatchResults([]);
         const selectedScenario = scenarios.find((scenario) => scenario.isPinned) ?? scenarios[0] ?? null;
         setStudioSelectedScenarioId(selectedScenario?.id ?? "");
         if (selectedScenario) {
@@ -692,6 +711,7 @@ export default function App() {
         setStudioScenarioUseNodePins(false);
         setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
         setStudioNodePins([]);
+        setStudioScenarioBatchResults([]);
         setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
         setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
         setUserMessage("");
@@ -2474,62 +2494,121 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setStatus({ kind: "ok", message: "Pin de nó removido." });
   }
 
-  async function handleRunStudioScenario() {
+  async function runStudioScenario(scenario: StudioScenario): Promise<StudioScenarioRunResult> {
     if (!selectedFlowId || !draftFlow) {
+      throw new Error("Selecione um flow para executar cenário.");
+    }
+    const message = scenario.input.trim();
+    if (!message) {
+      throw new Error(`Cenário "${scenario.label}" não tem mensagem.`);
+    }
+    const startedAt = Date.now();
+    const runningSandbox = await ensureSandboxRunningForScenario();
+    if (!runningSandbox.url) {
+      throw new Error("URL do sandbox indisponível para execução do cenário.");
+    }
+    const resourceName = draftFlow.api.resourceName;
+    const sandboxUrl = runningSandbox.url;
+    const created = await createRuntimeSession(
+      sandboxUrl,
+      resourceName,
+      studioScenarioExecutionMetadata(scenario, scenario.useNodePins ? activeStudioNodePins(studioNodePins, draftFlow) : []),
+    );
+    if (!created.session.session_id) {
+      throw new Error("Sessão de execução não retornou ID.");
+    }
+    const createdSessionId = created.session.session_id;
+    const started = await startRuntimeSession(sandboxUrl, resourceName, createdSessionId);
+    if (!started.session.session_id) {
+      throw new Error("Sessão de execução não iniciou corretamente.");
+    }
+    setRuntimeSession(started.session);
+    setUserMessage(message);
+    setTranscript(started.messages);
+    const result = await sendRuntimeTurn(sandboxUrl, resourceName, createdSessionId, message);
+    setRuntimeSession(result.session);
+    await refreshRuntimeData(result.session);
+    await refreshSandboxState(selectedFlowId, true);
+    return {
+      sessionId: result.session.session_id,
+      message: result.assistant_message.text || "Cenário executado.",
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  function persistStudioScenarioUsage(scenarioIds: string[], lastUsedAt: string) {
+    if (!selectedFlowId || scenarioIds.length === 0) {
       return;
     }
+    const used = new Set(scenarioIds);
+    const updated = studioScenarios.map((scenario) => ({
+      ...scenario,
+      lastUsedAt: used.has(scenario.id) ? lastUsedAt : scenario.lastUsedAt,
+    }));
+    persistStudioScenarios(selectedFlowId, updated);
+  }
+
+  async function handleRunStudioScenario() {
     const selected = syncStudioScenarioSelection(studioScenarios, studioSelectedScenarioId);
     if (!selected) {
       setStatus({ kind: "error", message: "Selecione um cenário para executar." });
       return;
     }
-    const message = selected.input.trim();
-    if (!message) {
-      setStatus({ kind: "error", message: "O cenário selecionado não tem mensagem." });
-      return;
-    }
-    setStatus({ kind: "busy", message: `Executando cenário \"${selected.label}\".` });
+    setStatus({ kind: "busy", message: `Executando cenário "${selected.label}".` });
     try {
-      const runningSandbox = await ensureSandboxRunningForScenario();
-      if (!runningSandbox.url) {
-        setStatus({ kind: "error", message: "URL do sandbox indisponível para execução do cenário." });
-        return;
-      }
-      const resourceName = draftFlow.api.resourceName;
-      const sandboxUrl = runningSandbox.url;
-      const created = await createRuntimeSession(
-        sandboxUrl,
-        resourceName,
-        studioScenarioExecutionMetadata(selected, selected.useNodePins ? activeStudioNodePins(studioNodePins, draftFlow) : []),
-      );
-      if (!created.session.session_id) {
-        setStatus({ kind: "error", message: "Sessão de execução não retornou ID." });
-        return;
-      }
-      const createdSessionId = created.session.session_id;
-      const started = await startRuntimeSession(sandboxUrl, resourceName, createdSessionId);
-      if (!started.session.session_id) {
-        setStatus({ kind: "error", message: "Sessão de execução não iniciou corretamente." });
-        return;
-      }
-      setRuntimeSession(started.session);
-      setUserMessage(message);
-      setTranscript(started.messages);
-      const result = await sendRuntimeTurn(sandboxUrl, resourceName, createdSessionId, message);
-      setRuntimeSession(result.session);
-      await refreshRuntimeData(result.session);
-      await refreshSandboxState(selectedFlowId, true);
-      const now = new Date().toISOString();
-      const updated = studioScenarios.map((scenario) => ({
-        ...scenario,
-        lastUsedAt: scenario.id === selected.id ? now : scenario.lastUsedAt,
-      }));
-      persistStudioScenarios(selectedFlowId, updated);
+      const result = await runStudioScenario(selected);
+      persistStudioScenarioUsage([selected.id], new Date().toISOString());
       setStudioSelectedScenarioId(selected.id);
-      setStatus({ kind: "ok", message: result.assistant_message.text || "Cenário executado." });
+      setStatus({ kind: "ok", message: result.message });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
+  }
+
+  async function handleRunStudioScenarioBatch() {
+    const scenarios = studioScenarios.filter((scenario) => scenario.input.trim());
+    if (scenarios.length === 0) {
+      setStatus({ kind: "error", message: "Não há cenários com mensagem para executar em lote." });
+      return;
+    }
+    const results: StudioScenarioBatchResult[] = [];
+    const succeeded: string[] = [];
+    setStudioScenarioBatchResults([]);
+    for (let index = 0; index < scenarios.length; index += 1) {
+      const scenario = scenarios[index];
+      setStatus({ kind: "busy", message: `Executando lote ${index + 1}/${scenarios.length}: ${scenario.label}.` });
+      try {
+        const result = await runStudioScenario(scenario);
+        succeeded.push(scenario.id);
+        results.push({
+          scenarioId: scenario.id,
+          label: scenario.label,
+          status: "ok",
+          sessionId: result.sessionId,
+          message: result.message,
+          durationMs: result.durationMs,
+          completedAt: new Date().toISOString(),
+        });
+        setStudioSelectedScenarioId(scenario.id);
+      } catch (error) {
+        results.push({
+          scenarioId: scenario.id,
+          label: scenario.label,
+          status: "error",
+          sessionId: null,
+          message: errorMessage(error),
+          durationMs: null,
+          completedAt: new Date().toISOString(),
+        });
+      }
+      setStudioScenarioBatchResults([...results]);
+    }
+    persistStudioScenarioUsage(succeeded, new Date().toISOString());
+    const failedCount = results.filter((result) => result.status === "error").length;
+    setStatus({
+      kind: failedCount > 0 ? "error" : "ok",
+      message: `Lote concluído: ${succeeded.length}/${results.length} cenário(s) executado(s).`,
+    });
   }
 
   function handleRunPinnedScenario() {
@@ -2539,7 +2618,15 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       return;
     }
     setStudioSelectedScenarioId(pinned.id);
-    void handleRunStudioScenario();
+    setStatus({ kind: "busy", message: `Executando cenário fixado "${pinned.label}".` });
+    void runStudioScenario(pinned)
+      .then((result) => {
+        persistStudioScenarioUsage([pinned.id], new Date().toISOString());
+        setStatus({ kind: "ok", message: result.message });
+      })
+      .catch((error: unknown) => {
+        setStatus({ kind: "error", message: errorMessage(error) });
+      });
   }
 
   async function handleCreateRuntimeSession() {
@@ -3060,6 +3147,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               studioScenarioTags={studioScenarioTags}
               studioScenarioUseNodePins={studioScenarioUseNodePins}
               studioScenarioRegressionThresholds={studioScenarioRegressionThresholds}
+              studioScenarioBatchResults={studioScenarioBatchResults}
               studioNodePins={studioNodePins}
               setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
@@ -3083,6 +3171,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onStudioScenarioSave={handleSaveStudioScenario}
               onStudioScenarioSelect={handleSelectStudioScenario}
               onStudioScenarioRun={handleRunStudioScenario}
+              onStudioScenarioBatchRun={handleRunStudioScenarioBatch}
               onStudioPinnedScenarioRun={handleRunPinnedScenario}
               onStudioScenarioPin={toggleStudioScenarioPin}
               onStudioScenarioDelete={handleDeleteStudioScenario}
@@ -4600,6 +4689,7 @@ function SandboxPanel({
   studioScenarioTags,
   studioScenarioUseNodePins,
   studioScenarioRegressionThresholds,
+  studioScenarioBatchResults,
   studioNodePins,
   userMessage,
   studioRunSearch,
@@ -4623,6 +4713,7 @@ function SandboxPanel({
   onStudioScenarioSave,
   onStudioScenarioSelect,
   onStudioScenarioRun,
+  onStudioScenarioBatchRun,
   onStudioPinnedScenarioRun,
   onStudioScenarioPin,
   onStudioScenarioDelete,
@@ -4676,6 +4767,7 @@ function SandboxPanel({
   studioScenarioTags: string;
   studioScenarioUseNodePins: boolean;
   studioScenarioRegressionThresholds: StudioScenarioRegressionThresholds;
+  studioScenarioBatchResults: StudioScenarioBatchResult[];
   studioNodePins: StudioNodePin[];
   userMessage: string;
   studioRunSearch: string;
@@ -4701,6 +4793,7 @@ function SandboxPanel({
   onStudioScenarioSave: () => void;
   onStudioScenarioSelect: (scenarioId: string) => void;
   onStudioScenarioRun: () => void;
+  onStudioScenarioBatchRun: () => void;
   onStudioPinnedScenarioRun: () => void;
   onStudioScenarioPin: () => void;
   onStudioScenarioDelete: () => void;
@@ -4923,6 +5016,15 @@ function SandboxPanel({
           <button
             type="button"
             className="command-button"
+            onClick={onStudioScenarioBatchRun}
+            disabled={studioScenarios.length === 0}
+          >
+            <Play size={16} aria-hidden="true" />
+            Executar lote
+          </button>
+          <button
+            type="button"
+            className="command-button"
             onClick={onStudioPinnedScenarioRun}
             disabled={!pinnedScenario}
           >
@@ -4980,6 +5082,20 @@ function SandboxPanel({
             <span>Digite a mensagem e salve para criar um novo cenário.</span>
           </article>
         )}
+        {studioScenarioBatchResults.length ? (
+          <div className="node-pin-list" aria-label="Resultado do lote de cenários">
+            {studioScenarioBatchResults.map((result) => (
+              <article className={`runtime-item ${result.status === "error" ? "error" : ""}`} key={`${result.scenarioId}-${result.completedAt}`}>
+                <strong>{result.label}</strong>
+                <small>
+                  {result.status === "ok" ? "ok" : "erro"} · sessão {result.sessionId ? result.sessionId.slice(0, 8) : "-"} ·{" "}
+                  {result.durationMs !== null ? `${result.durationMs}ms` : "-"} · {formatDateTime(result.completedAt)}
+                </small>
+                <span>{result.message}</span>
+              </article>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section className="sandbox-section">
