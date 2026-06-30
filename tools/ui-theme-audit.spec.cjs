@@ -262,9 +262,15 @@ test("Docker operations render loading, running, stopped and error states", asyn
   await expect(page.getByText("Progresso do build")).toBeVisible({ timeout: 5_000 });
   await expect(page.getByRole("button", { name: /^Cancelar$/ })).toBeDisabled({ timeout: 15_000 });
   await expect(page.getByText("Build Docker final concluido.").first()).toBeVisible();
+  const buildAlert = page.locator(".docker-alert-card").filter({ has: page.locator(".docker-alert-header strong", { hasText: /^Build$/ }) });
+  const upAlert = page.locator(".docker-alert-card").filter({ has: page.locator(".docker-alert-header strong", { hasText: /^Up$/ }) });
+  const smokeAlert = page.locator(".docker-alert-card").filter({ has: page.locator(".docker-alert-header strong", { hasText: /^Smoke$/ }) });
+  await expect(page.getByText("Alertas operacionais")).toBeVisible();
+  await expect(buildAlert.getByText("ok")).toBeVisible();
 
   await page.getByRole("button", { name: /^Up$/ }).click();
   await expect(page.getByText("Container Docker final iniciado.").first()).toBeVisible({ timeout: 10_000 });
+  await expect(upAlert.getByText("ok")).toBeVisible();
 
   await page.getByRole("button", { name: /^Inspecionar$/ }).click();
   await expect(page.locator(".docker-service-row", { hasText: "api" }).getByText("running")).toBeVisible({ timeout: 10_000 });
@@ -273,6 +279,7 @@ test("Docker operations render loading, running, stopped and error states", asyn
   await page.getByRole("button", { name: /^Smoke$/ }).click();
   await expect(page.getByText(/Smoke test falhou/).first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("erro").first()).toBeVisible();
+  await expect(smokeAlert.getByText("erro")).toBeVisible();
   await page.getByLabel("Nível").selectOption("error");
   await page.getByRole("button", { name: /^Aplicar$/ }).click();
   await expect(page.getByText(/Smoke test falhou/).first()).toBeVisible({ timeout: 10_000 });

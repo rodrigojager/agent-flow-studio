@@ -114,6 +114,7 @@ import type {
   FlowWorkspaceExport,
   ApprovedGenerateResult,
   DockerRuntimeHistory,
+  DockerRuntimeHistoryEntry,
   DockerRuntimeHistoryLevel,
   DockerRuntimeHistoryQuery,
   DockerRuntimeOperation,
@@ -160,6 +161,20 @@ interface DockerHistoryFilterForm {
   from: string;
   to: string;
   limit: string;
+}
+
+type DockerCriticalOperation = "build" | "up" | "smoke";
+type DockerOperationAlertLevel = "ok" | "warning" | "error" | "pending";
+
+interface DockerOperationAlert {
+  operation: DockerCriticalOperation;
+  label: string;
+  level: DockerOperationAlertLevel;
+  statusLabel: string;
+  title: string;
+  detail: string;
+  finishedAt: string | null;
+  entryId: string | null;
 }
 
 interface StatusState {
@@ -441,6 +456,7 @@ const dockerHistoryOperationOptions: DockerRuntimeOperation[] = [
 const dockerHistoryStatusOptions: DockerRuntimeOperationStatus[] = ["idle", "running", "success", "error", "canceled"];
 const dockerProgressStatusOptions: DockerRuntimeProgressStatus[] = ["running", "done", "error", "warning", "info", "canceled"];
 const dockerHistoryLevelOptions: DockerRuntimeHistoryLevel[] = ["error", "warning", "info", "success"];
+const dockerCriticalOperationOrder: DockerCriticalOperation[] = ["build", "up", "smoke"];
 const dockerHistoryFilterDefaults: DockerHistoryFilterForm = {
   operation: "",
   status: "",
@@ -4382,6 +4398,10 @@ function GeneratedArtifactPanel({
     () => rawBuildProgress.filter((step) => dockerProgressMatchesFilter(step, dockerHistoryFilterApplied)),
     [dockerHistoryFilterApplied, rawBuildProgress],
   );
+  const dockerOperationAlerts = useMemo(
+    () => buildDockerOperationAlerts(dockerHistory?.entries ?? []),
+    [dockerHistory],
+  );
 
   if (!listing) {
     return (
@@ -4556,6 +4576,24 @@ function GeneratedArtifactPanel({
               <CircleDot size={16} aria-hidden="true" />
               Down
             </button>
+          </div>
+          <div className="docker-alerts">
+            <div className="node-context-section-header">
+              <strong>Alertas operacionais</strong>
+              <span>build / up / smoke</span>
+            </div>
+            <div className="docker-alert-grid">
+              {dockerOperationAlerts.map((alert) => (
+                <article className={`docker-alert-card ${alert.level}`} key={alert.operation}>
+                  <div className="docker-alert-header">
+                    <strong>{alert.label}</strong>
+                    <span className={`docker-alert-status ${alert.level}`}>{alert.statusLabel}</span>
+                  </div>
+                  <p>{alert.title}</p>
+                  <small>{alert.finishedAt ? formatDateTime(alert.finishedAt) : alert.detail}</small>
+                </article>
+              ))}
+            </div>
           </div>
           {dockerStatus ? (
             <div className="artifact-runtime-links">
@@ -7957,6 +7995,106 @@ function dockerOperationName(operation: DockerRuntimeOperation): string {
     return "Portas";
   }
   return "Smoke";
+}
+
+function buildDockerOperationAlerts(entries: DockerRuntimeHistoryEntry[]): DockerOperationAlert[] {
+  const sortedEntries = [...entries].sort((left, right) => dockerHistoryEntryTime(right) - dockerHistoryEntryTime(left));
+  const latestByOperation = new Map<DockerCriticalOperation, DockerRuntimeHistoryEntry>();
+  dockerCriticalOperationOrder.forEach((operation) => {
+    const entry = sortedEntries.find((candidate) => candidate.operation === operation);
+    if (entry) {
+      latestByOperation.set(operation, entry);
+    }
+  });
+  return dockerCriticalOperationOrder.map((operation, index) => {
+    const entry = latestByOperation.get(operation) ?? null;
+    const previousOperation = index > 0 ? dockerCriticalOperationOrder[index - 1] : null;
+    const previousEntry = previousOperation ? latestByOperation.get(previousOperation) ?? null : null;
+    return dockerOperationAlert(operation, entry, previousOperation, previousEntry, sortedEntries);
+  });
+}
+
+function dockerOperationAlert(
+  operation: DockerCriticalOperation,
+  entry: DockerRuntimeHistoryEntry | null,
+  previousOperation: DockerCriticalOperation | null,
+  previousEntry: DockerRuntimeHistoryEntry | null,
+  sortedEntries: DockerRuntimeHistoryEntry[],
+): DockerOperationAlert {
+  const label = dockerOperationName(operation);
+  if (!entry) {
+    const previousLabel = previousOperation ? dockerOperationName(previousOperation) : "";
+    return {
+      operation,
+      label,
+      level: "pending",
+      statusLabel: "pendente",
+      title: previousEntry?.ok && previousLabel
+        ? `${label} ainda não rodou após ${previousLabel}.`
+        : `${label} ainda não foi executado.`,
+      detail: "Sem execução registrada no histórico.",
+      finishedAt: null,
+      entryId: null,
+    };
+  }
+  if (previousEntry && dockerHistoryEntryTime(entry) < dockerHistoryEntryTime(previousEntry)) {
+    return {
+      operation,
+      label,
+      level: "warning",
+      statusLabel: "desatualizado",
+      title: `${label} precisa rodar após ${dockerOperationName(previousOperation ?? operation)}.`,
+      detail: entry.message,
+      finishedAt: entry.finishedAt,
+      entryId: entry.id,
+    };
+  }
+  const failed = dockerHistoryEntryFailed(entry);
+  if (failed) {
+    const hadPreviousSuccess = sortedEntries.some(
+      (candidate) =>
+        candidate.id !== entry.id &&
+        candidate.operation === operation &&
+        candidate.ok &&
+        candidate.status === "success",
+    );
+    return {
+      operation,
+      label,
+      level: "error",
+      statusLabel: "erro",
+      title: hadPreviousSuccess
+        ? `Regressão: ${label} falhou após sucesso anterior.`
+        : `${label} falhou: ${entry.message}`,
+      detail: entry.message,
+      finishedAt: entry.finishedAt,
+      entryId: entry.id,
+    };
+  }
+  return {
+    operation,
+    label,
+    level: "ok",
+    statusLabel: "ok",
+    title: `${label} concluído: ${entry.message}`,
+    detail: entry.message,
+    finishedAt: entry.finishedAt,
+    entryId: entry.id,
+  };
+}
+
+function dockerHistoryEntryFailed(entry: DockerRuntimeHistoryEntry): boolean {
+  return (
+    !entry.ok ||
+    entry.status === "error" ||
+    entry.status === "canceled" ||
+    (entry.progress ?? []).some((step) => step.status === "error" || step.status === "canceled")
+  );
+}
+
+function dockerHistoryEntryTime(entry: DockerRuntimeHistoryEntry): number {
+  const parsed = Date.parse(entry.finishedAt);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function formatDateTime(value: string): string {

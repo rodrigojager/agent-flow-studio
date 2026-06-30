@@ -845,6 +845,98 @@ button:disabled {
   margin: 0;
 }
 
+.docker-alerts {
+  display: grid;
+  gap: 8px;
+}
+
+.docker-alert-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.docker-alert-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  min-height: 92px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-bg);
+}
+
+.docker-alert-card.ok {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.docker-alert-card.warning,
+.docker-alert-card.pending {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.docker-alert-card.error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.docker-alert-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.docker-alert-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docker-alert-status {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--surface-bg);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.docker-alert-status.ok {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.docker-alert-status.warning,
+.docker-alert-status.pending {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.docker-alert-status.error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.docker-alert-card p,
+.docker-alert-card small {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .docker-service-list {
   display: grid;
   gap: 6px;
@@ -1444,6 +1536,10 @@ button:disabled {
 
   .panel-section {
     padding: 14px 16px;
+  }
+
+  .docker-alert-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

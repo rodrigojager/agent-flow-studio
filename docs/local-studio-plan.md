@@ -386,7 +386,7 @@ Status 2026-06-30:
 - implementado: indicação visual da estratégia esperada e da origem observada da restauração de checkpoint (`checkpointer` ou `snapshot`) no cenário forkado e no `State inspector`;
 - implementado: validação forte de compatibilidade de versão/hash para restauração de checkpoint, com assinatura no fork/fixture e bloqueio de execução quando `flowId`, versão, hash local, hash de projeto/assets ou hash de nó divergem;
 - implementado: histórico operacional Docker com filtro por nível/severidade (`erro`, `aviso`, `info`, `sucesso`) além de operação, status, resultado, busca, etapa, progresso e período;
-- pendente: alertas visuais mais refinados para regressões de build/up/smoke.
+- implementado: alertas operacionais persistentes para Build, Up e Smoke, com estados de pendência, sucesso, desatualização, erro e regressão após sucesso anterior.
 
 ### Fase 7.5: Grafo Interativo de Execução
 
@@ -481,7 +481,7 @@ Mas a ferramenta não deve depender disso para operar.
    - validação forte de compatibilidade de versão/hash para restauração de checkpoint já implementada.
 2. melhorar inspeção de execução longa:
    - histórico operacional com filtro por nível já implementado;
-   - status persistente de build/up/smoke com alertas visuais de regressão.
+   - status persistente de build/up/smoke com alertas visuais de regressão já implementado.
 
 ### Prioridade 2 (próxima semana)
 
