@@ -704,11 +704,13 @@ Entregaveis:
 - input form por schema;
 - secrets locais mascarados;
 - comparacao entre runs;
+- relatorio exportavel e aprovacao local de lote;
 - idempotency key visivel.
 
 Aceite:
 
 - usuario reproduz falha com dados fixos;
+- usuario exporta um lote aprovado como evidencia JSON com hash;
 - pin/mock local nao contamina runtime final sem decisao explicita.
 
 ### Fase 8: Aprovacao Integrada Ao Studio

@@ -140,6 +140,8 @@ for (const theme of themes) {
     await expect(nodePinsSection.getByText(/llm_prompt.*#4.*llm_completed/)).toBeVisible();
     await expect(page.getByRole("button", { name: /^Executar selecionado$/ })).toBeEnabled();
     await expect(page.getByRole("button", { name: /^Executar lote$/ })).toBeEnabled();
+    await expect(page.getByRole("button", { name: /^Exportar relatório$/ })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Aprovar lote$/ })).toBeDisabled();
     await expect(page.locator(".turn-input")).toHaveValue("Aumentar conversões em onboarding.");
 
     await expectNoDocumentHorizontalOverflow(page);

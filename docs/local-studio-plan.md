@@ -381,6 +381,7 @@ Status 2026-06-30:
 - implementado: thresholds de regressão por cenário para crescimento de tokens, custo e duração, enviados na metadata e aplicados ao veredito da comparação;
 - implementado: importação/exportação de fixture JSON por cenário com input, thresholds, checkpoint, pins ativos/stale e metadata de replay;
 - implementado: execução sequencial em lote de cenários/fixtures com resumo por cenário, sessão, duração, erro e comparação automática com o run anterior do mesmo cenário;
+- implementado: relatório JSON exportável de lote com hash determinístico, resumo de severidade, resultados por cenário e aprovação local quando o lote não contém erro ou regressão `fail`;
 - pendente: filtros avançados de histórico operacional e restauração real de estado por checkpointer/runtime.
 
 ### Fase 7.5: Grafo Interativo de Execução
@@ -487,7 +488,7 @@ Mas a ferramenta não deve depender disso para operar.
    - fixtures importáveis/exportáveis por cenário já implementadas;
    - execução sequencial em lote de fixtures já implementada;
    - comparação automática de baseline/candidate por lote já implementada;
-   - evoluir relatório/aprovação exportável de lote;
+   - relatório/aprovação exportável de lote já implementado;
    - evoluir restauração real de estado/checkpointer além do payload pinado.
 4. auditoria completa de tema:
    - verificar fluxo em ambas paletas;

@@ -76,6 +76,7 @@
 - Cenários do Studio carregam thresholds de regressão para crescimento de tokens, custo e duração; a UI persiste esses limites, a execução envia na metadata da sessão e a comparação aplica os valores do candidate.
 - Cenários do Studio importam/exportam fixture JSON de replay com input, thresholds, checkpoint, pins ativos/stale e metadata de execução pronta para reaproveitamento.
 - Cenários/fixtures do Studio podem ser executados em lote sequencial com resumo por cenário, sessão, duração, erro e comparação automática com o run anterior do mesmo cenário.
+- O lote de cenários agora gera relatório JSON exportável (`agent-flow-builder.scenario-batch-report.v1`) com resumo, hash determinístico, resultados por cenário e aprovação local do lote quando não há erro de execução/comparação nem regressão `fail`.
 - Causality do Studio foi incorporada ao fluxo persistido e ao grafo da UI (`upstream`, `impact`, `cascata`) com destaque de eventos/nós no replay, incluindo trilha visual no painel de grafo.
 - Build Docker pela UI passa a expor progresso incremental por etapa em `docker compose build` e mantém log de progresso persistido no histórico operacional.
 - Studio Local ganhou painel `Contexto do nó`, acionado pelo clique/filtro de nó, reunindo status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output inferidos, estado do nó, métricas de usage/custo/duração, spans estruturados, diffs e logs correlacionados.
@@ -173,7 +174,7 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
 
 3. **Cenários + pinning avançado (Média prioridade)**
    - consolidar cenários nomeados por agente/run;
-   - ampliar replay por pins com relatório/aprovação exportável de lote e thresholds por tipo de nó;
+   - ampliar replay por pins com thresholds por tipo de nó;
    - reexecução determinística com histórico de comparação.
 
 4. **Adapters de código não nativos (Média/Longo prazo)**

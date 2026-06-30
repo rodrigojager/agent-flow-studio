@@ -257,12 +257,53 @@ interface StudioScenarioRunResult {
   durationMs: number;
 }
 
+type StudioScenarioBatchComparisonSeverity = "pass" | "warn" | "fail" | "missing" | "error";
+
 interface StudioScenarioBatchComparison {
   baselineRunId: string | null;
   candidateRunId: string | null;
-  severity: "pass" | "warn" | "fail" | "missing" | "error";
+  severity: StudioScenarioBatchComparisonSeverity;
   verdict: string;
   reasons: string[];
+}
+
+type StudioScenarioBatchReportSeverity = "pass" | "warn" | "fail" | "error";
+
+interface StudioScenarioBatchReportSummary {
+  resultCount: number;
+  okCount: number;
+  errorCount: number;
+  passCount: number;
+  warnCount: number;
+  failCount: number;
+  missingBaselineCount: number;
+  comparisonErrorCount: number;
+  severity: StudioScenarioBatchReportSeverity;
+}
+
+interface StudioScenarioBatchApproval {
+  status: "approved";
+  approvedAt: string;
+  approvedBy: "local-user";
+  reportHash: string;
+  summarySeverity: StudioScenarioBatchReportSeverity;
+  resultCount: number;
+}
+
+interface StudioScenarioBatchReport {
+  format: "agent-flow-builder.scenario-batch-report.v1";
+  exportedAt: string;
+  flow: {
+    id: string;
+    name: string;
+    version: string;
+    nodeCount: number;
+    edgeCount: number;
+  };
+  summary: StudioScenarioBatchReportSummary;
+  results: StudioScenarioBatchResult[];
+  approval: StudioScenarioBatchApproval | null;
+  reportHash: string;
 }
 
 interface StudioNodePinDraft {
@@ -430,6 +471,7 @@ export default function App() {
   const [studioScenarioRegressionThresholds, setStudioScenarioRegressionThresholds] =
     useState<StudioScenarioRegressionThresholds>({ ...defaultStudioRegressionThresholds });
   const [studioScenarioBatchResults, setStudioScenarioBatchResults] = useState<StudioScenarioBatchResult[]>([]);
+  const [studioScenarioBatchApproval, setStudioScenarioBatchApproval] = useState<StudioScenarioBatchApproval | null>(null);
   const [studioNodePins, setStudioNodePins] = useState<StudioNodePin[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
@@ -604,6 +646,7 @@ export default function App() {
       setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
       setStudioNodePins([]);
       setStudioScenarioBatchResults([]);
+      setStudioScenarioBatchApproval(null);
       return;
     }
     let active = true;
@@ -629,6 +672,7 @@ export default function App() {
         setStudioScenarios(scenarios);
         setStudioNodePins(nodePins);
         setStudioScenarioBatchResults([]);
+        setStudioScenarioBatchApproval(null);
         const selectedScenario = scenarios.find((scenario) => scenario.isPinned) ?? scenarios[0] ?? null;
         setStudioSelectedScenarioId(selectedScenario?.id ?? "");
         if (selectedScenario) {
@@ -724,6 +768,7 @@ export default function App() {
         setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
         setStudioNodePins([]);
         setStudioScenarioBatchResults([]);
+        setStudioScenarioBatchApproval(null);
         setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
         setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
         setUserMessage("");
@@ -988,6 +1033,8 @@ export default function App() {
       if (next !== current) {
         setIsDirty(true);
         setFlowValidation(null);
+        setStudioScenarioBatchResults([]);
+        setStudioScenarioBatchApproval(null);
       }
       return next;
     });
@@ -1481,6 +1528,8 @@ export default function App() {
       const importedPins = importedStudioFixturePins(fixture, now);
       const nextScenarios = sortScenarios([importedScenario, ...studioScenarios]);
       persistStudioScenarios(selectedFlowId, nextScenarios);
+      setStudioScenarioBatchResults([]);
+      setStudioScenarioBatchApproval(null);
       if (importedPins.length > 0) {
         const pinsByNode = new Map(studioNodePins.map((pin) => [pin.nodeId, pin]));
         for (const pin of importedPins) {
@@ -2360,6 +2409,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     }
 
     persistStudioScenarios(selectedFlowId, sortScenarios(nextScenarios));
+    setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
     setStudioScenarioLabel(label);
     setStudioScenarioTags(tags.join(", "));
     setStatus({ kind: "ok", message: "Cenário salvo." });
@@ -2392,6 +2443,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       isPinned: scenario.id === studioSelectedScenarioId ? !pinned : false,
     }));
     persistStudioScenarios(selectedFlowId, sortScenarios(nextScenarios));
+    setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
   }
 
   function handleStudioScenarioRegressionThresholdChange(
@@ -2412,6 +2465,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     const afterDelete = sortScenarios(nextScenarios);
     const nextPinned = afterDelete.find((scenario) => scenario.isPinned)?.id ?? afterDelete[0]?.id ?? "";
     persistStudioScenarios(selectedFlowId, afterDelete);
+    setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
     setStudioSelectedScenarioId(nextPinned);
     const selected = syncStudioScenarioSelection(afterDelete, nextPinned);
     if (selected) {
@@ -2473,6 +2528,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     };
     const nextScenarios = sortScenarios([scenario, ...studioScenarios]);
     persistStudioScenarios(selectedFlowId, nextScenarios);
+    setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
     setStudioSelectedScenarioId(scenario.id);
     setStudioScenarioLabel(label);
     setStudioScenarioTags(tags.join(", "));
@@ -2496,6 +2553,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     };
     const nextPins = [nextPin, ...studioNodePins.filter((pin) => pin.nodeId !== pinDraft.nodeId)];
     persistStudioNodePins(selectedFlowId, nextPins);
+    setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
     setStatus({ kind: "ok", message: `Dados do nó ${pinDraft.nodeId} fixados para replay local.` });
   }
 
@@ -2505,6 +2564,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     }
     const nextPins = studioNodePins.filter((pin) => pin.id !== pinId);
     persistStudioNodePins(selectedFlowId, nextPins);
+    setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
     setStatus({ kind: "ok", message: "Pin de nó removido." });
   }
 
@@ -2590,6 +2651,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     const succeeded: string[] = [];
     let lastComparison: StudioRunComparison | null = null;
     setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
     for (let index = 0; index < scenarios.length; index += 1) {
       const scenario = scenarios[index];
       setStatus({ kind: "busy", message: `Executando lote ${index + 1}/${scenarios.length}: ${scenario.label}.` });
@@ -2645,6 +2707,51 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       kind: failedCount > 0 ? "error" : "ok",
       message: `Lote concluído: ${succeeded.length}/${results.length} cenário(s) executado(s).`,
     });
+  }
+
+  function currentStudioScenarioBatchReport(
+    approval: StudioScenarioBatchApproval | null = studioScenarioBatchApproval,
+  ): StudioScenarioBatchReport | null {
+    if (!selectedFlowId || !draftFlow || studioScenarioBatchResults.length === 0) {
+      return null;
+    }
+    return buildStudioScenarioBatchReport(selectedFlowId, draftFlow, studioScenarioBatchResults, approval);
+  }
+
+  function handleExportStudioScenarioBatchReport() {
+    const report = currentStudioScenarioBatchReport();
+    if (!report) {
+      setStatus({ kind: "error", message: "Execute um lote de cenários antes de exportar relatório." });
+      return;
+    }
+    const fileName = `studio-batch-report-${sanitizeFileNamePart(report.flow.id)}-${report.reportHash}.json`;
+    downloadJsonFile(fileName, report);
+    setStatus({ kind: "ok", message: `Relatório de lote exportado. Hash ${report.reportHash}.` });
+  }
+
+  function handleApproveStudioScenarioBatch() {
+    const report = currentStudioScenarioBatchReport(null);
+    if (!report) {
+      setStatus({ kind: "error", message: "Execute um lote de cenários antes de aprovar." });
+      return;
+    }
+    if (report.summary.errorCount > 0 || report.summary.comparisonErrorCount > 0 || report.summary.failCount > 0) {
+      setStatus({
+        kind: "error",
+        message: "Lote não aprovado: resolva erros de execução, erros de comparação ou regressões com falha.",
+      });
+      return;
+    }
+    const approval: StudioScenarioBatchApproval = {
+      status: "approved",
+      approvedAt: new Date().toISOString(),
+      approvedBy: "local-user",
+      reportHash: report.reportHash,
+      summarySeverity: report.summary.severity,
+      resultCount: report.summary.resultCount,
+    };
+    setStudioScenarioBatchApproval(approval);
+    setStatus({ kind: "ok", message: `Lote aprovado localmente. Hash ${approval.reportHash}.` });
   }
 
   async function findLatestScenarioRunId(scenarioId: string): Promise<string | null> {
@@ -3151,11 +3258,15 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 setPromptContent(value);
                 setPromptDirty(true);
                 setFlowValidation(null);
+                setStudioScenarioBatchResults([]);
+                setStudioScenarioBatchApproval(null);
               }}
               onSchemaChange={(value) => {
                 setSchemaContent(value);
                 setSchemaDirty(true);
                 setFlowValidation(null);
+                setStudioScenarioBatchResults([]);
+                setStudioScenarioBatchApproval(null);
               }}
               onPromptCreate={handleCreatePrompt}
               onPromptDelete={handleDeletePrompt}
@@ -3257,6 +3368,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               studioScenarioUseNodePins={studioScenarioUseNodePins}
               studioScenarioRegressionThresholds={studioScenarioRegressionThresholds}
               studioScenarioBatchResults={studioScenarioBatchResults}
+              studioScenarioBatchApproval={studioScenarioBatchApproval}
               studioNodePins={studioNodePins}
               setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
@@ -3286,6 +3398,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onStudioScenarioDelete={handleDeleteStudioScenario}
               onStudioScenarioFixtureExport={handleExportStudioScenarioFixture}
               onStudioScenarioFixtureImport={handleStudioScenarioFixtureImportClick}
+              onStudioScenarioBatchReportExport={handleExportStudioScenarioBatchReport}
+              onStudioScenarioBatchApprove={handleApproveStudioScenarioBatch}
               onStudioNodePin={handlePinStudioNodeData}
               onStudioNodePinDelete={handleDeleteStudioNodePin}
               onForkCheckpoint={handleForkSelectedCheckpoint}
@@ -4799,6 +4913,7 @@ function SandboxPanel({
   studioScenarioUseNodePins,
   studioScenarioRegressionThresholds,
   studioScenarioBatchResults,
+  studioScenarioBatchApproval,
   studioNodePins,
   userMessage,
   studioRunSearch,
@@ -4828,6 +4943,8 @@ function SandboxPanel({
   onStudioScenarioDelete,
   onStudioScenarioFixtureExport,
   onStudioScenarioFixtureImport,
+  onStudioScenarioBatchReportExport,
+  onStudioScenarioBatchApprove,
   onStudioNodePin,
   onStudioNodePinDelete,
   onForkCheckpoint,
@@ -4877,6 +4994,7 @@ function SandboxPanel({
   studioScenarioUseNodePins: boolean;
   studioScenarioRegressionThresholds: StudioScenarioRegressionThresholds;
   studioScenarioBatchResults: StudioScenarioBatchResult[];
+  studioScenarioBatchApproval: StudioScenarioBatchApproval | null;
   studioNodePins: StudioNodePin[];
   userMessage: string;
   studioRunSearch: string;
@@ -4908,6 +5026,8 @@ function SandboxPanel({
   onStudioScenarioDelete: () => void;
   onStudioScenarioFixtureExport: () => void;
   onStudioScenarioFixtureImport: () => void;
+  onStudioScenarioBatchReportExport: () => void;
+  onStudioScenarioBatchApprove: () => void;
   onStudioNodePin: (pin: StudioNodePinDraft) => void;
   onStudioNodePinDelete: (pinId: string) => void;
   onForkCheckpoint: () => void;
@@ -4969,6 +5089,13 @@ function SandboxPanel({
   const selectedScenario = studioScenarios.find((scenario) => scenario.id === studioSelectedScenarioId);
   const pinnedScenario = studioScenarios.find((scenario) => scenario.isPinned);
   const activeNodePinCount = activeStudioNodePins(studioNodePins, flow).length;
+  const batchSummary = summarizeStudioScenarioBatchResults(studioScenarioBatchResults);
+  const batchReportHash = studioScenarioBatchResults.length > 0
+    ? studioScenarioBatchReportHash(flow, batchSummary, studioScenarioBatchResults)
+    : "";
+  const batchApprovalIsCurrent = Boolean(
+    studioScenarioBatchApproval && batchReportHash && studioScenarioBatchApproval.reportHash === batchReportHash,
+  );
   const nodeFilterOptions = Array.from(
     new Set(["start", "end", ...((flow?.nodes ?? []).map((node) => node.id))]),
   ).sort();
@@ -5134,6 +5261,24 @@ function SandboxPanel({
           <button
             type="button"
             className="command-button"
+            onClick={onStudioScenarioBatchReportExport}
+            disabled={studioScenarioBatchResults.length === 0}
+          >
+            <Download size={16} aria-hidden="true" />
+            Exportar relatório
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onStudioScenarioBatchApprove}
+            disabled={studioScenarioBatchResults.length === 0 || batchApprovalIsCurrent}
+          >
+            <ShieldCheck size={16} aria-hidden="true" />
+            Aprovar lote
+          </button>
+          <button
+            type="button"
+            className="command-button"
             onClick={onStudioPinnedScenarioRun}
             disabled={!pinnedScenario}
           >
@@ -5193,6 +5338,22 @@ function SandboxPanel({
         )}
         {studioScenarioBatchResults.length ? (
           <div className="node-pin-list" aria-label="Resultado do lote de cenários">
+            <article className={`runtime-item ${batchSummary.severity === "error" || batchSummary.severity === "fail" ? "error" : ""}`}>
+              <strong>Resumo do lote</strong>
+              <small>
+                {batchSummary.okCount}/{batchSummary.resultCount} ok · {batchSummary.errorCount} erro(s) ·{" "}
+                {batchSummary.passCount} pass · {batchSummary.warnCount} aviso(s) · {batchSummary.failCount} falha(s) ·{" "}
+                {batchSummary.missingBaselineCount} sem baseline
+              </small>
+              <small>
+                Severidade {formatBatchReportSeverity(batchSummary.severity)} · hash {batchReportHash}
+              </small>
+              <span>
+                {batchApprovalIsCurrent
+                  ? `Aprovado em ${formatDateTime(studioScenarioBatchApproval?.approvedAt ?? "")}.`
+                  : "Aguardando aprovação local do lote atual."}
+              </span>
+            </article>
             {studioScenarioBatchResults.map((result) => (
               <article className={`runtime-item ${result.status === "error" ? "error" : ""}`} key={`${result.scenarioId}-${result.completedAt}`}>
                 <strong>{result.label}</strong>
@@ -6153,7 +6314,7 @@ function formatRunDuration(valueMs: number | null): string {
   return `${safeMs}ms`;
 }
 
-function formatBatchComparisonSeverity(severity: StudioScenarioBatchComparison["severity"]): string {
+function formatBatchComparisonSeverity(severity: StudioScenarioBatchComparisonSeverity): string {
   if (severity === "pass") {
     return "ok";
   }
@@ -6165,6 +6326,19 @@ function formatBatchComparisonSeverity(severity: StudioScenarioBatchComparison["
   }
   if (severity === "missing") {
     return "sem baseline";
+  }
+  return "erro";
+}
+
+function formatBatchReportSeverity(severity: StudioScenarioBatchReportSeverity): string {
+  if (severity === "pass") {
+    return "ok";
+  }
+  if (severity === "warn") {
+    return "atenção";
+  }
+  if (severity === "fail") {
+    return "falha";
   }
   return "erro";
 }
@@ -7783,6 +7957,80 @@ function buildStudioScenarioReplayFixture(
       stale: stalePins,
     },
   };
+}
+
+function buildStudioScenarioBatchReport(
+  flowId: string,
+  flow: AgentFlow,
+  results: StudioScenarioBatchResult[],
+  approval: StudioScenarioBatchApproval | null,
+): StudioScenarioBatchReport {
+  const summary = summarizeStudioScenarioBatchResults(results);
+  const reportHash = studioScenarioBatchReportHash(flow, summary, results);
+  return {
+    format: "agent-flow-builder.scenario-batch-report.v1",
+    exportedAt: new Date().toISOString(),
+    flow: {
+      id: flow.id || flowId,
+      name: flow.name,
+      version: flow.version,
+      nodeCount: flow.nodes.length,
+      edgeCount: flow.edges.length,
+    },
+    summary,
+    results,
+    approval: approval?.reportHash === reportHash ? approval : null,
+    reportHash,
+  };
+}
+
+function summarizeStudioScenarioBatchResults(results: StudioScenarioBatchResult[]): StudioScenarioBatchReportSummary {
+  const okCount = results.filter((result) => result.status === "ok").length;
+  const errorCount = results.filter((result) => result.status === "error").length;
+  const passCount = results.filter((result) => result.comparison.severity === "pass").length;
+  const warnCount = results.filter((result) => result.comparison.severity === "warn").length;
+  const failCount = results.filter((result) => result.comparison.severity === "fail").length;
+  const missingBaselineCount = results.filter((result) => result.comparison.severity === "missing").length;
+  const comparisonErrorCount = results.filter((result) => result.comparison.severity === "error").length;
+  const severity: StudioScenarioBatchReportSeverity =
+    errorCount > 0 || comparisonErrorCount > 0
+      ? "error"
+      : failCount > 0
+        ? "fail"
+        : warnCount > 0 || missingBaselineCount > 0
+          ? "warn"
+          : "pass";
+  return {
+    resultCount: results.length,
+    okCount,
+    errorCount,
+    passCount,
+    warnCount,
+    failCount,
+    missingBaselineCount,
+    comparisonErrorCount,
+    severity,
+  };
+}
+
+function studioScenarioBatchReportHash(
+  flow: AgentFlow | null,
+  summary: StudioScenarioBatchReportSummary,
+  results: StudioScenarioBatchResult[],
+): string {
+  return simpleHash(stableStringify({
+    flow: flow
+      ? {
+          id: flow.id,
+          name: flow.name,
+          version: flow.version,
+          nodeCount: flow.nodes.length,
+          edgeCount: flow.edges.length,
+        }
+      : null,
+    summary,
+    results,
+  }));
 }
 
 function studioRunScenarioId(run: StudioRunRecord): string | null {
