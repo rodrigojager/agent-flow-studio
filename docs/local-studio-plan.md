@@ -371,7 +371,7 @@ Status 2026-06-30:
 - Builder UI lista runs locais, salva snapshots após execução e recarrega um run para replay básico com timeline, state e diff do evento selecionado;
 - implementado: comparação entre runs com diffs semânticos por nó, cadeia causal visual (upstream/impact), pinning de cenário e execução reprodutível;
 - implementado: progresso incremental de build no histórico e painel de progresso no artefato;
-- implementado: drill-down contextual por nó com input/output, eventos, diffs, logs correlacionados, prompt renderizado, metadados LLM, métricas de usage/custo/duração e spans estruturados;
+- implementado: drill-down contextual por nó com input/output, eventos, diffs, logs correlacionados, prompt renderizado, metadados LLM, métricas de usage/custo/duração, logs estruturados de código customizado e spans estruturados;
 - implementado: diagnóstico operacional por nó com causa provável, próximas ações e evidências derivadas de payload/safety/status/snapshot/cadeia causal, com regras específicas para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics;
 - implementado: fork de checkpoint/evento para cenário local reexecutável, preservando origem de run, evento, snapshot, input/output e metadata da nova execução;
 - implementado: status global acessível (`status`/`alert`) com cobertura visual automatizada de loading/erro fora do fluxo Docker em tema claro e escuro;
@@ -505,7 +505,7 @@ Mas a ferramenta não deve depender disso para operar.
 5. capacidade não nativa expandida:
    - HTTP, MCP stdio e sidecar local já possuem contrato inicial por nó de código;
    - runtime adapters dedicados continuam pendentes para ambientes que exigirem isolamento próprio;
-   - logs estruturados por nó customizado no Studio.
+   - logs estruturados por nó customizado já possuem implementação inicial no Studio; falta ampliar filtros/exportação e logs avançados de sandbox isolado.
 6. multiagente operacional:
    - `agent_id` em runtime de teste e final;
    - filtros por agente em runs e execução.

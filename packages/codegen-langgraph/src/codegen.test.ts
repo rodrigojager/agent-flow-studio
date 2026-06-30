@@ -522,6 +522,11 @@ def test_typescript_custom_code_executes_and_records_output(tmp_path):
     assert custom["contract"]["entry"] == "generateQuestions"
     assert custom["contract"]["input_path"] == "assistant_message.text"
     assert custom["contract"]["dependencies"] == "zod@^3.23.0"
+    assert custom["execution_log"]["mode"] == "file"
+    assert custom["execution_log"]["status"] == "custom_code_executed"
+    assert custom["execution_log"]["target"] == "code/generateQuestions.ts"
+    assert custom["span"]["name"] == "custom_code.file"
+    assert custom["span"]["status"] == "ok"
     assert custom["output"]["question_count"] == 2
     assert len(custom["output"]["questions"]) == 2
     assert custom["output"]["node"] == "generate_questions"
@@ -906,6 +911,12 @@ def test_http_custom_code_executes_and_records_output(tmp_path):
         assert custom["contract"]["execution"] == "http"
         assert custom["contract"]["method"] == "POST"
         assert custom["contract"]["url"].startswith("http://127.0.0.1:")
+        assert custom["execution_log"]["mode"] == "http"
+        assert custom["execution_log"]["status"] == "custom_code_executed"
+        assert custom["execution_log"]["status_code"] == 200
+        assert custom["execution_log"]["target"].startswith("http://127.0.0.1:")
+        assert custom["span"]["name"] == "custom_code.http"
+        assert custom["span"]["status"] == "ok"
         assert custom["output"]["question_count"] == 1
         assert custom["output"]["node"] == "external_questions"
         assert custom["output"]["session_id"] == session_id
@@ -1079,6 +1090,11 @@ def test_mcp_custom_code_executes_and_records_output(tmp_path):
     assert custom["contract"]["mcp_args"] == ["mcp_questions.py"]
     assert custom["contract"]["mcp_tool_name"] == "generate_questions"
     assert custom["contract"]["mcp_protocol_version"] == "2025-11-25"
+    assert custom["execution_log"]["mode"] == "mcp"
+    assert custom["execution_log"]["status"] == "custom_code_executed"
+    assert custom["execution_log"]["target"] == "generate_questions"
+    assert custom["span"]["name"] == "custom_code.mcp"
+    assert custom["span"]["status"] == "ok"
     assert custom["output"]["question_count"] == 2
     assert custom["output"]["tool"] == "generate_questions"
     assert custom["output"]["received_input"]
@@ -1218,6 +1234,12 @@ def test_sidecar_custom_code_executes_and_records_output(tmp_path):
     assert custom["contract"]["execution"] == "sidecar"
     assert custom["contract"]["sidecar_command"] == "python"
     assert custom["contract"]["sidecar_args"] == ["sidecar_questions.py", "--mode", "questions"]
+    assert custom["execution_log"]["mode"] == "sidecar"
+    assert custom["execution_log"]["status"] == "custom_code_executed"
+    assert custom["execution_log"]["exit_code"] == 0
+    assert custom["execution_log"]["target"] == "python"
+    assert custom["span"]["name"] == "custom_code.sidecar"
+    assert custom["span"]["status"] == "ok"
     assert custom["output"]["question_count"] == 2
     assert custom["output"]["node"] == "sidecar_questions"
     assert custom["output"]["session_id"] == session_id

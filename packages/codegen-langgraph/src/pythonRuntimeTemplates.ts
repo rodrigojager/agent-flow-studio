@@ -2539,7 +2539,59 @@ def build_graph(
                 "traceback": traceback.format_exc(limit=5),
             }
 
+    def redact_log_text(value: Any) -> str:
+        text = str(value or "")
+        for marker in ["api_key=", "apikey=", "token=", "password=", "senha=", "secret="]:
+            lower = text.lower()
+            index = lower.find(marker)
+            while index >= 0:
+                end = len(text)
+                for separator in ["&", " ", "\\n", "\\r", "\\t"]:
+                    separator_index = text.find(separator, index + len(marker))
+                    if separator_index >= 0:
+                        end = min(end, separator_index)
+                text = f"{text[:index]}{text[index:index + len(marker)]}***REDACTED***{text[end:]}"
+                lower = text.lower()
+                index = lower.find(marker, index + len(marker) + len("***REDACTED***"))
+        return text
+
+    def custom_execution_target(contract: dict[str, Any]) -> str:
+        for key in ["url", "mcp_tool_name", "sidecar_command", "path", "entry"]:
+            value = contract.get(key)
+            if value not in (None, ""):
+                return redact_log_text(value)
+        return "inline"
+
+    def with_custom_observability(node_id: str, result: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(result)
+        contract = enriched.get("contract") if isinstance(enriched.get("contract"), dict) else {}
+        mode = str(contract.get("execution") or contract.get("language") or "native")
+        status = str(enriched.get("status") or ("custom_code_executed" if enriched.get("ok") else "custom_code_failed"))
+        execution_log = {
+            "mode": mode,
+            "status": status,
+            "node_id": node_id,
+            "target": custom_execution_target(contract),
+            "input_path": contract.get("input_path"),
+            "duration_ms": enriched.get("duration_ms"),
+            "status_code": enriched.get("status_code"),
+            "exit_code": enriched.get("exit_code"),
+            "reason": enriched.get("reason"),
+            "error": redact_log_text(enriched.get("error")) if enriched.get("error") is not None else None,
+            "stderr": redact_log_text(enriched.get("stderr")) if enriched.get("stderr") else None,
+        }
+        enriched["execution_log"] = {key: value for key, value in execution_log.items() if value not in (None, "")}
+        enriched["span"] = {
+            "name": f"custom_code.{mode}",
+            "status": "ok" if enriched.get("ok") else "error",
+            "duration_ms": enriched.get("duration_ms"),
+            "operation": "custom_code",
+            "target": enriched["execution_log"].get("target"),
+        }
+        return enriched
+
     def remember_custom_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        result = with_custom_observability(node_id, result)
         updates: dict[str, Any] = {}
         custom_results = dict(state.get("custom") or {})
         custom_results[node_id] = result

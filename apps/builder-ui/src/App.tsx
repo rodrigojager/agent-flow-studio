@@ -403,9 +403,19 @@ interface StudioNodeDebugContext {
   output: unknown;
   diffs: StudioStateSnapshot["diff"];
   logs: string[];
+  structuredLogs: StudioNodeStructuredLog[];
   metrics: StudioNodeMetric[];
   spans: StudioNodeSpan[];
   diagnosis: StudioNodeDiagnosis;
+}
+
+interface StudioNodeStructuredLog {
+  eventSeq: number;
+  mode: string;
+  status: string;
+  durationMs: number | null;
+  detail: string;
+  error: string | null;
 }
 
 interface StudioNodeMetric {
@@ -7278,6 +7288,28 @@ function SandboxPanel({
               </div>
             ) : null}
 
+            {selectedNodeContext.structuredLogs.length ? (
+              <div className="node-context-section">
+                <div className="node-context-section-header">
+                  <strong>Logs estruturados</strong>
+                  <span>{selectedNodeContext.structuredLogs.length}</span>
+                </div>
+                <div className="node-context-spans">
+                  {selectedNodeContext.structuredLogs.slice(-8).map((log, index) => (
+                    <article className="node-context-span" key={`${log.eventSeq}-${log.mode}-${index}`}>
+                      <strong>{log.mode}</strong>
+                      <span>{log.status}</span>
+                      <small>
+                        #{log.eventSeq} · {log.durationMs === null ? "-" : formatRunDuration(log.durationMs)}
+                        {log.error ? ` · ${log.error}` : ""}
+                      </small>
+                      <small>{log.detail}</small>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {selectedNodeContext.spans.length ? (
               <div className="node-context-section">
                 <div className="node-context-section-header">
@@ -7672,6 +7704,7 @@ function buildStudioNodeContext(
     output: nodeOutput !== undefined ? nodeOutput : latestEvent ? inferEventOutput(latestEvent.payload) : null,
     diffs: relatedDiffs.length ? relatedDiffs : latestSnapshot?.diff.slice(0, 6) ?? [],
     logs: filterNodeLogs(selectedNodeId, latestEvent, logs),
+    structuredLogs: collectStudioNodeStructuredLogs(nodeEvents),
     metrics: collectStudioNodeMetrics(nodeEvents),
     spans: collectStudioNodeSpans(nodeEvents),
     diagnosis: diagnoseStudioNode(selectedNodeId, flowNode, nodeEvents, latestEvent, errorEvent, latestSnapshot, causalAnalysis),
@@ -8162,6 +8195,53 @@ function collectStudioNodeMetrics(events: EventView[]): StudioNodeMetric[] {
   }
 
   return Array.from(metrics.values());
+}
+
+function collectStudioNodeStructuredLogs(events: EventView[]): StudioNodeStructuredLog[] {
+  const logs: StudioNodeStructuredLog[] = [];
+  for (const event of events) {
+    const custom = isRecord(event.payload.custom) ? event.payload.custom : null;
+    const executionLog = custom && isRecord(custom.execution_log) ? custom.execution_log : null;
+    if (!executionLog) {
+      continue;
+    }
+    const customStatus = custom ? readFirstString(custom, ["status"]) : null;
+    const mode = readFirstString(executionLog, ["mode", "execution", "type"]) ?? customStatus ?? event.event_type;
+    const status = readFirstString(executionLog, ["status", "result", "outcome"]) ?? customStatus ?? "-";
+    const durationMs = readFirstNumber(executionLog, ["durationMs", "duration_ms", "latencyMs", "latency_ms", "elapsedMs"]);
+    const target = readFirstString(executionLog, ["target", "command", "url", "tool", "path"]);
+    const exitCode = readFirstNumber(executionLog, ["exitCode", "exit_code", "statusCode", "status_code"]);
+    const inputPath = readFirstString(executionLog, ["inputPath", "input_path"]);
+    const detail = [
+      target ? `target ${target}` : null,
+      exitCode !== null ? `code ${exitCode}` : null,
+      inputPath ? `input ${inputPath}` : null,
+    ]
+      .filter((item): item is string => item !== null)
+      .join(" · ") || "execução customizada";
+    logs.push({
+      eventSeq: event.seq,
+      mode,
+      status,
+      durationMs,
+      detail,
+      error: readExecutionLogError(executionLog),
+    });
+  }
+  return logs;
+}
+
+function readExecutionLogError(record: Record<string, unknown>): string | null {
+  const direct = readFirstString(record, ["error", "reason", "stderr"]);
+  if (direct) {
+    return direct.length > 120 ? `${direct.slice(0, 117)}...` : direct;
+  }
+  const error = record.error;
+  if (isRecord(error)) {
+    const message = readFirstString(error, ["message", "code"]);
+    return message ? (message.length > 120 ? `${message.slice(0, 117)}...` : message) : JSON.stringify(error);
+  }
+  return null;
 }
 
 function collectUsageMetrics(metrics: Map<string, StudioNodeMetric>, usage: unknown, detail: string): void {

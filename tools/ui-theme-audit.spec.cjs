@@ -271,6 +271,11 @@ for (const theme of themes) {
     await expect(spansSection).toBeVisible();
     await expect(spansSection.getByText("llm_call", { exact: true })).toBeVisible();
     await expect(spansSection.getByText("168 tokens")).toBeVisible();
+    const structuredLogsSection = page.locator(".node-context-section", { hasText: "Logs estruturados" });
+    await expect(structuredLogsSection).toBeVisible();
+    await expect(structuredLogsSection.getByText("mcp", { exact: true })).toBeVisible();
+    await expect(structuredLogsSection.getByText("custom_code_executed", { exact: true })).toBeVisible();
+    await expect(structuredLogsSection.getByText(/target generate_questions/)).toBeVisible();
     await expect(page.getByText("Restore de checkpoint", { exact: true })).toBeVisible();
     await expect(page.getByText(/Origem: snapshot.*sessão ui-audit-source.*turno 1/)).toBeVisible();
     await expect(page.getByText(/Estado: session, recent_messages, nodes/)).toBeVisible();
@@ -573,7 +578,17 @@ async function seedStudioRuns(request) {
             usage: { prompt_tokens: 123, completion_tokens: 45, total_tokens: 168 },
             cost: { total_usd: 0.0024 },
             llm: { adapter: "openai", model: "gpt-4.1-mini" },
-            custom: { answer: "Pergunta gerada", output: { assistant_message: "Pergunta gerada" } },
+            custom: {
+              answer: "Pergunta gerada",
+              output: { assistant_message: "Pergunta gerada" },
+              execution_log: {
+                mode: "mcp",
+                status: "custom_code_executed",
+                duration_ms: 42,
+                target: "generate_questions",
+                input_path: "assistant_message.text",
+              },
+            },
             spans: [
               { name: "prompt_render", status: "ok", durationMs: 12 },
               { name: "llm_call", status: "ok", durationMs: 800, tokens: 168, costUsd: 0.0024 },

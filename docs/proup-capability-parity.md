@@ -74,10 +74,10 @@ Estado atual implementado:
 - o runtime gerado executa `codeExecution: "http"` por contrato externo com `input`, `context` e `contract` em JSON;
 - o runtime gerado executa `codeExecution: "mcp"` contra tool MCP local via stdio, usando `initialize`, `notifications/initialized` e `tools/call`;
 - o runtime gerado executa `codeExecution: "sidecar"` por subprocesso local com `input`, `context` e `contract` via stdin/stdout JSON;
-- o runtime registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed` em `/events`;
+- o runtime registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed` em `/events`, com `execution_log` e `span` estruturados para o Studio Local;
 - outras linguagens continuam representaveis por contrato e podem rodar por HTTP, MCP ou sidecar quando o runtime/container tiver o executavel necessario; runtime adapter dedicado segue pendente.
 
-Proxima etapa necessaria: implementar runtime adapters dedicados quando HTTP/MCP/sidecar nao forem suficientes, isolamento dedicado por no, logs estruturados no Studio Local e testes visuais por no.
+Proxima etapa necessaria: implementar runtime adapters dedicados quando HTTP/MCP/sidecar nao forem suficientes, isolamento dedicado por no e recursos avancados de logs/filtros/exportacao por no.
 
 ## Capacidades ProUp Que Precisam Ser Recriaveis
 
