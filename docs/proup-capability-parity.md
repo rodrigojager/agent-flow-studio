@@ -72,10 +72,11 @@ Estado atual implementado:
 - o runtime gerado executa codigo Python nativo por arquivo ou inline, com acesso controlado a input, state, settings, LLM client e helpers de contexto;
 - o runtime gerado executa codigo JavaScript/TypeScript por arquivo ou inline via runner Node, com input e contexto serializados em JSON;
 - o runtime gerado executa `codeExecution: "http"` por contrato externo com `input`, `context` e `contract` em JSON;
+- o runtime gerado executa `codeExecution: "sidecar"` por subprocesso local com `input`, `context` e `contract` via stdin/stdout JSON;
 - o runtime registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed` em `/events`;
-- outras linguagens continuam representaveis por contrato, mas ainda dependem de HTTP, MCP, sidecar ou runtime adapter para execucao real.
+- outras linguagens continuam representaveis por contrato e podem rodar por HTTP ou sidecar quando o runtime/container tiver o executavel necessario; MCP e runtime adapter dedicado seguem pendentes.
 
-Proxima etapa necessaria: implementar adapters externos para linguagens nao nativas, isolamento dedicado por no, logs estruturados no Studio Local e testes visuais por no.
+Proxima etapa necessaria: implementar MCP/runtime adapters dedicados, isolamento dedicado por no, logs estruturados no Studio Local e testes visuais por no.
 
 ## Capacidades ProUp Que Precisam Ser Recriaveis
 

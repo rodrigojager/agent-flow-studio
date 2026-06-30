@@ -37,6 +37,8 @@ export interface FlowNode {
   codeInline?: string;
   codeEntry?: string;
   codeDependencies?: string;
+  sidecarCommand?: string;
+  sidecarArgs?: string[];
   stage?: string;
   llm?: Record<string, unknown>;
   method?: string;

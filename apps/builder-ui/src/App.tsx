@@ -1341,6 +1341,25 @@ export default function App() {
     }));
   }
 
+  function updateNodeStringArrayField(nodeId: string, key: keyof FlowNode, value: string) {
+    const values = value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        return {
+          ...node,
+          [key]: values.length ? values : undefined,
+        };
+      }),
+    }));
+  }
+
   function updateNodeLlmAdapter(nodeId: string, adapterId: string) {
     updateDraft((flow) => {
       const adapter = llmAdapters.find((item) => item.id === adapterId);
@@ -3633,6 +3652,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 onFlowLlmFieldChange={updateFlowLlmField}
                 onNodeFieldChange={updateNodeField}
                 onNodeNumberFieldChange={updateNodeNumberField}
+                onNodeStringArrayFieldChange={updateNodeStringArrayField}
                 onNodeLlmAdapterChange={updateNodeLlmAdapter}
                 onNodeLlmFieldChange={updateNodeLlmField}
                 onNodeIdChange={handleNodeIdChange}
@@ -3848,6 +3868,7 @@ function NodeInspector({
   onFlowLlmFieldChange,
   onNodeFieldChange,
   onNodeNumberFieldChange,
+  onNodeStringArrayFieldChange,
   onNodeLlmAdapterChange,
   onNodeLlmFieldChange,
   onNodeIdChange,
@@ -3862,6 +3883,7 @@ function NodeInspector({
   onFlowLlmFieldChange: (key: keyof AgentFlow["llm"], value: string) => void;
   onNodeFieldChange: (nodeId: string, key: keyof FlowNode, value: string) => void;
   onNodeNumberFieldChange: (nodeId: string, key: keyof FlowNode, value: string) => void;
+  onNodeStringArrayFieldChange: (nodeId: string, key: keyof FlowNode, value: string) => void;
   onNodeLlmAdapterChange: (nodeId: string, adapterId: string) => void;
   onNodeLlmFieldChange: (nodeId: string, key: "model", value: string) => void;
   onNodeIdChange: (currentId: string, nextValue: string) => void;
@@ -4061,6 +4083,38 @@ function NodeInspector({
                       value={node.url ?? ""}
                       placeholder="http://127.0.0.1:9001/run"
                       onChange={(event) => onNodeFieldChange(node.id, "url", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Timeout (s)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={node.timeoutSeconds ?? ""}
+                      onChange={(event) => onNodeNumberFieldChange(node.id, "timeoutSeconds", event.target.value)}
+                    />
+                  </label>
+                </>
+              ) : null}
+              {node.codeExecution === "sidecar" ? (
+                <>
+                  <label>
+                    <span>Comando sidecar</span>
+                    <input
+                      value={node.sidecarCommand ?? ""}
+                      placeholder="python"
+                      onChange={(event) => onNodeFieldChange(node.id, "sidecarCommand", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Argumentos</span>
+                    <textarea
+                      value={node.sidecarArgs?.join("\n") ?? ""}
+                      placeholder={`sidecar_questions.py\n--mode\nquestions`}
+                      onChange={(event) => onNodeStringArrayFieldChange(node.id, "sidecarArgs", event.target.value)}
+                      rows={4}
+                      spellCheck={false}
                     />
                   </label>
                   <label>
@@ -9007,6 +9061,8 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
     next.codeEntry = node.codeEntry ?? "run";
     next.codeInline = node.codeInline;
     next.codeDependencies = node.codeDependencies;
+    next.sidecarCommand = node.sidecarCommand;
+    next.sidecarArgs = node.sidecarArgs;
     next.inputPath = node.inputPath ?? "state";
     next.resultPath = node.resultPath ?? `custom.${node.id}`;
   }

@@ -131,9 +131,9 @@ Regra de produto:
 - o escape hatch deve ter input/output tipado, logs, trace, teste local e entrar no hash de aprovacao;
 - o usuario nao deve precisar editar manualmente o runtime gerado depois da exportacao para recuperar capacidade;
 - codigo Python, JavaScript e TypeScript podem ser caminhos nativos do runtime atual;
-- codigo em outra linguagem deve ser suportavel por HTTP/MCP/sidecar ou adapter de runtime.
+- codigo em outra linguagem deve ser suportavel por HTTP, sidecar, MCP ou adapter de runtime.
 
-O no `code` deve funcionar como comportamento customizado com contrato explicito. O contrato inicial ja foi incorporado ao Flow Spec, Builder UI e Codegen LangGraph: linguagem, modo de execucao, arquivo, entry point, dependencias, input path, result path e codigo inline. O runtime gerado ja executa Python nativo por arquivo/inline e JavaScript/TypeScript por arquivo/inline via runner Node, executa `codeExecution: "http"` como adapter externo por contrato JSON, copia assets de `codePath` para `app/code/`, inclui esses arquivos no hash de aprovacao, instala Node/NPM no Dockerfile final, materializa dependencias npm quando aplicavel e registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed`. A etapa pendente e expandir esse contrato para MCP, sidecar ou runtime adapter, com isolamento dedicado por no quando necessario.
+O no `code` deve funcionar como comportamento customizado com contrato explicito. O contrato inicial ja foi incorporado ao Flow Spec, Builder UI e Codegen LangGraph: linguagem, modo de execucao, arquivo, entry point, dependencias, input path, result path, codigo inline, executor HTTP e sidecar local. O runtime gerado ja executa Python nativo por arquivo/inline e JavaScript/TypeScript por arquivo/inline via runner Node, executa `codeExecution: "http"` como adapter externo por contrato JSON, executa `codeExecution: "sidecar"` como subprocesso local com JSON por stdin/stdout, copia assets de `codePath` para `app/code/`, inclui esses arquivos no hash de aprovacao, instala Node/NPM no Dockerfile final, materializa dependencias npm quando aplicavel e registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed`. A etapa pendente e expandir esse contrato para MCP ou runtime adapter dedicado, com isolamento dedicado por no quando necessario.
 
 ### Observabilidade Estruturada
 

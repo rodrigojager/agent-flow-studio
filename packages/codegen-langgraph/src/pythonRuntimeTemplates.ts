@@ -19,6 +19,8 @@ interface RuntimeNodeConfig {
   codeInline?: string;
   codeEntry?: string;
   codeDependencies?: string;
+  sidecarCommand?: string;
+  sidecarArgs?: string[];
   promptFile?: string;
   llmAdapter?: string;
   llmModel?: string;
@@ -236,6 +238,8 @@ function runtimeNodeConfig(flow: AgentFlow, node: FlowNode, defaultPromptPath: s
     codeInline: optionalString(node, "codeInline"),
     codeEntry: optionalString(node, "codeEntry"),
     codeDependencies: optionalString(node, "codeDependencies"),
+    sidecarCommand: optionalString(node, "sidecarCommand"),
+    sidecarArgs: optionalStringArray(node, "sidecarArgs"),
     promptFile: basename(prompt?.path ?? defaultPromptPath),
     llmAdapter: node.llm?.adapter,
     llmModel: node.llm?.model,
@@ -277,6 +281,15 @@ function optionalString(node: FlowNode, key: string): string | undefined {
 function optionalNumber(node: FlowNode, key: string): number | undefined {
   const value = (node as Record<string, unknown>)[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalStringArray(node: FlowNode, key: string): string[] | undefined {
+  const value = (node as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  return values.length ? values : undefined;
 }
 
 function parseActionCondition(condition: string | undefined): string | undefined {
@@ -2217,12 +2230,105 @@ def build_graph(
                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
             }
 
+    def execute_custom_sidecar_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        command = str(config.get("sidecarCommand") or "").strip()
+        raw_args = config.get("sidecarArgs") or []
+        if isinstance(raw_args, str):
+            sidecar_args = [item.strip() for item in raw_args.splitlines() if item.strip()]
+        elif isinstance(raw_args, list):
+            sidecar_args = [str(item).strip() for item in raw_args if str(item).strip()]
+        else:
+            sidecar_args = []
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        if not command:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "sidecar_command_not_configured",
+            }
+
+        request_payload = {
+            "input": jsonable(input_value),
+            "context": {
+                "node_id": node_id,
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "input_path": input_path,
+                "state": jsonable(state),
+            },
+            "contract": contract,
+        }
+        timeout_seconds = int(config.get("timeoutSeconds") or 30)
+        try:
+            completed = subprocess.run(
+                [command, *sidecar_args],
+                input=json.dumps(request_payload),
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+                cwd=str(CODE_ROOT),
+                check=False,
+            )
+            stdout = (completed.stdout or "").strip()
+            stderr = (completed.stderr or "").strip()
+            try:
+                content: Any = json.loads(stdout) if stdout else None
+            except json.JSONDecodeError:
+                content = stdout
+            if isinstance(content, dict):
+                external_ok = bool(content.get("ok", True))
+                output = content.get("output") if "output" in content else content
+                error = content.get("error")
+            else:
+                external_ok = True
+                output = content
+                error = None
+            ok = completed.returncode == 0 and external_ok
+            return {
+                "ok": ok,
+                "status": "custom_code_executed" if ok else "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "output": jsonable(output),
+                "exit_code": completed.returncode,
+                "stderr": stderr,
+                "error": error,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": f"sidecar_timeout_after_{timeout_seconds}s",
+                "stdout": str(exc.stdout or ""),
+                "stderr": str(exc.stderr or ""),
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": str(exc),
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+
     def execute_custom_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         language = str(config.get("codeLanguage") or "python").lower()
         execution = str(config.get("codeExecution") or "native").lower()
         if execution == "http":
             return execute_custom_http_code(config, state, contract)
-        if language == "external" or execution in {"mcp", "sidecar", "runtime_adapter"}:
+        if execution == "sidecar":
+            return execute_custom_sidecar_code(config, state, contract)
+        if language == "external" or execution in {"mcp", "runtime_adapter"}:
             return {
                 "ok": False,
                 "status": "custom_code_not_executed",
@@ -2489,6 +2595,8 @@ def build_graph(
             "dependencies": config.get("codeDependencies"),
             "method": config.get("method"),
             "url": config.get("url"),
+            "sidecar_command": config.get("sidecarCommand"),
+            "sidecar_args": config.get("sidecarArgs"),
             "timeout_seconds": config.get("timeoutSeconds"),
         }
 

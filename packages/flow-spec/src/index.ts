@@ -155,6 +155,8 @@ export const NodeSchema = z
     codeInline: z.string().min(1).optional(),
     codeEntry: z.string().min(1).optional(),
     codeDependencies: z.string().optional(),
+    sidecarCommand: z.string().min(1).optional(),
+    sidecarArgs: z.array(z.string().min(1)).optional(),
     stage: z.enum(["input", "output", "context"]).optional(),
     llm: LlmConfigSchema.partial().optional(),
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),

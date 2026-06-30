@@ -925,6 +925,147 @@ def test_http_custom_code_executes_and_records_output(tmp_path):
   });
 });
 
+test("generated runtime executes sidecar custom code nodes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-sidecar-code-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente Código Sidecar");
+  await mkdir(path.join(flowRoot, "code"), { recursive: true });
+  await writeFile(
+    path.join(flowRoot, "code", "sidecar_questions.py"),
+    `import json
+import sys
+
+
+def main():
+    payload = json.loads(sys.stdin.read() or "{}")
+    text = str(payload.get("input") or "")
+    context = payload.get("context") or {}
+    contract = payload.get("contract") or {}
+    print(json.dumps({
+        "ok": True,
+        "output": {
+            "question_count": 2,
+            "questions": [
+                f"Qual é o ponto principal de {text[:24]}?",
+                "Qual detalhe precisa ser confirmado?",
+            ],
+            "node": context.get("node_id"),
+            "session_id": context.get("session_id"),
+            "input_path": context.get("input_path"),
+            "contract_execution": contract.get("execution"),
+            "arg_probe": sys.argv[1:] or [],
+        },
+    }))
+
+
+if __name__ == "__main__":
+    main()
+`,
+    "utf-8",
+  );
+
+  const flow: AgentFlow = {
+    ...simpleFlow("sidecar-code-agent", "Agente Código Sidecar"),
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      {
+        id: "sidecar_questions",
+        type: "code",
+        codeLanguage: "external",
+        codeExecution: "sidecar",
+        codePath: "code/sidecar_questions.py",
+        sidecarCommand: "python",
+        sidecarArgs: ["sidecar_questions.py", "--mode", "questions"],
+        inputPath: "assistant_message.text",
+        resultPath: "custom.sidecar_questions",
+        timeoutSeconds: 5,
+      },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "llm_step", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "llm_step", to: "sidecar_questions" },
+      { from: "sidecar_questions", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  await readFile(path.join(outDir, "app", "code", "sidecar_questions.py"), "utf-8");
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /execute_custom_sidecar_code/);
+  assert.match(graph, /\\"sidecarCommand\\": \\"python\\"/);
+  await writeFile(
+    path.join(outDir, "tests", "test_sidecar_custom_code_nodes.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "sidecar-code.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_sidecar_custom_code_executes_and_records_output(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
+    session_id = create_resp.json()["session"]["session_id"]
+    client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "conteúdo para perguntas"},
+    )
+    assert turn_resp.status_code == 200
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    by_type = {item["event_type"]: item for item in events}
+    custom = by_type["custom_code_executed"]["payload"]["custom"]
+    assert custom["ok"] is True
+    assert custom["status"] == "custom_code_executed"
+    assert custom["node_id"] == "sidecar_questions"
+    assert custom["contract"]["execution"] == "sidecar"
+    assert custom["contract"]["sidecar_command"] == "python"
+    assert custom["contract"]["sidecar_args"] == ["sidecar_questions.py", "--mode", "questions"]
+    assert custom["output"]["question_count"] == 2
+    assert custom["output"]["node"] == "sidecar_questions"
+    assert custom["output"]["session_id"] == session_id
+    assert custom["output"]["input_path"] == "assistant_message.text"
+    assert custom["output"]["contract_execution"] == "sidecar"
+    assert custom["output"]["arg_probe"] == ["--mode", "questions"]
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated runtime executes deterministic HTTP and transform nodes", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-integration-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
