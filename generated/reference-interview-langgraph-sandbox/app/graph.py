@@ -548,10 +548,107 @@ def build_graph(
             "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
         }
 
+    def execute_custom_http_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        method = str(config.get("method") or "POST").upper()
+        url = str(config.get("url") or "")
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        if not url:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "url_not_configured",
+            }
+
+        request_payload = {
+            "input": jsonable(input_value),
+            "context": {
+                "node_id": node_id,
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "input_path": input_path,
+                "state": jsonable(state),
+            },
+            "contract": contract,
+        }
+        if url.startswith("mock://"):
+            return {
+                "ok": True,
+                "status": "custom_code_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "output": {
+                    "mock": True,
+                    "method": method,
+                    "url": url,
+                    "request": request_payload,
+                },
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+
+        try:
+            data = None
+            headers = {"Accept": "application/json"}
+            if method not in {"GET", "DELETE"}:
+                data = json.dumps(request_payload).encode("utf-8")
+                headers["Content-Type"] = "application/json"
+            request = urllib.request.Request(url, data=data, headers=headers, method=method)
+            timeout = int(config.get("timeoutSeconds") or 30)
+            with urllib.request.urlopen(request, timeout=timeout) as result:
+                raw = result.read().decode("utf-8", errors="replace")
+                try:
+                    content: Any = json.loads(raw) if raw else None
+                except json.JSONDecodeError:
+                    content = raw
+                if isinstance(content, dict):
+                    external_ok = bool(content.get("ok", True))
+                    output = content.get("output") if "output" in content else content
+                    error = content.get("error")
+                else:
+                    external_ok = True
+                    output = content
+                    error = None
+                return {
+                    "ok": external_ok and 200 <= result.status < 400,
+                    "status": "custom_code_executed" if external_ok and 200 <= result.status < 400 else "custom_code_failed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "output": jsonable(output),
+                    "status_code": result.status,
+                    "error": error,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                }
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "status_code": exc.code,
+                "error": raw,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": str(exc),
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+
     def execute_custom_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         language = str(config.get("codeLanguage") or "python").lower()
         execution = str(config.get("codeExecution") or "native").lower()
-        if language == "external" or execution in {"http", "mcp", "sidecar", "runtime_adapter"}:
+        if execution == "http":
+            return execute_custom_http_code(config, state, contract)
+        if language == "external" or execution in {"mcp", "sidecar", "runtime_adapter"}:
             return {
                 "ok": False,
                 "status": "custom_code_not_executed",
@@ -816,6 +913,9 @@ def build_graph(
             "input_path": config.get("inputPath"),
             "has_inline_code": bool(config.get("codeInline")),
             "dependencies": config.get("codeDependencies"),
+            "method": config.get("method"),
+            "url": config.get("url"),
+            "timeout_seconds": config.get("timeoutSeconds"),
         }
 
         def deterministic_gate(state: ReferenceState) -> ReferenceState:

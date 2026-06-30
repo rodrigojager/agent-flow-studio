@@ -31,12 +31,12 @@ Se a unica forma de preservar a capacidade for editar manualmente o runtime gera
 Estado atual do projeto:
 
 - Builder visual, validacao e codegen: TypeScript.
-- Runtime final atual: Python, FastAPI, LangGraph e runner Node para nós JavaScript.
+- Runtime final atual: Python, FastAPI, LangGraph e runner Node para nós JavaScript/TypeScript.
 
 Regra de produto:
 
-- Python e JavaScript podem ser caminhos nativos do runtime atual.
-- TypeScript ou outra linguagem nao devem ser proibidos como capacidade.
+- Python, JavaScript e TypeScript podem ser caminhos nativos do runtime atual.
+- Outra linguagem nao deve ser proibida como capacidade.
 - Quando uma linguagem nao roda nativamente no runtime atual, ela deve entrar por HTTP, MCP, sidecar, pacote externo ou runtime adapter.
 
 Portanto, a capacidade precisa ser reproduzivel; a linguagem pode variar.
@@ -70,9 +70,10 @@ Estado atual implementado:
 - o Builder UI edita esses campos no inspector do no `code`;
 - o Codegen LangGraph copia arquivos referenciados por `codePath` para `app/code/` e inclui esses arquivos no hash de aprovacao;
 - o runtime gerado executa codigo Python nativo por arquivo ou inline, com acesso controlado a input, state, settings, LLM client e helpers de contexto;
-- o runtime gerado executa codigo JavaScript por arquivo ou inline via runner Node, com input e contexto serializados em JSON;
+- o runtime gerado executa codigo JavaScript/TypeScript por arquivo ou inline via runner Node, com input e contexto serializados em JSON;
+- o runtime gerado executa `codeExecution: "http"` por contrato externo com `input`, `context` e `contract` em JSON;
 - o runtime registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed` em `/events`;
-- TypeScript e outras linguagens continuam representaveis por contrato, mas ainda dependem de HTTP, MCP, sidecar ou runtime adapter para execucao real.
+- outras linguagens continuam representaveis por contrato, mas ainda dependem de HTTP, MCP, sidecar ou runtime adapter para execucao real.
 
 Proxima etapa necessaria: implementar adapters externos para linguagens nao nativas, isolamento dedicado por no, logs estruturados no Studio Local e testes visuais por no.
 

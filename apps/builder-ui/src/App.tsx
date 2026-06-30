@@ -4043,6 +4043,38 @@ function NodeInspector({
                   <option value="runtime_adapter">Adapter futuro</option>
                 </select>
               </label>
+              {node.codeExecution === "http" ? (
+                <>
+                  <label>
+                    <span>Método HTTP</span>
+                    <select value={node.method ?? "POST"} onChange={(event) => onNodeFieldChange(node.id, "method", event.target.value)}>
+                      <option value="GET">GET</option>
+                      <option value="POST">POST</option>
+                      <option value="PUT">PUT</option>
+                      <option value="PATCH">PATCH</option>
+                      <option value="DELETE">DELETE</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>URL do executor</span>
+                    <input
+                      value={node.url ?? ""}
+                      placeholder="http://127.0.0.1:9001/run"
+                      onChange={(event) => onNodeFieldChange(node.id, "url", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Timeout (s)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={node.timeoutSeconds ?? ""}
+                      onChange={(event) => onNodeNumberFieldChange(node.id, "timeoutSeconds", event.target.value)}
+                    />
+                  </label>
+                </>
+              ) : null}
               <label>
                 <span>Code path</span>
                 <input

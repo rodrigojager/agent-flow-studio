@@ -779,6 +779,152 @@ def test_javascript_custom_code_executes_and_records_output(tmp_path):
   });
 });
 
+test("generated runtime executes HTTP custom code nodes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-http-code-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente Código HTTP");
+
+  const flow: AgentFlow = {
+    ...simpleFlow("http-code-agent", "Agente Código HTTP"),
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      {
+        id: "external_questions",
+        type: "code",
+        codeLanguage: "external",
+        codeExecution: "http",
+        method: "POST",
+        url: "mock://external-questions",
+        inputPath: "assistant_message.text",
+        resultPath: "custom.external_questions",
+        timeoutSeconds: 5,
+      },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "llm_step", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "llm_step", to: "external_questions" },
+      { from: "external_questions", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /execute_custom_http_code/);
+  await writeFile(
+    path.join(outDir, "tests", "test_http_custom_code_nodes.py"),
+    `import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+class Handler(BaseHTTPRequestHandler):
+    received = []
+
+    def do_POST(self):
+        length = int(self.headers.get("content-length") or "0")
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        Handler.received.append(payload)
+        response = {
+            "ok": True,
+            "output": {
+                "question_count": 1,
+                "node": payload["context"]["node_id"],
+                "session_id": payload["context"]["session_id"],
+                "input_path": payload["context"]["input_path"],
+                "input_preview": str(payload["input"])[:24],
+                "contract_execution": payload["contract"]["execution"],
+            },
+        }
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode("utf-8"))
+
+    def log_message(self, format, *args):
+        return None
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "http-code.db"))
+    from app import graph as graph_module
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    graph_module.NODE_CONFIG_BY_ID["external_questions"]["url"] = f"http://127.0.0.1:{server.server_port}/run"
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app()), server
+
+
+def test_http_custom_code_executes_and_records_output(tmp_path):
+    Handler.received = []
+    client, server = _client(tmp_path)
+    try:
+        create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
+        session_id = create_resp.json()["session"]["session_id"]
+        client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+        turn_resp = client.post(
+            _path(f"/{session_id}/turn"),
+            headers={"Idempotency-Key": "turn"},
+            json={"user_message": "conteúdo para perguntas"},
+        )
+        assert turn_resp.status_code == 200
+
+        events = client.get(_path(f"/{session_id}/events")).json()
+        by_type = {item["event_type"]: item for item in events}
+        custom = by_type["custom_code_executed"]["payload"]["custom"]
+        assert custom["ok"] is True
+        assert custom["status"] == "custom_code_executed"
+        assert custom["node_id"] == "external_questions"
+        assert custom["contract"]["execution"] == "http"
+        assert custom["contract"]["method"] == "POST"
+        assert custom["contract"]["url"].startswith("http://127.0.0.1:")
+        assert custom["output"]["question_count"] == 1
+        assert custom["output"]["node"] == "external_questions"
+        assert custom["output"]["session_id"] == session_id
+        assert custom["output"]["input_path"] == "assistant_message.text"
+        assert custom["output"]["contract_execution"] == "http"
+        assert Handler.received[0]["context"]["node_id"] == "external_questions"
+    finally:
+        server.shutdown()
+        server.server_close()
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated runtime executes deterministic HTTP and transform nodes", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-integration-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
