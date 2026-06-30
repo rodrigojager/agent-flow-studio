@@ -7904,6 +7904,20 @@ function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: Stu
       turn: scenario.checkpoint.turn,
       mode: "scenario-fork",
     };
+    metadata.restore = {
+      mode: "scenario-fork",
+      source: "studio-snapshot",
+      sourceRunId: scenario.checkpoint.sourceRunId,
+      sourceSessionId: scenario.checkpoint.sourceSessionId,
+      eventSeq: scenario.checkpoint.eventSeq,
+      eventType: scenario.checkpoint.eventType,
+      nodeId: scenario.checkpoint.nodeId,
+      snapshotSeq: scenario.checkpoint.snapshotSeq,
+      status: scenario.checkpoint.status,
+      phase: scenario.checkpoint.phase,
+      turn: scenario.checkpoint.turn,
+      state: scenario.checkpoint.state,
+    };
   }
   if (nodePins.length > 0) {
     metadata.nodePins = {

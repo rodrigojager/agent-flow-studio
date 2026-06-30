@@ -77,6 +77,7 @@
 - Cenários do Studio importam/exportam fixture JSON de replay com input, thresholds, checkpoint, pins ativos/stale e metadata de execução pronta para reaproveitamento.
 - Cenários/fixtures do Studio podem ser executados em lote sequencial com resumo por cenário, sessão, duração, erro e comparação automática com o run anterior do mesmo cenário.
 - O lote de cenários agora gera relatório JSON exportável (`agent-flow-builder.scenario-batch-report.v1`) com resumo, hash determinístico, resultados por cenário e aprovação local do lote quando não há erro de execução/comparação nem regressão `fail`.
+- Cenários forkados agora enviam `restore.state` na metadata e o runtime FastAPI gerado restaura o estado inicial do novo thread usando checkpointer real por `sourceSessionId` quando disponível, com fallback para o snapshot serializado do Studio.
 - Causality do Studio foi incorporada ao fluxo persistido e ao grafo da UI (`upstream`, `impact`, `cascata`) com destaque de eventos/nós no replay, incluindo trilha visual no painel de grafo.
 - Build Docker pela UI passa a expor progresso incremental por etapa em `docker compose build` e mantém log de progresso persistido no histórico operacional.
 - Studio Local ganhou painel `Contexto do nó`, acionado pelo clique/filtro de nó, reunindo status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output inferidos, estado do nó, métricas de usage/custo/duração, spans estruturados, diffs e logs correlacionados.
@@ -147,7 +148,7 @@ Também foi validado localmente:
 
 ## Ainda não implementado
 
-- Studio Local: evoluir de fork local reexecutável para restauração real de estado por checkpointer/runtime.
+- Studio Local: refinar a UX de restauração de checkpoint, incluindo indicação explícita de origem `checkpointer` versus `snapshot` e validações de compatibilidade de versão/hash.
 - Tema claro e escuro ainda precisa ampliar a auditoria visual para estados internos específicos de erro/loading em painéis como arquivos, runtime manifest e Studio; o status global, shell principal, abas base, runs locais com dados, aprovação desatualizada, fluxo aprovado até o artefato Docker final e estados Docker build/running/stopped/erro já têm gate automatizado.
 - Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.

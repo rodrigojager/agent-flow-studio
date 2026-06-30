@@ -212,6 +212,108 @@ def test_llm_node_pin_replays_without_live_generation(tmp_path):
   });
 });
 
+test("generated runtime restores scenario checkpoint state from metadata", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-restore-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente com restore");
+  await generateLangGraphRuntime({ flow: simpleFlow("restore-agent", "Agente Restore"), flowRoot, outDir });
+
+  await writeFile(
+    path.join(outDir, "tests", "test_checkpoint_restore.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "restore.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_restore_state_continues_turn_count_and_skips_fresh_start(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(
+        _path(),
+        headers={"Idempotency-Key": "create"},
+        json={
+            "metadata": {
+                "scenario": {"id": "fork-1", "label": "Fork", "useNodePins": False},
+                "restore": {
+                    "mode": "scenario-fork",
+                    "source": "studio-snapshot",
+                    "sourceSessionId": "source-session",
+                    "eventSeq": 7,
+                    "snapshotSeq": 7,
+                    "state": {
+                        "session": {
+                            "status": "active",
+                            "phase": "awaiting_turn",
+                            "turn": 1,
+                            "max_turns": 3,
+                        },
+                        "recent_messages": [
+                            {"role": "user", "content": "mensagem anterior"},
+                            {"role": "assistant", "content": "resposta anterior"},
+                        ],
+                        "nodes": {"llm_step": {"status": "active"}},
+                        "outputs": {"llm_step": {"assistant_message": {"code": "OLD", "text": "anterior"}}},
+                    },
+                },
+            },
+            "max_turns": 3,
+        },
+    )
+    assert create_resp.status_code == 200
+    session = create_resp.json()["session"]
+    assert session["status"] == "active"
+    assert session["phase"] == "awaiting_turn"
+    assert session["turn"] == 1
+    session_id = session["session_id"]
+
+    start_resp = client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+    assert start_resp.status_code == 200
+    assert start_resp.json()["messages"] == []
+    assert start_resp.json()["session"]["turn"] == 1
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "continue do checkpoint"},
+    )
+    assert turn_resp.status_code == 200
+    assert turn_resp.json()["session"]["turn"] == 2
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    by_type = {item["event_type"]: item for item in events}
+    assert "checkpoint_restored" in by_type
+    restore_payload = by_type["checkpoint_restored"]["payload"]
+    assert restore_payload["source"] == "metadata"
+    assert restore_payload["turn"] == 1
+    assert "recent_messages" in restore_payload["stateKeys"]
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated runtime executes switch and human input nodes", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-switch-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

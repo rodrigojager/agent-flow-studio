@@ -3069,6 +3069,137 @@ class ReferenceAgentService:
         self.graph = graph
         self.cache = cache
 
+    def _restore_envelope(self, metadata: dict[str, Any]) -> dict[str, Any] | None:
+        restore = metadata.get("restore")
+        if isinstance(restore, dict):
+            return dict(restore)
+        checkpoint = metadata.get("checkpoint")
+        if isinstance(checkpoint, dict):
+            return dict(checkpoint)
+        return None
+
+    def _load_checkpoint_values(self, source_session_id: str | None) -> dict[str, Any] | None:
+        if not source_session_id:
+            return None
+        try:
+            snapshot = self.graph.get_state({"configurable": {"thread_id": source_session_id}})
+            values = getattr(snapshot, "values", None)
+            if values is None and isinstance(snapshot, dict):
+                values = snapshot.get("values")
+            return dict(values) if isinstance(values, dict) else None
+        except Exception:
+            return None
+
+    def _resolve_restore_state(self, metadata: dict[str, Any]) -> dict[str, Any] | None:
+        envelope = self._restore_envelope(metadata)
+        if not envelope:
+            return None
+        source_session_id = str(envelope.get("sourceSessionId") or envelope.get("source_session_id") or "").strip() or None
+        checkpoint_values = self._load_checkpoint_values(source_session_id)
+        if checkpoint_values:
+            return {
+                "source": "checkpointer",
+                "sourceSessionId": source_session_id,
+                "state": checkpoint_values,
+            }
+        raw_state = envelope.get("state")
+        if isinstance(raw_state, dict):
+            return {
+                "source": "metadata",
+                "sourceSessionId": source_session_id,
+                "state": dict(raw_state),
+            }
+        return None
+
+    def _restore_recent_messages(self, restored_state: dict[str, Any]) -> list[dict[str, str]]:
+        recent = restored_state.get("recent_messages")
+        if isinstance(recent, list):
+            normalized = [
+                {"role": str(item.get("role")), "content": str(item.get("content"))}
+                for item in recent
+                if isinstance(item, dict) and item.get("role") and item.get("content")
+            ]
+            if normalized:
+                return normalized[-RECENT_LIMIT:]
+
+        transcript = restored_state.get("transcript")
+        if not isinstance(transcript, dict):
+            return []
+        messages: list[dict[str, str]] = []
+        last_user = transcript.get("last_user")
+        if isinstance(last_user, dict) and last_user.get("content"):
+            messages.append({"role": "user", "content": str(last_user["content"])})
+        last_assistant = transcript.get("last_assistant")
+        if isinstance(last_assistant, dict) and last_assistant.get("content"):
+            messages.append({"role": "assistant", "content": str(last_assistant["content"])})
+        return messages[-RECENT_LIMIT:]
+
+    def _normalize_restore_state(
+        self,
+        raw_state: dict[str, Any],
+        row: AgentSession,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        restored = dict(raw_state)
+        session_state = restored.get("session") if isinstance(restored.get("session"), dict) else {}
+        status = str(session_state.get("status") or restored.get("status") or row.status or "active")
+        if status == "completed":
+            status = "active"
+        phase = str(session_state.get("phase") or restored.get("phase") or row.phase or "restored")
+        raw_turn = session_state.get("turn", restored.get("turn", row.turn))
+        try:
+            turn = max(0, int(raw_turn))
+        except Exception:
+            turn = max(0, int(row.turn or 0))
+
+        restored["session_id"] = row.session_id
+        restored["status"] = status
+        restored["phase"] = phase
+        restored["turn"] = turn
+        restored["max_turns"] = row.max_turns
+        restored["session_metadata"] = metadata
+        restored["is_complete"] = False
+        if "recent_messages" not in restored:
+            recent = self._restore_recent_messages(restored)
+            if recent:
+                restored["recent_messages"] = recent
+        if "executed_nodes" not in restored:
+            nodes = restored.get("nodes")
+            restored["executed_nodes"] = list(nodes.keys()) if isinstance(nodes, dict) else []
+        return restored
+
+    def _initial_restore(self, row: AgentSession) -> dict[str, Any] | None:
+        metadata = row.metadata_json or {}
+        resolved = self._resolve_restore_state(metadata)
+        if not resolved:
+            return None
+        state = self._normalize_restore_state(resolved["state"], row, metadata)
+        return {
+            "source": resolved.get("source"),
+            "sourceSessionId": resolved.get("sourceSessionId"),
+            "state": state,
+        }
+
+    def _restore_event_payload(self, restore: dict[str, Any]) -> dict[str, Any]:
+        state = restore.get("state") if isinstance(restore.get("state"), dict) else {}
+        return {
+            "source": restore.get("source"),
+            "sourceSessionId": restore.get("sourceSessionId"),
+            "status": state.get("status"),
+            "phase": state.get("phase"),
+            "turn": state.get("turn"),
+            "stateKeys": sorted(str(key) for key in state.keys()),
+        }
+
+    def _merge_restore_state(self, base_state: dict[str, Any], restored_state: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(restored_state)
+        restored_recent = restored_state.get("recent_messages")
+        base_recent = base_state.get("recent_messages")
+        merged.update(base_state)
+        if isinstance(restored_recent, list) and isinstance(base_recent, list):
+            merged["recent_messages"] = [*restored_recent, *base_recent][-RECENT_LIMIT:]
+        return merged
+
     def create_session(
         self,
         db: Session,
@@ -3078,13 +3209,31 @@ class ReferenceAgentService:
         auto_start: bool = False,
     ) -> dict[str, Any]:
         row = repo.create_session(db, max_turns=max_turns, metadata_json=metadata)
+        restore = self._initial_restore(row)
+        if restore:
+            restore_state = restore["state"]
+            repo.update_session_state(
+                db,
+                row,
+                status=str(restore_state.get("status") or "active"),
+                phase=str(restore_state.get("phase") or "restored"),
+                turn=int(restore_state.get("turn") or 0),
+            )
         repo.append_event(
             db,
             session_id=row.session_id,
             event_type="session_created",
             node=None,
-            payload={"auto_start": auto_start},
+            payload={"auto_start": auto_start, "restored": bool(restore)},
         )
+        if restore:
+            repo.append_event(
+                db,
+                session_id=row.session_id,
+                event_type="checkpoint_restored",
+                node=None,
+                payload=self._restore_event_payload(restore),
+            )
         response = {"session": session_view(row), "messages": []}
         if auto_start:
             started = self.start_session(db, row.session_id)
@@ -3109,6 +3258,20 @@ class ReferenceAgentService:
         if existing_messages:
             repo.update_session_state(db, row, status="active")
             return {"session": session_view(row), "messages": [message_view(item) for item in existing_messages]}
+        restore = self._initial_restore(row)
+        if restore:
+            restore_state = restore["state"]
+            repo.update_session_state(
+                db,
+                row,
+                status=str(restore_state.get("status") or "active"),
+                phase=str(restore_state.get("phase") or "restored"),
+                turn=int(restore_state.get("turn") or row.turn or 0),
+            )
+            recent = self._restore_recent_messages(restore_state)
+            if recent:
+                self.cache.set_json(recent_key(row.session_id), recent, ttl_seconds=self.settings.redis_ttl_seconds)
+            return {"session": session_view(row), "messages": []}
 
         result = self._invoke_graph(
             db,
@@ -3162,22 +3325,22 @@ class ReferenceAgentService:
         )
         recent_messages = self._recent_messages(db, row.session_id)
         recent_messages.append({"role": "user", "content": user_message})
-        result = self._invoke_graph(
-            db,
-            {
-                "action": "turn",
-                "session_id": row.session_id,
-                "status": row.status,
-                "phase": row.phase,
-                "turn": row.turn,
-                "max_turns": row.max_turns,
-                "user_message": user_message,
-                "recent_messages": recent_messages[-RECENT_LIMIT:],
-                "session_metadata": row.metadata_json or {},
-                "executed_nodes": [],
-            },
-            row.session_id,
-        )
+        graph_state = {
+            "action": "turn",
+            "session_id": row.session_id,
+            "status": row.status,
+            "phase": row.phase,
+            "turn": row.turn,
+            "max_turns": row.max_turns,
+            "user_message": user_message,
+            "recent_messages": recent_messages[-RECENT_LIMIT:],
+            "session_metadata": row.metadata_json or {},
+            "executed_nodes": [],
+        }
+        restore = self._initial_restore(row)
+        if restore and row.turn <= int(restore["state"].get("turn") or 0):
+            graph_state = self._merge_restore_state(graph_state, restore["state"])
+        result = self._invoke_graph(db, graph_state, row.session_id)
         result = self._normalize_turn_result(result, row)
         completed = bool(result.get("is_complete"))
         repo.update_session_state(

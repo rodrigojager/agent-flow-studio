@@ -700,6 +700,7 @@ Entregaveis:
 
 - cenarios salvos;
 - pin/mock data;
+- restore de checkpoint por checkpointer/snapshot;
 - output render/raw;
 - input form por schema;
 - secrets locais mascarados;
@@ -710,6 +711,7 @@ Entregaveis:
 Aceite:
 
 - usuario reproduz falha com dados fixos;
+- usuario reexecuta cenário forkado continuando do turno/estado restaurado;
 - usuario exporta um lote aprovado como evidencia JSON com hash;
 - pin/mock local nao contamina runtime final sem decisao explicita.
 

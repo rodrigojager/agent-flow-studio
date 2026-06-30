@@ -382,7 +382,8 @@ Status 2026-06-30:
 - implementado: importação/exportação de fixture JSON por cenário com input, thresholds, checkpoint, pins ativos/stale e metadata de replay;
 - implementado: execução sequencial em lote de cenários/fixtures com resumo por cenário, sessão, duração, erro e comparação automática com o run anterior do mesmo cenário;
 - implementado: relatório JSON exportável de lote com hash determinístico, resumo de severidade, resultados por cenário e aprovação local quando o lote não contém erro ou regressão `fail`;
-- pendente: filtros avançados de histórico operacional e restauração real de estado por checkpointer/runtime.
+- implementado: restauração de cenário forkado no runtime gerado, preferindo estado real do checkpointer por `sourceSessionId` e usando snapshot serializado do Studio como fallback;
+- pendente: filtros avançados de histórico operacional e refinamento de UX/validação para restauração de checkpoint.
 
 ### Fase 7.5: Grafo Interativo de Execução
 
@@ -474,7 +475,7 @@ Mas a ferramenta não deve depender disso para operar.
 1. aprofundar o drill-down contextual no Studio:
    - abrir node-io e eventos no mesmo clique do nó falho/impactado;
    - ampliar cobertura de exemplos e cenários salvos para as regras específicas por tipo de nó;
-   - evoluir o fork local de checkpoint para restauração real quando o runtime expuser retomada por estado/checkpointer.
+   - refinar indicação visual de origem da restauração (`checkpointer` ou `snapshot`) e compatibilidade de versão/hash.
 2. melhorar inspeção de execução longa:
    - histórico operacional com filtro por nível;
    - status persistente de build/up/smoke com alertas visuais de regressão.
@@ -489,7 +490,7 @@ Mas a ferramenta não deve depender disso para operar.
    - execução sequencial em lote de fixtures já implementada;
    - comparação automática de baseline/candidate por lote já implementada;
    - relatório/aprovação exportável de lote já implementado;
-   - evoluir restauração real de estado/checkpointer além do payload pinado.
+   - restauração por checkpointer/snapshot já implementada no runtime gerado.
 4. auditoria completa de tema:
    - verificar fluxo em ambas paletas;
    - revisar contraste e tooltips em telas `Flow`, `Studio`, `Artefatos`, `Runtime`;

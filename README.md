@@ -83,6 +83,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
 - Diagnóstico automático por nó com causa provável, próximas ações e evidências do evento/snapshot.
 - Diagnóstico contextual por tipo de nó para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics.
 - Fork de checkpoint/evento para cenário local reexecutável, preservando origem do run, evento, snapshot e metadata da reexecução.
+- Restauração de cenário forkado no runtime gerado: o Studio envia `restore.state` e o FastAPI tenta primeiro recuperar estado real do checkpointer pelo `sourceSessionId`, caindo para o snapshot serializado quando necessário.
 - Pin local de input/output por nó no Studio, com indicador `atual/stale` quando a definição do nó muda.
 - Cenários podem usar pins ativos como mock/replay determinístico por nó; a execução envia os pins na metadata da sessão e o runtime gerado evita efeitos reais do nó quando há pin compatível.
 - Cenários possuem thresholds de regressão para crescimento de tokens, custo e duração; esses limites acompanham a metadata da execução e controlam o veredito da comparação.
@@ -142,13 +143,12 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 - Ampliar auditoria visual automatizada para estados gerais de erro/loading em painéis específicos além do status global e do fluxo Docker.
 - Melhorar ergonomia do canvas com grupos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.
-- Evoluir replay por pins com restauração real de estado.
+- Refinar replay por pins e restauração de estado com UX mais guiada.
 
 ### Médio Prazo
 
 - Playground avançado com forms derivados de schema, output render/raw e secrets locais mascarados.
 - Alertas de regressão configuráveis por tipo de nó.
-- Restauração real de estado a partir de checkpointer/runtime, além do fork local já disponível como cenário.
 - Catálogo local de templates, tools, skills e agents reutilizáveis.
 - Editor visual de manifesto multiagente.
 - Trace filtrável por agente.
