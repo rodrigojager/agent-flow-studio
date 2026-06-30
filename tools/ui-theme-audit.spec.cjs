@@ -115,7 +115,7 @@ for (const theme of themes) {
     await expect(selectedScenarioCard.getByText("Fork llm_step #4", { exact: true })).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Fork de checkpoint: .*#4.*llm_step/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Restore: checkpointer -> snapshot/)).toBeVisible();
-    await expect(selectedScenarioCard.getByText(/compatibilidade: sessão e snapshot local/)).toBeVisible();
+    await expect(selectedScenarioCard.getByText(/compatibilidade: versão\/hash(\/projeto)? atuais/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Mock por pins de nó: 1 pin/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Thresholds: tokens \+12%.*custo \+20%.*duração \+30%/)).toBeVisible();
     const [fixtureDownload] = await Promise.all([
@@ -131,6 +131,14 @@ for (const theme of themes) {
     expect(fixture.format).toBe("agent-flow-builder.replay-fixture.v1");
     expect(fixture.scenario.label).toBe("Fork llm_step #4");
     expect(fixture.scenario.regressionThresholds.tokenGrowthPct).toBe(12);
+    expect(fixture.flow.flowHash).toMatch(/^[a-f0-9]{8}$/);
+    expect(fixture.scenario.checkpoint.compatibility.flowId).toBe("reference-interview");
+    expect(fixture.scenario.checkpoint.compatibility.flowVersion).toBe("0.1.0");
+    expect(fixture.scenario.checkpoint.compatibility.flowHash).toMatch(/^[a-f0-9]{8}$/);
+    expect(fixture.scenario.checkpoint.compatibility.nodeId).toBe("llm_step");
+    expect(fixture.scenario.checkpoint.compatibility.nodeHash).toMatch(/^[a-f0-9]{8}$/);
+    expect(fixture.metadata.checkpoint.compatibility.flowHash).toBe(fixture.scenario.checkpoint.compatibility.flowHash);
+    expect(fixture.metadata.restore.compatibility.nodeHash).toBe(fixture.scenario.checkpoint.compatibility.nodeHash);
     expect(fixture.pins.enabled).toBe(true);
     expect(fixture.pins.activeCount).toBe(1);
     expect(fixture.metadata.nodePins.count).toBe(1);
@@ -148,6 +156,23 @@ for (const theme of themes) {
     await expect(page.getByRole("button", { name: /^Exportar relatório$/ })).toBeDisabled();
     await expect(page.getByRole("button", { name: /^Aprovar lote$/ })).toBeDisabled();
     await expect(page.locator(".turn-input")).toHaveValue("Aumentar conversões em onboarding.");
+
+    const incompatibleFixture = JSON.parse(JSON.stringify(fixture));
+    incompatibleFixture.scenario.id = `${fixture.scenario.id}-incompatible`;
+    incompatibleFixture.scenario.label = "Fork incompatível";
+    incompatibleFixture.scenario.checkpoint.compatibility.flowHash = "deadbeef";
+    incompatibleFixture.metadata.checkpoint.compatibility.flowHash = "deadbeef";
+    incompatibleFixture.metadata.restore.compatibility.flowHash = "deadbeef";
+    const incompatibleFixturePath = fixturePath.replace(/\.json$/, "-incompatible.json");
+    await fs.writeFile(incompatibleFixturePath, JSON.stringify(incompatibleFixture), "utf8");
+    const [incompatibleFixtureChooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      page.getByRole("button", { name: /^Importar fixture$/ }).click(),
+    ]);
+    await incompatibleFixtureChooser.setFiles(incompatibleFixturePath);
+    await expect(page.getByText('Fixture "Fork incompatível" importada com 1 pin(s).')).toBeVisible();
+    await page.getByRole("button", { name: /^Executar selecionado$/ }).click();
+    await expect(page.getByRole("alert")).toContainText(/não pode restaurar checkpoint: hash local do flow mudou/);
 
     await expectNoDocumentHorizontalOverflow(page);
     await expectTopbarControlsToFit(page);

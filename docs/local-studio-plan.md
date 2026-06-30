@@ -384,7 +384,8 @@ Status 2026-06-30:
 - implementado: relatório JSON exportável de lote com hash determinístico, resumo de severidade, resultados por cenário e aprovação local quando o lote não contém erro ou regressão `fail`;
 - implementado: restauração de cenário forkado no runtime gerado, preferindo estado real do checkpointer por `sourceSessionId` e usando snapshot serializado do Studio como fallback;
 - implementado: indicação visual da estratégia esperada e da origem observada da restauração de checkpoint (`checkpointer` ou `snapshot`) no cenário forkado e no `State inspector`;
-- pendente: filtros avançados de histórico operacional e validação forte de compatibilidade de versão/hash para restauração de checkpoint.
+- implementado: validação forte de compatibilidade de versão/hash para restauração de checkpoint, com assinatura no fork/fixture e bloqueio de execução quando `flowId`, versão, hash local, hash de projeto/assets ou hash de nó divergem;
+- pendente: filtros avançados de histórico operacional.
 
 ### Fase 7.5: Grafo Interativo de Execução
 
@@ -476,7 +477,7 @@ Mas a ferramenta não deve depender disso para operar.
 1. aprofundar o drill-down contextual no Studio:
    - abrir node-io e eventos no mesmo clique do nó falho/impactado;
    - ampliar cobertura de exemplos e cenários salvos para as regras específicas por tipo de nó;
-   - adicionar validação forte de compatibilidade de versão/hash para restauração de checkpoint.
+   - validação forte de compatibilidade de versão/hash para restauração de checkpoint já implementada.
 2. melhorar inspeção de execução longa:
    - histórico operacional com filtro por nível;
    - status persistente de build/up/smoke com alertas visuais de regressão.
@@ -491,7 +492,8 @@ Mas a ferramenta não deve depender disso para operar.
    - execução sequencial em lote de fixtures já implementada;
    - comparação automática de baseline/candidate por lote já implementada;
    - relatório/aprovação exportável de lote já implementado;
-   - restauração por checkpointer/snapshot já implementada no runtime gerado.
+   - restauração por checkpointer/snapshot já implementada no runtime gerado;
+   - assinatura de compatibilidade por checkpoint/fixture já implementada.
 4. auditoria completa de tema:
    - verificar fluxo em ambas paletas;
    - revisar contraste e tooltips em telas `Flow`, `Studio`, `Artefatos`, `Runtime`;

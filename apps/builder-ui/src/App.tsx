@@ -199,6 +199,25 @@ interface StudioScenarioCheckpoint {
   input: unknown;
   output: unknown;
   createdAt: string;
+  compatibility: StudioScenarioCheckpointCompatibility | null;
+}
+
+interface StudioScenarioCheckpointCompatibility {
+  flowId: string;
+  flowVersion: string;
+  flowHash: string;
+  projectHash: string | null;
+  nodeId: string | null;
+  nodeHash: string | null;
+  checkedAt: string;
+}
+
+type StudioScenarioCheckpointCompatibilityLevel = "ok" | "warning" | "error";
+
+interface StudioScenarioCheckpointCompatibilityStatus {
+  level: StudioScenarioCheckpointCompatibilityLevel;
+  label: string;
+  reasons: string[];
 }
 
 interface StudioNodePin {
@@ -223,6 +242,7 @@ interface StudioScenarioReplayFixture {
     id: string;
     name: string;
     version: string;
+    flowHash: string;
     nodeCount: number;
     edgeCount: number;
   };
@@ -2496,6 +2516,12 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     const now = new Date().toISOString();
     const nodeId = selectedStudioEvent.node ?? null;
     const input = inferCheckpointForkInput(selectedStudioEvent, transcript);
+    const compatibility = buildStudioScenarioCheckpointCompatibility(
+      draftFlow,
+      nodeId,
+      langGraphApprovalStatus,
+      now,
+    );
     const checkpoint: StudioScenarioCheckpoint = {
       sourceRunId: selectedStudioRunId || "run-atual",
       sourceSessionId: runtimeSession?.session_id ?? "",
@@ -2510,6 +2536,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       input: inferEventInput(selectedStudioEvent, transcript),
       output: inferEventOutput(selectedStudioEvent.payload),
       createdAt: now,
+      compatibility,
     };
     const label = `Fork ${nodeId ?? "runtime"} #${selectedStudioEvent.seq}`;
     const tags = splitTags(["fork", "checkpoint", nodeId ?? "runtime", `evento-${selectedStudioEvent.seq}`].join(", "));
@@ -2576,6 +2603,12 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     const message = scenario.input.trim();
     if (!message) {
       throw new Error(`Cenário "${scenario.label}" não tem mensagem.`);
+    }
+    const restoreCompatibility = checkpointCompatibilityStatus(draftFlow, scenario.checkpoint, langGraphApprovalStatus);
+    if (restoreCompatibility.level === "error") {
+      throw new Error(
+        `Cenário "${scenario.label}" não pode restaurar checkpoint: ${restoreCompatibility.reasons.join("; ")}`,
+      );
     }
     const startedAt = Date.now();
     const runningSandbox = await ensureSandboxRunningForScenario();
@@ -3339,6 +3372,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               sandbox={sandbox}
               sandboxes={activeSandboxes}
               sandboxPort={sandboxPort}
+              langGraphApprovalStatus={langGraphApprovalStatus}
               session={runtimeSession}
               transcript={transcript}
               events={runtimeEventsData}
@@ -4892,6 +4926,7 @@ function SandboxPanel({
   sandbox,
   sandboxes,
   sandboxPort,
+  langGraphApprovalStatus,
   session,
   transcript,
   events,
@@ -4973,6 +5008,7 @@ function SandboxPanel({
   sandbox: SandboxStatus | null;
   sandboxes: SandboxStatus[];
   sandboxPort: string;
+  langGraphApprovalStatus: LangGraphSandboxApprovalStatus | null;
   session: SessionView | null;
   transcript: MessageView[];
   events: EventView[];
@@ -5087,6 +5123,11 @@ function SandboxPanel({
     : null;
   const hasCausalAnalysis = studioRunCausalAnalysis.failedNode !== null;
   const selectedScenario = studioScenarios.find((scenario) => scenario.id === studioSelectedScenarioId);
+  const selectedCheckpointCompatibility = checkpointCompatibilityStatus(
+    flow,
+    selectedScenario?.checkpoint ?? null,
+    langGraphApprovalStatus,
+  );
   const pinnedScenario = studioScenarios.find((scenario) => scenario.isPinned);
   const activeNodePinCount = activeStudioNodePins(studioNodePins, flow).length;
   const batchSummary = summarizeStudioScenarioBatchResults(studioScenarioBatchResults);
@@ -5329,7 +5370,12 @@ function SandboxPanel({
                 <small>
                   Restore: {restoreStrategyLabel(selectedScenario.checkpoint)} · {checkpointStateShape(selectedScenario.checkpoint)}
                 </small>
-                <small>{checkpointCompatibilityLabel(selectedScenario.checkpoint)}</small>
+                <small className={`checkpoint-compatibility ${selectedCheckpointCompatibility.level}`}>
+                  {selectedCheckpointCompatibility.label}
+                </small>
+                {selectedCheckpointCompatibility.reasons.length > 0 ? (
+                  <small>{selectedCheckpointCompatibility.reasons.join(" · ")}</small>
+                ) : null}
               </>
             ) : null}
             {checkpointRestoreEvent ? (
@@ -7950,22 +7996,113 @@ function checkpointStateShape(checkpoint: StudioScenarioCheckpoint | null): stri
   return `estado: ${visible}${suffix}`;
 }
 
-function checkpointCompatibilityLabel(checkpoint: StudioScenarioCheckpoint | null): string {
+function checkpointCompatibilityStatus(
+  flow: AgentFlow | null,
+  checkpoint: StudioScenarioCheckpoint | null,
+  approvalStatus: LangGraphSandboxApprovalStatus | null,
+): StudioScenarioCheckpointCompatibilityStatus {
   if (!checkpoint) {
-    return "compatibilidade: sem checkpoint";
+    return { level: "ok", label: "compatibilidade: sem checkpoint", reasons: [] };
   }
-  const hasSourceSession = Boolean(checkpoint.sourceSessionId);
-  const hasSnapshot = isRecord(checkpoint.state);
-  if (hasSourceSession && hasSnapshot) {
-    return "compatibilidade: sessão e snapshot local";
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (!checkpoint.sourceSessionId && !isRecord(checkpoint.state)) {
+    errors.push("checkpoint sem sessão de origem e sem snapshot local");
   }
-  if (hasSourceSession) {
-    return "compatibilidade: sessão de origem";
+  const compatibility = checkpoint.compatibility;
+  if (!compatibility) {
+    warnings.push("checkpoint legado sem assinatura de versão/hash");
+    return errors.length > 0
+      ? { level: "error", label: "compatibilidade: incompatível", reasons: errors }
+      : { level: "warning", label: "compatibilidade: legado sem hash", reasons: warnings };
   }
-  if (hasSnapshot) {
-    return "compatibilidade: snapshot sem sessão de origem";
+  if (!flow) {
+    warnings.push("flow atual indisponível para validar hash");
+    return errors.length > 0
+      ? { level: "error", label: "compatibilidade: incompatível", reasons: errors }
+      : { level: "warning", label: "compatibilidade: parcial", reasons: warnings };
   }
-  return "compatibilidade: sem estado restaurável";
+  if (compatibility.flowId && compatibility.flowId !== flow.id) {
+    errors.push(`flow mudou de ${compatibility.flowId} para ${flow.id}`);
+  }
+  if (compatibility.flowVersion && compatibility.flowVersion !== flow.version) {
+    errors.push(`versão mudou de ${compatibility.flowVersion} para ${flow.version}`);
+  }
+  const currentFlowHash = hashStudioFlowDefinition(flow);
+  if (compatibility.flowHash && compatibility.flowHash !== currentFlowHash) {
+    errors.push("hash local do flow mudou");
+  } else if (!compatibility.flowHash) {
+    warnings.push("checkpoint sem hash local do flow");
+  }
+  const currentProjectHash = currentStudioProjectHash(flow, approvalStatus);
+  if (compatibility.projectHash && currentProjectHash && compatibility.projectHash !== currentProjectHash) {
+    errors.push("hash de projeto/assets mudou");
+  } else if (compatibility.projectHash && !currentProjectHash) {
+    warnings.push("hash de projeto/assets atual indisponível");
+  } else if (!compatibility.projectHash && currentProjectHash) {
+    warnings.push("checkpoint sem hash de projeto/assets");
+  }
+  const checkpointNodeId = compatibility.nodeId ?? checkpoint.nodeId;
+  if (checkpointNodeId) {
+    const currentNode = studioPinNodeForHash(flow, checkpointNodeId);
+    if (!currentNode) {
+      errors.push(`nó ${checkpointNodeId} não existe mais`);
+    } else {
+      const currentNodeHash = hashStudioNodeDefinition(currentNode);
+      if (compatibility.nodeHash && compatibility.nodeHash !== currentNodeHash) {
+        errors.push(`hash do nó ${checkpointNodeId} mudou`);
+      } else if (!compatibility.nodeHash) {
+        warnings.push(`checkpoint sem hash do nó ${checkpointNodeId}`);
+      }
+    }
+  }
+  if (errors.length > 0) {
+    return { level: "error", label: "compatibilidade: incompatível", reasons: errors };
+  }
+  if (warnings.length > 0) {
+    return { level: "warning", label: "compatibilidade: parcial", reasons: warnings };
+  }
+  return {
+    level: "ok",
+    label: compatibility.projectHash && currentProjectHash
+      ? "compatibilidade: versão/hash/projeto atuais"
+      : "compatibilidade: versão/hash atuais",
+    reasons: [],
+  };
+}
+
+function buildStudioScenarioCheckpointCompatibility(
+  flow: AgentFlow | null,
+  nodeId: string | null,
+  approvalStatus: LangGraphSandboxApprovalStatus | null,
+  checkedAt: string,
+): StudioScenarioCheckpointCompatibility | null {
+  if (!flow) {
+    return null;
+  }
+  const currentNode = nodeId ? studioPinNodeForHash(flow, nodeId) : null;
+  return {
+    flowId: flow.id,
+    flowVersion: flow.version,
+    flowHash: hashStudioFlowDefinition(flow),
+    projectHash: currentStudioProjectHash(flow, approvalStatus),
+    nodeId,
+    nodeHash: currentNode ? hashStudioNodeDefinition(currentNode) : null,
+    checkedAt,
+  };
+}
+
+function currentStudioProjectHash(
+  flow: AgentFlow | null,
+  approvalStatus: LangGraphSandboxApprovalStatus | null,
+): string | null {
+  if (!flow || !approvalStatus?.flowHash?.trim()) {
+    return null;
+  }
+  if (approvalStatus.flowId !== flow.id || approvalStatus.flowVersion !== flow.version) {
+    return null;
+  }
+  return approvalStatus.flowHash;
 }
 
 function restorePayloadStateKeys(payload: Record<string, unknown> | null): string {
@@ -8020,6 +8157,7 @@ function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: Stu
       status: scenario.checkpoint.status,
       phase: scenario.checkpoint.phase,
       turn: scenario.checkpoint.turn,
+      compatibility: scenario.checkpoint.compatibility,
       mode: "scenario-fork",
     };
     metadata.restore = {
@@ -8035,6 +8173,7 @@ function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: Stu
       phase: scenario.checkpoint.phase,
       turn: scenario.checkpoint.turn,
       state: scenario.checkpoint.state,
+      compatibility: scenario.checkpoint.compatibility,
     };
   }
   if (nodePins.length > 0) {
@@ -8075,6 +8214,7 @@ function buildStudioScenarioReplayFixture(
       id: flow.id || flowId,
       name: flow.name,
       version: flow.version,
+      flowHash: hashStudioFlowDefinition(flow),
       nodeCount: flow.nodes.length,
       edgeCount: flow.edges.length,
     },
@@ -8192,6 +8332,7 @@ function normalizeStudioScenarioReplayFixture(value: unknown): StudioScenarioRep
       id: typeof flow.id === "string" ? flow.id : "",
       name: typeof flow.name === "string" ? flow.name : "",
       version: typeof flow.version === "string" ? flow.version : "",
+      flowHash: typeof flow.flowHash === "string" ? flow.flowHash : "",
       nodeCount: typeof flow.nodeCount === "number" && Number.isFinite(flow.nodeCount) ? flow.nodeCount : 0,
       edgeCount: typeof flow.edgeCount === "number" && Number.isFinite(flow.edgeCount) ? flow.edgeCount : 0,
     },
@@ -8354,6 +8495,36 @@ function normalizeStudioScenarioCheckpoint(value: unknown): StudioScenarioCheckp
     input: "input" in value ? value.input : null,
     output: "output" in value ? value.output : null,
     createdAt,
+    compatibility: normalizeStudioScenarioCheckpointCompatibility(value.compatibility),
+  };
+}
+
+function normalizeStudioScenarioCheckpointCompatibility(value: unknown): StudioScenarioCheckpointCompatibility | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.flowId !== "string" ||
+    !value.flowId.trim() ||
+    typeof value.flowVersion !== "string" ||
+    typeof value.flowHash !== "string" ||
+    !value.flowHash.trim()
+  ) {
+    return null;
+  }
+  const projectHash = typeof value.projectHash === "string" && value.projectHash.trim()
+    ? value.projectHash
+    : typeof value.approvalFlowHash === "string" && value.approvalFlowHash.trim()
+      ? value.approvalFlowHash
+      : null;
+  return {
+    flowId: value.flowId,
+    flowVersion: value.flowVersion,
+    flowHash: value.flowHash,
+    projectHash,
+    nodeId: typeof value.nodeId === "string" && value.nodeId.trim() ? value.nodeId : null,
+    nodeHash: typeof value.nodeHash === "string" && value.nodeHash.trim() ? value.nodeHash : null,
+    checkedAt: typeof value.checkedAt === "string" ? value.checkedAt : new Date().toISOString(),
   };
 }
 
@@ -8403,6 +8574,17 @@ function staleStudioNodePins(pins: StudioNodePin[], flow: AgentFlow | null): Stu
   return sortStudioNodePins(
     pins.filter((pin) => hashStudioNodeDefinition(studioPinNodeForHash(flow, pin.nodeId)) !== pin.nodeHash),
   );
+}
+
+function hashStudioFlowDefinition(flow: AgentFlow | null): string {
+  return simpleHash(stableStringify(flow ? normalizeFlowForCheckpointHash(flow) : { type: "flow" }));
+}
+
+function normalizeFlowForCheckpointHash(flow: AgentFlow): Record<string, unknown> {
+  return {
+    ...flow,
+    nodes: flow.nodes.map(normalizeNodeForPinHash),
+  };
 }
 
 function studioPinNodeForHash(flow: AgentFlow | null, nodeId: string): FlowNode | null {

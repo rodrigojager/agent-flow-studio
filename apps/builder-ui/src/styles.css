@@ -1227,6 +1227,41 @@ button:disabled {
   line-height: 1.35;
 }
 
+.runtime-item small {
+  overflow-wrap: anywhere;
+  color: #63736f;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.checkpoint-compatibility {
+  width: fit-content;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  font-weight: 700;
+}
+
+.checkpoint-compatibility.ok {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.checkpoint-compatibility.warning {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.checkpoint-compatibility.error {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .node-title {
   display: grid;
   gap: 4px;
@@ -1440,6 +1475,7 @@ button:disabled {
 [data-theme] .edit-group label span,
 [data-theme] .sandbox-header span,
 [data-theme] .runtime-item span,
+[data-theme] .runtime-item small,
 [data-theme] .statusbar,
 [data-theme] .tabs button {
   color: var(--text-muted);
@@ -1528,11 +1564,24 @@ button:disabled {
   background: var(--accent-soft);
 }
 
+[data-theme] .checkpoint-compatibility.ok {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 [data-theme] .approval-pill.approval-pill-pending,
-[data-theme] .approval-pill.approval-pill-outdated {
+[data-theme] .approval-pill.approval-pill-outdated,
+[data-theme] .checkpoint-compatibility.warning {
   border-color: var(--warning);
   color: var(--warning);
   background: var(--warning-soft);
+}
+
+[data-theme] .checkpoint-compatibility.error {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 [data-theme] .react-flow__node.flow-node {
