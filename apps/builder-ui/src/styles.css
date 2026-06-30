@@ -988,13 +988,18 @@ button:disabled {
 
 .catalog-history-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 6px;
   background: var(--surface-bg);
+}
+
+.catalog-history-item.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--surface-bg));
 }
 
 .catalog-history-item div {
@@ -1023,6 +1028,17 @@ button:disabled {
 
 .catalog-history-item .command-button {
   min-height: 30px;
+}
+
+.catalog-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.catalog-history-actions .command-button {
+  min-width: 96px;
 }
 
 .catalog-diff {

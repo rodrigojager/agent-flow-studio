@@ -207,6 +207,12 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.locator("footer[role='status']")).toContainText("restaurado para rev. 1", { timeout: 10_000 });
   await expect(revisionCard).toContainText("v1.0.0");
   await expect(revisionCard).toContainText("rev. 3");
+  await expect(revisionCard).toContainText("Histórico 2: rev. 2 para 3");
+  await expect(revisionCard.locator(".catalog-diff-row.removed")).toContainText("Linha revisada para histórico.");
+  await expect(revisionCard.locator(".catalog-diff-row.added")).toContainText("Linha inicial para histórico.");
+  await revisionCard.locator(".catalog-history-item", { hasText: "rev. 1" }).getByRole("button", { name: /^Comparar$/ }).click();
+  await expect(revisionCard).toContainText("Histórico 2: rev. 1 para 3");
+  await expect(revisionCard.locator(".catalog-diff-empty")).toContainText("Sem mudanças de conteúdo");
   await catalogPanel.getByLabel("Buscar no catálogo").fill("HTTP");
   await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toBeVisible();
   await expect(page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" })).toHaveCount(0);

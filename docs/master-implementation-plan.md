@@ -791,6 +791,7 @@ Entregaveis:
 - versionamento local basico por versão, revisão e hash de conteúdo;
 - histórico local de revisões com diff visual compacto;
 - restauração de revisão antiga como nova revisão local;
+- comparação selecionável de revisões históricas contra a revisão atual;
 - seeds locais para prompts, schemas, tools comuns, templates de agente e skills;
 - salvar prompt/schema atual no registry local;
 - salvar nó atual como tool/skill local reutilizável;
@@ -816,8 +817,9 @@ Status 2026-06-30:
 - implementada primeira camada de versionamento/curadoria: itens do catalogo carregam versão, revisão local incremental e hash curto de conteúdo, com metadados visíveis nos cards;
 - implementado histórico local de revisões: ao sobrescrever item local, o snapshot anterior fica em `history` e o card mostra diff compacto contra a revisão atual;
 - implementada restauração de revisão: snapshots antigos podem ser restaurados pela API/UI, criando nova revisão sem apagar o histórico;
+- implementada comparação selecionável: a UI permite escolher qual revisão histórica será comparada com a atual antes de restaurar ou reutilizar o item;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para skills compostas, tools compostas, comparação avançada de revisões, curadoria visual completa e compartilhamento real.
+- pendente evoluir para skills compostas, tools compostas, curadoria visual completa e compartilhamento real.
 
 ### Fase 11: Multiagente Local
 

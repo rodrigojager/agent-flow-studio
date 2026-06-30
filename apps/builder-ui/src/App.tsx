@@ -5870,6 +5870,7 @@ function CatalogPanel({
   const [sourceFilter, setSourceFilter] = useState<LocalCatalogItem["source"] | "">("");
   const [tagFilter, setTagFilter] = useState("");
   const [query, setQuery] = useState("");
+  const [compareRevisionByItem, setCompareRevisionByItem] = useState<Record<string, number>>({});
   const availableTags = useMemo(() => {
     const tags = new Set<string>();
     for (const item of catalog?.items ?? []) {
@@ -6032,9 +6033,11 @@ function CatalogPanel({
         {items.length ? (
           <div className="catalog-list">
             {items.map((item) => {
+              const itemKey = localCatalogItemKey(item);
               const revisions = catalogRevisionTimeline(item);
-              const previousRevision = revisions[0] ?? null;
-              const revisionDiff = previousRevision ? catalogRevisionDiff(previousRevision, item) : [];
+              const compareRevision =
+                revisions.find((revision) => revision.revision === compareRevisionByItem[itemKey]) ?? revisions[0] ?? null;
+              const revisionDiff = compareRevision ? catalogRevisionDiff(compareRevision, item) : [];
               return (
                 <article className="catalog-card" key={`${item.kind}-${item.id}`}>
                   <div className="catalog-card-header">
@@ -6049,31 +6052,51 @@ function CatalogPanel({
                     <span>rev. {item.revision}</span>
                     <span>{item.contentHash}</span>
                   </div>
-                  {previousRevision ? (
+                  {compareRevision ? (
                     <details className="catalog-history">
                       <summary>
                         <GitCompare size={14} aria-hidden="true" />
                         <span>
-                          Histórico {item.history.length}: rev. {previousRevision.revision} para {item.revision}
+                          Histórico {item.history.length}: rev. {compareRevision.revision} para {item.revision}
                         </span>
                       </summary>
                       <div className="catalog-history-meta">
-                        <span>v{previousRevision.version}</span>
-                        <span>{previousRevision.contentHash}</span>
+                        <span>Comparando rev. {compareRevision.revision}</span>
+                        <span>v{compareRevision.version}</span>
+                        <span>{compareRevision.contentHash}</span>
                       </div>
                       <div className="catalog-history-list">
                         {revisions.map((revision) => (
-                          <div className="catalog-history-item" key={`${item.id}-revision-${revision.revision}`}>
+                          <div
+                            className={`catalog-history-item ${revision.revision === compareRevision.revision ? "selected" : ""}`}
+                            key={`${item.id}-revision-${revision.revision}`}
+                          >
                             <div>
                               <strong>rev. {revision.revision}</strong>
                               <span>
                                 v{revision.version} | {revision.contentHash}
                               </span>
                             </div>
-                            <button type="button" className="command-button" onClick={() => onRestoreRevision(item, revision)}>
-                              <RefreshCw size={14} aria-hidden="true" />
-                              Restaurar
-                            </button>
+                            <div className="catalog-history-actions">
+                              <button
+                                type="button"
+                                className="command-button"
+                                onClick={() =>
+                                  setCompareRevisionByItem((current) => ({
+                                    ...current,
+                                    [itemKey]: revision.revision,
+                                  }))
+                                }
+                                disabled={revision.revision === compareRevision.revision}
+                              >
+                                <GitCompare size={14} aria-hidden="true" />
+                                Comparar
+                              </button>
+                              <button type="button" className="command-button" onClick={() => onRestoreRevision(item, revision)}>
+                                <RefreshCw size={14} aria-hidden="true" />
+                                Restaurar
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -6138,6 +6161,10 @@ function CatalogPanel({
 
 function catalogRevisionTimeline(item: LocalCatalogItem): LocalCatalogRevision[] {
   return [...(item.history ?? [])].sort((left, right) => right.revision - left.revision);
+}
+
+function localCatalogItemKey(item: Pick<LocalCatalogItem, "kind" | "id">): string {
+  return `${item.kind}:${item.id}`;
 }
 
 function catalogRevisionDiff(
