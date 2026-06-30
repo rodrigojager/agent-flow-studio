@@ -84,6 +84,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
 - Diagnóstico contextual por tipo de nó para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics.
 - Fork de checkpoint/evento para cenário local reexecutável, preservando origem do run, evento, snapshot e metadata da reexecução.
 - Restauração de cenário forkado no runtime gerado: o Studio envia `restore.state` e o FastAPI tenta primeiro recuperar estado real do checkpointer pelo `sourceSessionId`, caindo para o snapshot serializado quando necessário.
+- Indicação visual da estratégia esperada e da origem observada do restore (`checkpointer` ou `snapshot`) no card do cenário e no `State inspector`.
 - Pin local de input/output por nó no Studio, com indicador `atual/stale` quando a definição do nó muda.
 - Cenários podem usar pins ativos como mock/replay determinístico por nó; a execução envia os pins na metadata da sessão e o runtime gerado evita efeitos reais do nó quando há pin compatível.
 - Cenários possuem thresholds de regressão para crescimento de tokens, custo e duração; esses limites acompanham a metadata da execução e controlam o veredito da comparação.

@@ -84,6 +84,9 @@ for (const theme of themes) {
     await expect(spansSection).toBeVisible();
     await expect(spansSection.getByText("llm_call", { exact: true })).toBeVisible();
     await expect(spansSection.getByText("168 tokens")).toBeVisible();
+    await expect(page.getByText("Restore de checkpoint", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Origem: snapshot.*sessão ui-audit-source.*turno 1/)).toBeVisible();
+    await expect(page.getByText(/Estado: session, recent_messages, nodes/)).toBeVisible();
     await page.getByRole("button", { name: /ui-audit-error/ }).click();
     await page.getByRole("combobox", { name: /Comparar com/ }).selectOption("run-ui-audit-ok");
     await page.getByRole("button", { name: /^Comparar$/ }).click();
@@ -111,6 +114,8 @@ for (const theme of themes) {
     const selectedScenarioCard = scenarioSection.locator(".runtime-item", { hasText: "Fork llm_step #4" });
     await expect(selectedScenarioCard.getByText("Fork llm_step #4", { exact: true })).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Fork de checkpoint: .*#4.*llm_step/)).toBeVisible();
+    await expect(selectedScenarioCard.getByText(/Restore: checkpointer -> snapshot/)).toBeVisible();
+    await expect(selectedScenarioCard.getByText(/compatibilidade: sessão e snapshot local/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Mock por pins de nó: 1 pin/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Thresholds: tokens \+12%.*custo \+20%.*duração \+30%/)).toBeVisible();
     const [fixtureDownload] = await Promise.all([
@@ -355,6 +360,19 @@ async function seedStudioRuns(request) {
         },
         { seq: 5, event_type: "node_completed", node: "output_safety_check", payload: { turn: 1, status: "ok", phase: "safety", safety: { blocked: false } } },
         { seq: 6, event_type: "node_completed", node: "deterministic_gate", payload: { turn: 2, status: "ok", phase: "completed", custom: { approved: true } } },
+        {
+          seq: 7,
+          event_type: "checkpoint_restored",
+          node: "start",
+          payload: {
+            source: "metadata",
+            sourceSessionId: "ui-audit-source",
+            status: "active",
+            phase: "awaiting_turn",
+            turn: 1,
+            stateKeys: ["session", "recent_messages", "nodes"],
+          },
+        },
       ],
       logs: ["runtime ready", "success path completed"],
     },

@@ -5096,6 +5096,8 @@ function SandboxPanel({
   const batchApprovalIsCurrent = Boolean(
     studioScenarioBatchApproval && batchReportHash && studioScenarioBatchApproval.reportHash === batchReportHash,
   );
+  const checkpointRestoreEvent = latestCheckpointRestoreEvent(events);
+  const checkpointRestorePayload = checkpointRestoreEvent?.payload ?? null;
   const nodeFilterOptions = Array.from(
     new Set(["start", "end", ...((flow?.nodes ?? []).map((node) => node.id))]),
   ).sort();
@@ -5320,6 +5322,20 @@ function SandboxPanel({
               <small>
                 Fork de checkpoint: {selectedScenario.checkpoint.sourceRunId} · #{selectedScenario.checkpoint.eventSeq} ·{" "}
                 {selectedScenario.checkpoint.nodeId ?? "runtime"}
+              </small>
+            ) : null}
+            {selectedScenario.checkpoint ? (
+              <>
+                <small>
+                  Restore: {restoreStrategyLabel(selectedScenario.checkpoint)} · {checkpointStateShape(selectedScenario.checkpoint)}
+                </small>
+                <small>{checkpointCompatibilityLabel(selectedScenario.checkpoint)}</small>
+              </>
+            ) : null}
+            {checkpointRestoreEvent ? (
+              <small>
+                Restore observado: {restoreEventSourceLabel(checkpointRestorePayload?.source)} · turno{" "}
+                {formatRestoreTurn(checkpointRestorePayload?.turn)} · estado {restorePayloadStateKeys(checkpointRestorePayload)}
               </small>
             ) : null}
             {selectedScenario.useNodePins ? (
@@ -6126,6 +6142,17 @@ function SandboxPanel({
             Criar fork
           </button>
         </div>
+        {checkpointRestoreEvent ? (
+          <article className="runtime-item">
+            <strong>Restore de checkpoint</strong>
+            <small>
+              Origem: {restoreEventSourceLabel(checkpointRestorePayload?.source)} · sessão{" "}
+              {formatRestoreSessionId(checkpointRestorePayload?.sourceSessionId)} · turno{" "}
+              {formatRestoreTurn(checkpointRestorePayload?.turn)}
+            </small>
+            <span>Estado: {restorePayloadStateKeys(checkpointRestorePayload)}</span>
+          </article>
+        ) : null}
         <pre className="mini-json">{formatInspectorValue(selectedStateSnapshot?.state ?? session ?? { status: "no_session" })}</pre>
         {selectedStateSnapshot?.diff.length ? (
           <div className="state-diff-list">
@@ -7879,6 +7906,97 @@ function inferCheckpointForkInput(event: EventView, transcript: MessageView[]): 
   }
   const lastUserMessage = [...transcript].reverse().find((message) => message.role === "user" && message.content.trim());
   return lastUserMessage?.content.trim() ?? `Reexecutar checkpoint ${event.event_type} #${event.seq}`;
+}
+
+function latestCheckpointRestoreEvent(events: EventView[]): EventView | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.event_type === "checkpoint_restored") {
+      return events[index];
+    }
+  }
+  return null;
+}
+
+function restoreEventSourceLabel(source: unknown): string {
+  if (source === "checkpointer") {
+    return "checkpointer";
+  }
+  if (source === "metadata" || source === "studio-snapshot" || source === "snapshot") {
+    return "snapshot";
+  }
+  if (typeof source === "string" && source.trim()) {
+    return source.trim();
+  }
+  return "não observado";
+}
+
+function restoreStrategyLabel(checkpoint: StudioScenarioCheckpoint | null): string {
+  if (!checkpoint) {
+    return "sem restore";
+  }
+  return checkpoint.sourceSessionId ? "checkpointer -> snapshot" : "snapshot";
+}
+
+function checkpointStateShape(checkpoint: StudioScenarioCheckpoint | null): string {
+  if (!checkpoint || !isRecord(checkpoint.state)) {
+    return "snapshot local indisponível";
+  }
+  const keys = Object.keys(checkpoint.state);
+  if (keys.length === 0) {
+    return "snapshot vazio";
+  }
+  const visible = keys.slice(0, 4).join(", ");
+  const suffix = keys.length > 4 ? ` +${keys.length - 4}` : "";
+  return `estado: ${visible}${suffix}`;
+}
+
+function checkpointCompatibilityLabel(checkpoint: StudioScenarioCheckpoint | null): string {
+  if (!checkpoint) {
+    return "compatibilidade: sem checkpoint";
+  }
+  const hasSourceSession = Boolean(checkpoint.sourceSessionId);
+  const hasSnapshot = isRecord(checkpoint.state);
+  if (hasSourceSession && hasSnapshot) {
+    return "compatibilidade: sessão e snapshot local";
+  }
+  if (hasSourceSession) {
+    return "compatibilidade: sessão de origem";
+  }
+  if (hasSnapshot) {
+    return "compatibilidade: snapshot sem sessão de origem";
+  }
+  return "compatibilidade: sem estado restaurável";
+}
+
+function restorePayloadStateKeys(payload: Record<string, unknown> | null): string {
+  const keys = payload?.stateKeys;
+  if (!Array.isArray(keys)) {
+    return "não informado";
+  }
+  const normalized = keys.filter((key): key is string => typeof key === "string" && key.trim().length > 0);
+  if (normalized.length === 0) {
+    return "vazio";
+  }
+  const visible = normalized.slice(0, 4).join(", ");
+  const suffix = normalized.length > 4 ? ` +${normalized.length - 4}` : "";
+  return `${visible}${suffix}`;
+}
+
+function formatRestoreTurn(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  return "-";
+}
+
+function formatRestoreSessionId(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  return "-";
 }
 
 function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: StudioNodePin[] = []): Record<string, unknown> {
