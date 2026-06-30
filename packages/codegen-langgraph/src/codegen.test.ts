@@ -925,6 +925,174 @@ def test_http_custom_code_executes_and_records_output(tmp_path):
   });
 });
 
+test("generated runtime executes MCP custom code nodes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-mcp-code-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente Código MCP");
+  await mkdir(path.join(flowRoot, "code"), { recursive: true });
+  await writeFile(
+    path.join(flowRoot, "code", "mcp_questions.py"),
+    `import json
+import sys
+
+
+def send(message):
+    sys.stdout.write(json.dumps(message) + "\\n")
+    sys.stdout.flush()
+
+
+def main():
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        message = json.loads(line)
+        method = message.get("method")
+        if method == "initialize":
+            send({
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "result": {
+                    "protocolVersion": message.get("params", {}).get("protocolVersion"),
+                    "serverInfo": {"name": "test-mcp", "version": "0.1.0"},
+                    "capabilities": {"tools": {}},
+                },
+            })
+        elif method == "notifications/initialized":
+            continue
+        elif method == "tools/call":
+            params = message.get("params") or {}
+            args = params.get("arguments") or {}
+            text = str(args.get("input") or args.get("text") or "")
+            output = {
+                "question_count": 2,
+                "questions": [
+                    f"Qual é o ponto principal de {text[:24]}?",
+                    "Qual detalhe precisa ser confirmado?",
+                ],
+                "tool": params.get("name"),
+                "received_input": text,
+            }
+            send({
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps(output)}],
+                    "isError": False,
+                },
+            })
+
+
+if __name__ == "__main__":
+    main()
+`,
+    "utf-8",
+  );
+
+  const flow: AgentFlow = {
+    ...simpleFlow("mcp-code-agent", "Agente Código MCP"),
+    nodes: [
+      { id: "start_node", type: "start" },
+      { id: "input_safety_check", type: "safety_gate", stage: "input" },
+      { id: "llm_step", type: "llm_prompt", promptId: "system" },
+      {
+        id: "mcp_questions",
+        type: "code",
+        codeLanguage: "external",
+        codeExecution: "mcp",
+        codePath: "code/mcp_questions.py",
+        mcpCommand: "python",
+        mcpArgs: ["mcp_questions.py"],
+        mcpToolName: "generate_questions",
+        mcpProtocolVersion: "2025-11-25",
+        inputPath: "assistant_message.text",
+        resultPath: "custom.mcp_questions",
+        timeoutSeconds: 5,
+      },
+      { id: "finish_node", type: "end" },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "llm_step", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "llm_step", to: "mcp_questions" },
+      { from: "mcp_questions", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  await readFile(path.join(outDir, "app", "code", "mcp_questions.py"), "utf-8");
+  const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
+  assert.match(graph, /execute_custom_mcp_code/);
+  assert.match(graph, /\\"mcpToolName\\": \\"generate_questions\\"/);
+  await writeFile(
+    path.join(outDir, "tests", "test_mcp_custom_code_nodes.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "mcp-code.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_mcp_custom_code_executes_and_records_output(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
+    session_id = create_resp.json()["session"]["session_id"]
+    client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "conteúdo para perguntas"},
+    )
+    assert turn_resp.status_code == 200
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    by_type = {item["event_type"]: item for item in events}
+    custom = by_type["custom_code_executed"]["payload"]["custom"]
+    assert custom["ok"] is True
+    assert custom["status"] == "custom_code_executed"
+    assert custom["node_id"] == "mcp_questions"
+    assert custom["contract"]["execution"] == "mcp"
+    assert custom["contract"]["mcp_command"] == "python"
+    assert custom["contract"]["mcp_args"] == ["mcp_questions.py"]
+    assert custom["contract"]["mcp_tool_name"] == "generate_questions"
+    assert custom["contract"]["mcp_protocol_version"] == "2025-11-25"
+    assert custom["output"]["question_count"] == 2
+    assert custom["output"]["tool"] == "generate_questions"
+    assert custom["output"]["received_input"]
+    assert custom["mcp_initialize"]["result"]["serverInfo"]["name"] == "test-mcp"
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated runtime executes sidecar custom code nodes", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-sidecar-code-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

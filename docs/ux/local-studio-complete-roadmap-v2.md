@@ -28,7 +28,7 @@ Regra de sucesso:
    Se um caso de uso não couber no visual, deve existir um dos caminhos abaixo:
    - nó `code` com contrato claro;
    - `HTTP`/tool customizada;
-   - MCP/sidecar/adapter;
+   - MCP stdio/sidecar local/runtime adapter;
    - fluxo futuro dedicado por runtime.
 
 3. **Proup como regra de capacidade**  
@@ -36,7 +36,7 @@ Regra de sucesso:
 
 4. **Linguagem dos comportamentos customizados**  
    Python, JavaScript e TypeScript são nativos (arquivo/inline).
-   Outras linguagens entram como contrato suportado e serão executadas via adapter (HTTP/MCP/sidecar) até haver runtime adapter dedicado.
+   Outras linguagens entram como contrato suportado e podem ser executadas por HTTP, MCP stdio ou sidecar local até haver runtime adapter dedicado.
 
 5. **Aprovação com rastreabilidade**  
    Hash cobre:

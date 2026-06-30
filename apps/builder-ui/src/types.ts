@@ -37,6 +37,10 @@ export interface FlowNode {
   codeInline?: string;
   codeEntry?: string;
   codeDependencies?: string;
+  mcpCommand?: string;
+  mcpArgs?: string[];
+  mcpToolName?: string;
+  mcpProtocolVersion?: string;
   sidecarCommand?: string;
   sidecarArgs?: string[];
   stage?: string;

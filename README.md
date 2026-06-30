@@ -54,7 +54,7 @@ O contrato atual já suporta nós para:
 - Analytics.
 - Código customizado.
 
-O nó de código customizado aceita Python, JavaScript e TypeScript no runtime atual, por arquivo ou inline, com input/output tipado, logs de execução e inclusão no hash de aprovação. Também aceita `codeExecution: "http"` para executar comportamento externo por contrato JSON e `codeExecution: "sidecar"` para chamar um subprocesso local com JSON via stdin/stdout. Dependências npm declaradas por `codeDependencies` entram no `app/code/package.json` do runtime gerado. Outras linguagens continuam possíveis via sidecar quando o runtime/container tiver o executável necessário; MCP e runtime adapters dedicados seguem planejados.
+O nó de código customizado aceita Python, JavaScript e TypeScript no runtime atual, por arquivo ou inline, com input/output tipado, logs de execução e inclusão no hash de aprovação. Também aceita `codeExecution: "http"` para executar comportamento externo por contrato JSON, `codeExecution: "sidecar"` para chamar um subprocesso local com JSON via stdin/stdout e `codeExecution: "mcp"` para chamar uma tool MCP local via stdio. Dependências npm declaradas por `codeDependencies` entram no `app/code/package.json` do runtime gerado. Outras linguagens continuam possíveis via sidecar ou MCP quando o runtime/container tiver o executável necessário; runtime adapters dedicados seguem planejados.
 
 ### Codegen E Artefatos
 
@@ -137,7 +137,7 @@ Isso inclui:
 - testes automatizados;
 - empacotamento em API independente.
 
-A interface visual deve acelerar o caso comum, mas sempre manter escape hatches para código customizado, tools externas, sidecars, adapters HTTP/MCP e runtimes futuros.
+A interface visual deve acelerar o caso comum, mas sempre manter escape hatches para código customizado, tools externas, MCP, sidecars, adapters HTTP e runtimes futuros.
 
 ## Recursos Planejados
 
@@ -167,7 +167,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 - Annotation queues locais.
 - Auth avançada.
 - Integração opcional com LangSmith Cloud.
-- Adapters para outras linguagens via MCP ou runtime adapter dedicado.
+- Runtime adapters dedicados para outras linguagens.
 
 ## Como Rodar Localmente
 

@@ -503,7 +503,8 @@ Mas a ferramenta não deve depender disso para operar.
 ### Prioridade 3 (seguinte)
 
 5. capacidade não nativa expandida:
-   - contrato por nó de saída para HTTP/MCP/sidecar;
+   - HTTP, MCP stdio e sidecar local já possuem contrato inicial por nó de código;
+   - runtime adapters dedicados continuam pendentes para ambientes que exigirem isolamento próprio;
    - logs estruturados por nó customizado no Studio.
 6. multiagente operacional:
    - `agent_id` em runtime de teste e final;
@@ -514,7 +515,7 @@ Mas a ferramenta não deve depender disso para operar.
 Sempre que uma necessidade não couber no no visual nativo:
 
 - usar `code` quando for lógica local/transformação/integração simples;
-- usar HTTP/MCP/sidecar para TypeScript/ambiente externo;
+- usar HTTP/MCP/sidecar para ambiente externo ou linguagem não nativa;
 - validar no Studio (input/output/erros/execução);
 - incluir no hash de aprovação;
 - não exigir edição manual do runtime final para manter a capacidade.

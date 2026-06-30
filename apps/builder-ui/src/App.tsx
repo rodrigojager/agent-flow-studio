@@ -4097,6 +4097,54 @@ function NodeInspector({
                   </label>
                 </>
               ) : null}
+              {node.codeExecution === "mcp" ? (
+                <>
+                  <label>
+                    <span>Comando MCP</span>
+                    <input
+                      value={node.mcpCommand ?? ""}
+                      placeholder="python"
+                      onChange={(event) => onNodeFieldChange(node.id, "mcpCommand", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Argumentos MCP</span>
+                    <textarea
+                      value={node.mcpArgs?.join("\n") ?? ""}
+                      placeholder={`mcp_server.py`}
+                      onChange={(event) => onNodeStringArrayFieldChange(node.id, "mcpArgs", event.target.value)}
+                      rows={3}
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label>
+                    <span>Tool name</span>
+                    <input
+                      value={node.mcpToolName ?? ""}
+                      placeholder="generate_questions"
+                      onChange={(event) => onNodeFieldChange(node.id, "mcpToolName", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Protocolo MCP</span>
+                    <input
+                      value={node.mcpProtocolVersion ?? ""}
+                      placeholder="2025-11-25"
+                      onChange={(event) => onNodeFieldChange(node.id, "mcpProtocolVersion", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Timeout (s)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={node.timeoutSeconds ?? ""}
+                      onChange={(event) => onNodeNumberFieldChange(node.id, "timeoutSeconds", event.target.value)}
+                    />
+                  </label>
+                </>
+              ) : null}
               {node.codeExecution === "sidecar" ? (
                 <>
                   <label>
@@ -9061,6 +9109,10 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
     next.codeEntry = node.codeEntry ?? "run";
     next.codeInline = node.codeInline;
     next.codeDependencies = node.codeDependencies;
+    next.mcpCommand = node.mcpCommand;
+    next.mcpArgs = node.mcpArgs;
+    next.mcpToolName = node.mcpToolName;
+    next.mcpProtocolVersion = node.mcpProtocolVersion;
     next.sidecarCommand = node.sidecarCommand;
     next.sidecarArgs = node.sidecarArgs;
     next.inputPath = node.inputPath ?? "state";

@@ -734,14 +734,177 @@ def build_graph(
                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
             }
 
+    def execute_custom_mcp_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        command = str(config.get("mcpCommand") or "").strip()
+        tool_name = str(config.get("mcpToolName") or "").strip()
+        raw_args = config.get("mcpArgs") or []
+        if isinstance(raw_args, str):
+            mcp_args = [item.strip() for item in raw_args.splitlines() if item.strip()]
+        elif isinstance(raw_args, list):
+            mcp_args = [str(item).strip() for item in raw_args if str(item).strip()]
+        else:
+            mcp_args = []
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        if not command:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "mcp_command_not_configured",
+            }
+        if not tool_name:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "mcp_tool_not_configured",
+            }
+
+        tool_arguments = input_value if isinstance(input_value, dict) else {"input": jsonable(input_value)}
+        protocol_version = str(config.get("mcpProtocolVersion") or "2025-11-25")
+        messages = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": protocol_version,
+                    "capabilities": {},
+                    "clientInfo": {"name": "agent-flow-runtime", "version": "0.1.0"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": jsonable(tool_arguments),
+                },
+            },
+        ]
+        stdin_payload = "\n".join(json.dumps(message) for message in messages) + "\n"
+        timeout_seconds = int(config.get("timeoutSeconds") or 30)
+        try:
+            completed = subprocess.run(
+                [command, *mcp_args],
+                input=stdin_payload,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+                cwd=str(CODE_ROOT),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": f"mcp_timeout_after_{timeout_seconds}s",
+                "stdout": str(exc.stdout or ""),
+                "stderr": str(exc.stderr or ""),
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": str(exc),
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        responses: list[dict[str, Any]] = []
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(message, dict):
+                responses.append(message)
+        initialize_response = next((message for message in responses if message.get("id") == 1), None)
+        tool_response = next((message for message in responses if message.get("id") == 2), None)
+        if completed.returncode != 0:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "exit_code": completed.returncode,
+                "stderr": stderr,
+                "error": "mcp_process_failed",
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        if not tool_response:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "stderr": stderr,
+                "error": "mcp_tools_call_response_missing",
+                "mcp_initialize": jsonable(initialize_response),
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        if tool_response.get("error"):
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "stderr": stderr,
+                "error": jsonable(tool_response.get("error")),
+                "mcp_initialize": jsonable(initialize_response),
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        result = tool_response.get("result") if isinstance(tool_response.get("result"), dict) else {}
+        output: Any = result
+        content = result.get("content") if isinstance(result, dict) else None
+        if isinstance(result, dict) and "structuredContent" in result:
+            output = result.get("structuredContent")
+        elif isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict) and content[0].get("type") == "text":
+            text = str(content[0].get("text") or "")
+            try:
+                output = json.loads(text)
+            except json.JSONDecodeError:
+                output = text
+        return {
+            "ok": True,
+            "status": "custom_code_executed",
+            "node_id": node_id,
+            "contract": contract,
+            "output": jsonable(output),
+            "mcp_initialize": jsonable(initialize_response),
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
     def execute_custom_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         language = str(config.get("codeLanguage") or "python").lower()
         execution = str(config.get("codeExecution") or "native").lower()
         if execution == "http":
             return execute_custom_http_code(config, state, contract)
+        if execution == "mcp":
+            return execute_custom_mcp_code(config, state, contract)
         if execution == "sidecar":
             return execute_custom_sidecar_code(config, state, contract)
-        if language == "external" or execution in {"mcp", "runtime_adapter"}:
+        if language == "external" or execution in {"runtime_adapter"}:
             return {
                 "ok": False,
                 "status": "custom_code_not_executed",
@@ -1008,6 +1171,10 @@ def build_graph(
             "dependencies": config.get("codeDependencies"),
             "method": config.get("method"),
             "url": config.get("url"),
+            "mcp_command": config.get("mcpCommand"),
+            "mcp_args": config.get("mcpArgs"),
+            "mcp_tool_name": config.get("mcpToolName"),
+            "mcp_protocol_version": config.get("mcpProtocolVersion"),
             "sidecar_command": config.get("sidecarCommand"),
             "sidecar_args": config.get("sidecarArgs"),
             "timeout_seconds": config.get("timeoutSeconds"),
