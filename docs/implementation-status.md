@@ -86,7 +86,7 @@
 - Parser de progresso Docker estima percentuais mesmo quando o output do BuildKit não traz contagem explícita, usando etapa inferida, contexto de linhas `#N DONE` e evento final em 100% para builds concluídos.
 - Shell principal da Builder UI ganhou breakpoint responsivo abaixo de 760px: topbar passa a quebrar em duas linhas com toolbar rolável, workspace vira fluxo vertical sem largura mínima desktop, canvas mantém altura útil e inspector fica abaixo do canvas.
 - Builder UI possui atalhos globais iniciais: `Ctrl/Cmd+S` salva flow/prompts/schemas sujos, `Ctrl/Cmd+Enter` valida o flow atual, `Esc` limpa a seleção do canvas, `A` foca a paleta e `F` reenquadra o canvas quando o foco não está em campo editável.
-- Auditoria visual automatizada inicial em Playwright (`npm run test:ui-theme`) sobe API/UI locais, percorre tema claro/escuro em viewport desktop e compacta, abre as abas principais do inspector e bloqueia regressões de overflow horizontal ou texto cortado em controles principais.
+- Auditoria visual automatizada em Playwright (`npm run test:ui-theme`) prepara workspace isolado em `.tmp/ui-theme-workspace`, sobe API/UI em portas dedicadas, percorre tema claro/escuro em viewport desktop e compacta, abre as abas principais do inspector, valida atalhos iniciais e cobre o fluxo `LangGraph` -> `Aprovar` -> `API Docker` até o painel de artefato Docker final.
 
 ## Verificado
 
@@ -134,12 +134,12 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 - Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
 - `npm run typecheck` e `npm run build:builder-ui` passaram após a inclusão dos atalhos globais iniciais.
-- `npm run test:ui-theme` passou com 4 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, ausência de overflow horizontal no documento e ausência de texto cortado nos controles principais.
+- `npm run test:ui-theme` passou com 6 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, ausência de overflow horizontal/texto cortado e geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`.
 
 ## Ainda não implementado
 
 - Studio Local: evoluir o drill-down do nó com prompt renderizado, custos/tokens quando existirem, spans estruturados e reexecução/fork por checkpoint.
-- Tema claro e escuro ainda precisa ampliar a auditoria visual para estados de erro/loading, runs com dados, aprovação válida/desatualizada e Docker ativo/parado; o shell principal e abas base já têm gate automatizado em desktop/viewport compacta.
+- Tema claro e escuro ainda precisa ampliar a auditoria visual para estados de erro/loading, runs com dados, aprovação desatualizada e Docker ativo/parado; o shell principal, abas base e fluxo aprovado até o artefato Docker final já têm gate automatizado.
 - Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
@@ -154,7 +154,7 @@ Também foi validado localmente:
 Para chegar ao objetivo completo de "studio local + aprovação + API Docker" sem regressão de capacidade, a sequência recomendada é:
 
 1. **Auditoria visual completa de tema claro/escuro (Alta prioridade)**
-   - ampliar `npm run test:ui-theme` para estados de erro/loading, runs com dados, aprovação válida/desatualizada e Docker ativo/parado;
+   - ampliar `npm run test:ui-theme` para estados de erro/loading, runs com dados, aprovação desatualizada e Docker ativo/parado;
    - corrigir contraste, overflow e estados vazios/erro/loading que ainda escaparem;
    - manter checklist manual objetivo para pontos ainda difíceis de automatizar.
 

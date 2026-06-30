@@ -3,10 +3,11 @@ const { defineConfig } = require("@playwright/test");
 module.exports = defineConfig({
   testDir: ".",
   testMatch: ["tools/ui-theme-audit.spec.cjs"],
-  timeout: 30_000,
+  timeout: 60_000,
   expect: {
     timeout: 5_000,
   },
+  workers: 1,
   reporter: [["list"]],
   use: {
     browserName: "chromium",
@@ -17,15 +18,15 @@ module.exports = defineConfig({
   },
   webServer: [
     {
-      command: "npm run dev:builder-api",
-      url: "http://127.0.0.1:3333/health",
-      reuseExistingServer: !process.env.CI,
+      command: "node tools/run-ui-audit-api.cjs",
+      url: "http://127.0.0.1:3433/health",
+      reuseExistingServer: false,
       timeout: 30_000,
     },
     {
-      command: "npm run dev:builder-ui",
-      url: "http://127.0.0.1:5173",
-      reuseExistingServer: !process.env.CI,
+      command: "node tools/run-ui-audit-ui.cjs",
+      url: "http://127.0.0.1:5273",
+      reuseExistingServer: false,
       timeout: 30_000,
     },
   ],

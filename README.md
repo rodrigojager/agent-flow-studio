@@ -34,7 +34,7 @@ O fluxo principal foi desenhado para funcionar sem LangSmith Cloud, sem cobranç
 - Diagnósticos estruturados de validação com navegação para o ponto afetado.
 - Preview do JSON do flow.
 - Tema claro e escuro persistente por `localStorage`.
-- Auditoria automatizada de tema/layout com Playwright para shell principal, abas do inspector, tema claro/escuro e viewports desktop/compacta.
+- Auditoria automatizada de tema/layout com Playwright para shell principal, abas do inspector, tema claro/escuro, viewports desktop/compacta e fluxo `LangGraph` -> `Aprovar` -> `API Docker` em workspace isolado.
 - Atalhos iniciais: `Ctrl/Cmd+S` para salvar workspace, `Ctrl/Cmd+Enter` para validar, `Esc` para limpar seleção, `A` para focar a paleta e `F` para reenquadrar o canvas.
 
 ### Tipos De Nó E Capacidades Do Flow
@@ -130,7 +130,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 
 ### Próximo Ciclo
 
-- Ampliar auditoria visual automatizada para estados de erro/loading, runs com dados, aprovação válida/desatualizada e Docker ativo/parado.
+- Ampliar auditoria visual automatizada para estados de erro/loading, runs com dados, aprovação desatualizada e Docker ativo/parado.
 - Melhorar ergonomia do canvas com grupos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.
 - Consolidar cenários salvos, pin/mock data e reexecução determinística.
