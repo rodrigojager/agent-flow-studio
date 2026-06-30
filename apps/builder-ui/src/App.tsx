@@ -140,6 +140,7 @@ import type {
   LocalCatalog,
   LocalCatalogItem,
   LocalCatalogItemKind,
+  LocalCatalogRevision,
   LangGraphSandboxApproval,
   LangGraphSandboxApprovalStatus,
   LlmAdapterCatalogItem,
@@ -5876,6 +5877,16 @@ function CatalogPanel({
         }
         const searchable = [item.id, item.name, item.description, item.kind, item.source, ...item.tags]
           .concat([item.version, `rev-${item.revision}`, item.contentHash])
+          .concat(
+            (item.history ?? []).flatMap((revision) => [
+              revision.version,
+              `rev-${revision.revision}`,
+              revision.contentHash,
+              revision.name,
+              revision.description,
+              ...revision.tags,
+            ]),
+          )
           .join(" ")
           .toLowerCase();
         return searchable.includes(normalizedQuery);
@@ -6000,52 +6011,82 @@ function CatalogPanel({
         </div>
         {items.length ? (
           <div className="catalog-list">
-            {items.map((item) => (
-              <article className="catalog-card" key={`${item.kind}-${item.id}`}>
-                <div className="catalog-card-header">
-                  <Library size={16} aria-hidden="true" />
-                  <span>{catalogKindLabel(item.kind)}</span>
-                  <small>{item.source === "builtin" ? "embutido" : "local"}</small>
-                </div>
-                <strong>{item.name}</strong>
-                <p>{item.description || item.id}</p>
-                <div className="catalog-card-meta">
-                  <span>v{item.version}</span>
-                  <span>rev. {item.revision}</span>
-                  <span>{item.contentHash}</span>
-                </div>
-                <div className="catalog-tags">
-                  {item.tags.slice(0, 4).map((tag) => (
-                    <span key={`${item.id}-${tag}`}>{tag}</span>
-                  ))}
-                </div>
-                <div className="catalog-card-actions">
-                  {item.kind === "agent_template" ? (
-                    <button type="button" className="command-button" onClick={() => onCreateAgentTemplate(item)}>
-                      <Plus size={16} aria-hidden="true" />
-                      Criar flow
-                    </button>
-                  ) : (
-                    <>
-                      <button type="button" className="command-button" onClick={() => onApply(item)}>
+            {items.map((item) => {
+              const previousRevision = latestCatalogRevision(item);
+              const revisionDiff = previousRevision ? catalogRevisionDiff(previousRevision, item) : [];
+              return (
+                <article className="catalog-card" key={`${item.kind}-${item.id}`}>
+                  <div className="catalog-card-header">
+                    <Library size={16} aria-hidden="true" />
+                    <span>{catalogKindLabel(item.kind)}</span>
+                    <small>{item.source === "builtin" ? "embutido" : "local"}</small>
+                  </div>
+                  <strong>{item.name}</strong>
+                  <p>{item.description || item.id}</p>
+                  <div className="catalog-card-meta">
+                    <span>v{item.version}</span>
+                    <span>rev. {item.revision}</span>
+                    <span>{item.contentHash}</span>
+                  </div>
+                  {previousRevision ? (
+                    <details className="catalog-history">
+                      <summary>
+                        <GitCompare size={14} aria-hidden="true" />
+                        <span>
+                          Histórico {item.history.length}: rev. {previousRevision.revision} para {item.revision}
+                        </span>
+                      </summary>
+                      <div className="catalog-history-meta">
+                        <span>v{previousRevision.version}</span>
+                        <span>{previousRevision.contentHash}</span>
+                      </div>
+                      {revisionDiff.length ? (
+                        <div className="catalog-diff">
+                          {revisionDiff.map((row, index) => (
+                            <code className={`catalog-diff-row ${row.kind}`} key={`${item.id}-diff-${index}`}>
+                              <span>{row.kind === "added" ? "+" : "-"}</span>
+                              {row.text || " "}
+                            </code>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="catalog-diff-empty">Sem mudanças de conteúdo</div>
+                      )}
+                    </details>
+                  ) : null}
+                  <div className="catalog-tags">
+                    {item.tags.slice(0, 4).map((tag) => (
+                      <span key={`${item.id}-${tag}`}>{tag}</span>
+                    ))}
+                  </div>
+                  <div className="catalog-card-actions">
+                    {item.kind === "agent_template" ? (
+                      <button type="button" className="command-button" onClick={() => onCreateAgentTemplate(item)}>
                         <Plus size={16} aria-hidden="true" />
-                        {item.kind === "tool" ? "Criar nó" : "Adicionar"}
+                        Criar flow
                       </button>
-                      <button
-                        type="button"
-                        className="command-button"
-                        onClick={() => onApply(item, selectedNodeId)}
-                        disabled={!selectedNodeId}
-                        title={selectedNodeId ? `Aplicar em ${selectedNodeId}` : "Selecione um nó para aplicar diretamente"}
-                      >
-                        <Sparkles size={16} aria-hidden="true" />
-                        Usar no nó
-                      </button>
-                    </>
-                  )}
-                </div>
-              </article>
-            ))}
+                    ) : (
+                      <>
+                        <button type="button" className="command-button" onClick={() => onApply(item)}>
+                          <Plus size={16} aria-hidden="true" />
+                          {item.kind === "tool" ? "Criar nó" : "Adicionar"}
+                        </button>
+                        <button
+                          type="button"
+                          className="command-button"
+                          onClick={() => onApply(item, selectedNodeId)}
+                          disabled={!selectedNodeId}
+                          title={selectedNodeId ? `Aplicar em ${selectedNodeId}` : "Selecione um nó para aplicar diretamente"}
+                        >
+                          <Sparkles size={16} aria-hidden="true" />
+                          Usar no nó
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="runtime-item">
@@ -6056,6 +6097,47 @@ function CatalogPanel({
       </section>
     </div>
   );
+}
+
+function latestCatalogRevision(item: LocalCatalogItem): LocalCatalogRevision | null {
+  return [...(item.history ?? [])].sort((left, right) => right.revision - left.revision)[0] ?? null;
+}
+
+function catalogRevisionDiff(
+  previous: Pick<LocalCatalogRevision, "content" | "nodePatch">,
+  current: Pick<LocalCatalogItem, "content" | "nodePatch">,
+): Array<{ kind: "added" | "removed"; text: string }> {
+  const previousLines = catalogRevisionSnapshot(previous).split("\n");
+  const currentLines = catalogRevisionSnapshot(current).split("\n");
+  const rows: Array<{ kind: "added" | "removed"; text: string }> = [];
+  const limit = Math.max(previousLines.length, currentLines.length);
+  for (let index = 0; index < limit; index += 1) {
+    const previousLine = previousLines[index] ?? "";
+    const currentLine = currentLines[index] ?? "";
+    if (previousLine === currentLine) {
+      continue;
+    }
+    if (previousLine) {
+      rows.push({ kind: "removed", text: previousLine });
+    }
+    if (currentLine) {
+      rows.push({ kind: "added", text: currentLine });
+    }
+    if (rows.length >= 8) {
+      break;
+    }
+  }
+  return rows;
+}
+
+function catalogRevisionSnapshot(value: Pick<LocalCatalogItem | LocalCatalogRevision, "content" | "nodePatch">): string {
+  if (typeof value.content === "string") {
+    return value.content.trimEnd();
+  }
+  if (value.nodePatch) {
+    return JSON.stringify(value.nodePatch, null, 2);
+  }
+  return "";
 }
 
 function ValidationPanel({

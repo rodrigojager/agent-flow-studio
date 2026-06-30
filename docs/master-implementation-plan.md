@@ -789,6 +789,7 @@ Entregaveis:
 - registry local em `.agent-flow/catalog/registry.json`;
 - busca e filtros locais por tipo/origem/tag;
 - versionamento local basico por versão, revisão e hash de conteúdo;
+- histórico local de revisões com diff visual compacto;
 - seeds locais para prompts, schemas, tools comuns, templates de agente e skills;
 - salvar prompt/schema atual no registry local;
 - salvar nó atual como tool/skill local reutilizável;
@@ -812,8 +813,9 @@ Status 2026-06-30:
 - skills aplicadas pelo catalogo materializam bundles de prompt/schema e podem transformar o no selecionado por patch seguro; o seed atual adiciona geração estruturada de perguntas a um nó LLM;
 - implementada aba `Catalogo` na Builder UI com busca textual, filtros por tipo/origem/tag, refresh, cards de itens, salvar prompt/schema atual, salvar nó selecionado como tool/skill, criar flow por template e aplicar item/skill no flow/no selecionado;
 - implementada primeira camada de versionamento/curadoria: itens do catalogo carregam versão, revisão local incremental e hash curto de conteúdo, com metadados visíveis nos cards;
+- implementado histórico local de revisões: ao sobrescrever item local, o snapshot anterior fica em `history` e o card mostra diff compacto contra a revisão atual;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para skills compostas, tools compostas, histórico/diff de revisões, curadoria visual completa e compartilhamento real.
+- pendente evoluir para skills compostas, tools compostas, restauração/comparação avançada de revisões, curadoria visual completa e compartilhamento real.
 
 ### Fase 11: Multiagente Local
 

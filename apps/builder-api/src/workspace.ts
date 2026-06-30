@@ -170,6 +170,19 @@ export interface LocalCatalogItem {
   updatedAt: string;
   content?: string;
   nodePatch?: Record<string, unknown>;
+  history: LocalCatalogRevision[];
+}
+
+export interface LocalCatalogRevision {
+  version: string;
+  revision: number;
+  contentHash: string;
+  updatedAt: string;
+  name: string;
+  description: string;
+  tags: string[];
+  content?: string;
+  nodePatch?: Record<string, unknown>;
 }
 
 export interface CreateFlowFromCatalogTemplateResult extends CreateFlowWorkspaceResult {
@@ -998,6 +1011,7 @@ export async function saveLocalCatalogItem(workspaceRoot: string, value: unknown
     contentHash: catalogItemContentHash(input),
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
+    history: previous ? [...previous.history, catalogRevisionFromItem(previous)] : [],
   };
   const nextItems = sortCatalogItems([
     ...stored.filter((existing) => catalogItemKey(existing.kind, existing.id) !== builtInKey),
@@ -1184,7 +1198,7 @@ interface SkillCatalogDefinition {
 
 function builtInCatalogItems(): LocalCatalogItem[] {
   const createdAt = "2026-06-30T00:00:00.000Z";
-  const items: Array<Omit<LocalCatalogItem, "version" | "revision" | "contentHash">> = [
+  const items: Array<Omit<LocalCatalogItem, "version" | "revision" | "contentHash" | "history">> = [
     {
       id: "guided-question-system",
       kind: "prompt",
@@ -1396,6 +1410,7 @@ function builtInCatalogItems(): LocalCatalogItem[] {
     version: "1.0.0",
     revision: 1,
     contentHash: catalogItemContentHash(item),
+    history: [],
   }));
 }
 
@@ -1440,9 +1455,11 @@ function parseStoredCatalogItem(value: unknown): LocalCatalogItem {
     source: "local",
     version: readCatalogVersion(value.version),
     revision: readCatalogRevision(value.revision),
-    contentHash: typeof value.contentHash === "string" && value.contentHash.trim() ? value.contentHash.trim() : catalogItemContentHash(input),
+    contentHash:
+      typeof value.contentHash === "string" && value.contentHash.trim() ? value.contentHash.trim() : catalogItemContentHash(input),
     createdAt: readCatalogTimestamp(value.createdAt, "createdAt"),
     updatedAt: readCatalogTimestamp(value.updatedAt, "updatedAt"),
+    history: readCatalogRevisionHistory(value.history),
   };
 }
 
@@ -1560,6 +1577,41 @@ function readCatalogRevision(value: unknown): number {
     throw new WorkspaceError("revision do catálogo deve ser inteiro positivo.", 422);
   }
   return value;
+}
+
+function readCatalogRevisionHistory(value: unknown): LocalCatalogRevision[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new WorkspaceError("history do catálogo deve ser lista.", 422);
+  }
+  return value.map(parseCatalogRevision);
+}
+
+function parseCatalogRevision(value: unknown): LocalCatalogRevision {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Revisão do catálogo deve ser objeto JSON.", 422);
+  }
+  const revision = readCatalogRevision(value.revision);
+  const version = readCatalogVersion(value.version);
+  const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : `Revisão ${revision}`;
+  const description = typeof value.description === "string" ? value.description.trim() : "";
+  const tags = value.tags === undefined ? [] : parseStringList(value.tags, "tags da revisão");
+  const content = typeof value.content === "string" ? value.content : undefined;
+  const nodePatch = isRecord(value.nodePatch) ? sanitizeCatalogNodePatch(value.nodePatch) : undefined;
+  const fallbackHash = catalogRevisionContentHash({ content, nodePatch });
+  return {
+    version,
+    revision,
+    contentHash: typeof value.contentHash === "string" && value.contentHash.trim() ? value.contentHash.trim() : fallbackHash,
+    updatedAt: readCatalogTimestamp(value.updatedAt, "updatedAt da revisão"),
+    name,
+    description,
+    tags,
+    ...(content !== undefined ? { content } : {}),
+    ...(nodePatch !== undefined ? { nodePatch } : {}),
+  };
 }
 
 function findCatalogItem(
@@ -2003,12 +2055,30 @@ function catalogItemKey(kind: LocalCatalogItemKind, id: string): string {
 }
 
 function catalogItemContentHash(item: LocalCatalogItemInput): string {
+  return catalogRevisionContentHash({ content: item.content, nodePatch: item.nodePatch, kind: item.kind });
+}
+
+function catalogRevisionContentHash(value: { content?: string; nodePatch?: Record<string, unknown>; kind?: LocalCatalogItemKind }): string {
   const payload = {
-    kind: item.kind,
-    content: item.content ?? null,
-    nodePatch: item.nodePatch ?? null,
+    kind: value.kind ?? null,
+    content: value.content ?? null,
+    nodePatch: value.nodePatch ?? null,
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 12);
+}
+
+function catalogRevisionFromItem(item: LocalCatalogItem): LocalCatalogRevision {
+  return {
+    version: item.version,
+    revision: item.revision,
+    contentHash: item.contentHash,
+    updatedAt: item.updatedAt,
+    name: item.name,
+    description: item.description,
+    tags: item.tags,
+    ...(item.content !== undefined ? { content: item.content } : {}),
+    ...(item.nodePatch !== undefined ? { nodePatch: item.nodePatch } : {}),
+  };
 }
 
 interface PromptAssetInput {

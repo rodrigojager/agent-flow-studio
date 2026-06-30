@@ -494,6 +494,19 @@ export interface LocalCatalogItem {
   updatedAt: string;
   content?: string;
   nodePatch?: Record<string, unknown>;
+  history: LocalCatalogRevision[];
+}
+
+export interface LocalCatalogRevision {
+  version: string;
+  revision: number;
+  contentHash: string;
+  updatedAt: string;
+  name: string;
+  description: string;
+  tags: string[];
+  content?: string;
+  nodePatch?: Record<string, unknown>;
 }
 
 export interface LocalCatalogCreateFlowResult extends CreatedFlowWorkspace {

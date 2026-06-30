@@ -940,6 +940,81 @@ button:disabled {
   background: var(--surface-soft);
 }
 
+.catalog-history {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface-bg));
+}
+
+.catalog-history summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.catalog-history summary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 8px 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.catalog-history-meta span {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  background: var(--surface-bg);
+}
+
+.catalog-diff {
+  display: grid;
+  gap: 2px;
+  padding: 0 8px 8px;
+}
+
+.catalog-diff-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 4px;
+  overflow: hidden;
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.catalog-diff-row.added {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.catalog-diff-row.removed {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.catalog-diff-empty {
+  padding: 0 8px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .catalog-tags span {
   padding: 2px 6px;
   border: 1px solid var(--border);

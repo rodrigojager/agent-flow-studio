@@ -1542,6 +1542,7 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(savedPrompt.json().item.source, "local");
   assert.equal(savedPrompt.json().item.version, "1.0.0");
   assert.equal(savedPrompt.json().item.revision, 1);
+  assert.equal(savedPrompt.json().item.history.length, 0);
   assert.match(savedPrompt.json().item.contentHash, /^[0-9a-f]{12}$/);
   await access(path.join(workspaceRoot, ".agent-flow", "catalog", "registry.json"));
 
@@ -1564,6 +1565,15 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(savedPromptRevision.json().item.revision, 2);
   assert.equal(savedPromptRevision.json().item.createdAt, savedPrompt.json().item.createdAt);
   assert.notEqual(savedPromptRevision.json().item.contentHash, savedPrompt.json().item.contentHash);
+  assert.equal(savedPromptRevision.json().item.history.length, 1);
+  assert.equal(savedPromptRevision.json().item.history[0].version, "1.0.0");
+  assert.equal(savedPromptRevision.json().item.history[0].revision, 1);
+  assert.equal(savedPromptRevision.json().item.history[0].contentHash, savedPrompt.json().item.contentHash);
+  assert.match(savedPromptRevision.json().item.history[0].content, /resposta objetiva/);
+  const storedCatalog = JSON.parse(await readFile(path.join(workspaceRoot, ".agent-flow", "catalog", "registry.json"), "utf-8"));
+  const storedPrompt = storedCatalog.items.find((item: { id: string; kind: string }) => item.kind === "prompt" && item.id === "catalog-system");
+  assert.equal(storedPrompt.history.length, 1);
+  assert.equal(storedPrompt.history[0].revision, 1);
 
   const appliedPrompt = await app.inject({
     method: "POST",
@@ -1580,7 +1590,7 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(appliedPrompt.json().flow.nodes.find((node: { id: string }) => node.id === "llm_step").promptId, "catalog-system");
   assert.match(
     await readFile(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "catalog-system.md"), "utf-8"),
-    /topic/,
+    /exemplos/,
   );
 
   const savedSchema = await app.inject({

@@ -160,6 +160,29 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   const originalFlowResponse = await request.get(`${apiUrl}/flows/reference-interview`);
   await expectApiOk(originalFlowResponse, "load original reference flow before catalog test");
   const originalFlow = (await originalFlowResponse.json()).flow;
+  const firstRevision = await request.post(`${apiUrl}/catalog/items`, {
+    data: {
+      kind: "prompt",
+      id: "ui-audit-revision-prompt",
+      name: "Prompt com histórico UI",
+      description: "Prompt local para validar histórico visual.",
+      tags: ["ui-audit", "history"],
+      content: "Linha inicial para histórico.\n",
+    },
+  });
+  await expectApiOk(firstRevision, "save first catalog revision for UI audit");
+  const secondRevision = await request.post(`${apiUrl}/catalog/items`, {
+    data: {
+      kind: "prompt",
+      id: "ui-audit-revision-prompt",
+      name: "Prompt com histórico UI",
+      version: "1.1.0",
+      description: "Prompt local para validar histórico visual.",
+      tags: ["ui-audit", "history"],
+      content: "Linha revisada para histórico.\n",
+    },
+  });
+  await expectApiOk(secondRevision, "save second catalog revision for UI audit");
 
   await openBuilder(page, "light", viewports[0]);
   await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
@@ -173,6 +196,13 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.getByText("Prompt de perguntas guiadas")).toBeVisible();
   await expect(page.getByText("Agente gerador de perguntas por conteúdo")).toBeVisible();
   await expect(page.getByText("Skill de perguntas estruturadas")).toBeVisible();
+  const revisionCard = page.locator(".catalog-card", { hasText: "Prompt com histórico UI" });
+  await expect(revisionCard).toContainText("v1.1.0");
+  await expect(revisionCard).toContainText("rev. 2");
+  await expect(revisionCard).toContainText("Histórico 1: rev. 1 para 2");
+  await revisionCard.locator("summary").click();
+  await expect(revisionCard.locator(".catalog-diff-row.removed")).toContainText("Linha inicial para histórico.");
+  await expect(revisionCard.locator(".catalog-diff-row.added")).toContainText("Linha revisada para histórico.");
   await catalogPanel.getByLabel("Buscar no catálogo").fill("HTTP");
   await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toBeVisible();
   await expect(page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" })).toHaveCount(0);
