@@ -114,6 +114,7 @@ import type {
   FlowWorkspaceExport,
   ApprovedGenerateResult,
   DockerRuntimeHistory,
+  DockerRuntimeHistoryLevel,
   DockerRuntimeHistoryQuery,
   DockerRuntimeOperation,
   DockerRuntimeOperationResult,
@@ -153,6 +154,7 @@ interface DockerHistoryFilterForm {
   status: DockerRuntimeOperationStatus | "";
   ok: "" | "true" | "false";
   search: string;
+  level: DockerRuntimeHistoryLevel | "";
   progressStage: string;
   progressStatus: DockerRuntimeProgressStatus | "";
   from: string;
@@ -438,11 +440,13 @@ const dockerHistoryOperationOptions: DockerRuntimeOperation[] = [
 ];
 const dockerHistoryStatusOptions: DockerRuntimeOperationStatus[] = ["idle", "running", "success", "error", "canceled"];
 const dockerProgressStatusOptions: DockerRuntimeProgressStatus[] = ["running", "done", "error", "warning", "info", "canceled"];
+const dockerHistoryLevelOptions: DockerRuntimeHistoryLevel[] = ["error", "warning", "info", "success"];
 const dockerHistoryFilterDefaults: DockerHistoryFilterForm = {
   operation: "",
   status: "",
   ok: "",
   search: "",
+  level: "",
   progressStage: "",
   progressStatus: "",
   from: "",
@@ -1745,6 +1749,7 @@ export default function App() {
       dockerHistoryFilterDraft.status !== dockerHistoryFilterApplied.status ||
       dockerHistoryFilterDraft.ok !== dockerHistoryFilterApplied.ok ||
       dockerHistoryFilterDraft.search !== dockerHistoryFilterApplied.search ||
+      dockerHistoryFilterDraft.level !== dockerHistoryFilterApplied.level ||
       dockerHistoryFilterDraft.progressStage !== dockerHistoryFilterApplied.progressStage ||
       dockerHistoryFilterDraft.progressStatus !== dockerHistoryFilterApplied.progressStatus ||
       dockerHistoryFilterDraft.from !== dockerHistoryFilterApplied.from ||
@@ -1770,6 +1775,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         status: filters.status || undefined,
         ok: filters.ok === "true" ? true : filters.ok === "false" ? false : undefined,
         search: filters.search.trim() || undefined,
+        level: filters.level || undefined,
         progressStage: filters.progressStage.trim() || undefined,
         progressStatus: filters.progressStatus || undefined,
         from,
@@ -4671,6 +4677,25 @@ function GeneratedArtifactPanel({
                 onChange={(event) => onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, search: event.target.value })}
                 placeholder="operacao, status ou texto"
               />
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Nível</span>
+              <select
+                value={dockerHistoryFilterDraft.level}
+                onChange={(event) =>
+                  onDockerHistoryFilterDraftChange({
+                    ...dockerHistoryFilterDraft,
+                    level: event.target.value as DockerRuntimeHistoryLevel | "",
+                  })
+                }
+              >
+                <option value="">Todos</option>
+                {dockerHistoryLevelOptions.map((level) => (
+                  <option value={level} key={`docker-history-level-${level}`}>
+                    {dockerHistoryLevelLabel(level)}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="docker-history-filter-input">
               <span>Etapa</span>
@@ -8724,6 +8749,19 @@ function dockerProgressClass(status: string): string {
   return "progress-running";
 }
 
+function dockerHistoryLevelLabel(level: DockerRuntimeHistoryLevel): string {
+  if (level === "error") {
+    return "Erro";
+  }
+  if (level === "warning") {
+    return "Aviso";
+  }
+  if (level === "success") {
+    return "Sucesso";
+  }
+  return "Info";
+}
+
 function dockerProgressMatchesFilter(step: DockerRuntimeProgressEvent, filters: DockerHistoryFilterForm): boolean {
   const stageFilter = filters.progressStage.trim().toLowerCase();
   if (
@@ -8735,7 +8773,23 @@ function dockerProgressMatchesFilter(step: DockerRuntimeProgressEvent, filters: 
   if (filters.progressStatus && step.status !== filters.progressStatus) {
     return false;
   }
+  if (filters.level && !dockerProgressMatchesLevel(step, filters.level)) {
+    return false;
+  }
   return true;
+}
+
+function dockerProgressMatchesLevel(step: DockerRuntimeProgressEvent, level: DockerRuntimeHistoryLevel): boolean {
+  if (level === "error") {
+    return step.status === "error" || step.status === "canceled";
+  }
+  if (level === "warning") {
+    return step.status === "warning";
+  }
+  if (level === "success") {
+    return step.status === "done";
+  }
+  return step.status === "info" || step.status === "running";
 }
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {

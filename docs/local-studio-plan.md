@@ -385,7 +385,8 @@ Status 2026-06-30:
 - implementado: restauração de cenário forkado no runtime gerado, preferindo estado real do checkpointer por `sourceSessionId` e usando snapshot serializado do Studio como fallback;
 - implementado: indicação visual da estratégia esperada e da origem observada da restauração de checkpoint (`checkpointer` ou `snapshot`) no cenário forkado e no `State inspector`;
 - implementado: validação forte de compatibilidade de versão/hash para restauração de checkpoint, com assinatura no fork/fixture e bloqueio de execução quando `flowId`, versão, hash local, hash de projeto/assets ou hash de nó divergem;
-- pendente: filtros avançados de histórico operacional.
+- implementado: histórico operacional Docker com filtro por nível/severidade (`erro`, `aviso`, `info`, `sucesso`) além de operação, status, resultado, busca, etapa, progresso e período;
+- pendente: alertas visuais mais refinados para regressões de build/up/smoke.
 
 ### Fase 7.5: Grafo Interativo de Execução
 
@@ -479,7 +480,7 @@ Mas a ferramenta não deve depender disso para operar.
    - ampliar cobertura de exemplos e cenários salvos para as regras específicas por tipo de nó;
    - validação forte de compatibilidade de versão/hash para restauração de checkpoint já implementada.
 2. melhorar inspeção de execução longa:
-   - histórico operacional com filtro por nível;
+   - histórico operacional com filtro por nível já implementado;
    - status persistente de build/up/smoke com alertas visuais de regressão.
 
 ### Prioridade 2 (próxima semana)

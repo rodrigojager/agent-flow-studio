@@ -273,6 +273,7 @@ export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build"
 export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error" | "canceled";
 
 export type DockerRuntimeProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
+export type DockerRuntimeHistoryLevel = "error" | "warning" | "info" | "success";
 
 export interface DockerRuntimeProgressEvent {
   stage: string;
@@ -391,6 +392,7 @@ export interface DockerRuntimeHistoryQuery {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  level?: DockerRuntimeHistoryLevel;
   progressStage?: string;
   progressStatus?: DockerRuntimeProgressStatus;
   from?: string;

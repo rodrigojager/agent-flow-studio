@@ -770,7 +770,8 @@ Status 2026-06-30:
 - implementado auto-refresh opt-in para inspeção/status/logs enquanto o usuário está no painel de artefato;
 - verificado por teste automatizado com runner Docker falso, build da UI e `app.inject` no runtime gerado real;
 - implementado painel de progresso por etapa no build Docker (`docker compose build`) com persistência em histórico operacional;
-- ainda precisa de refinamento de UX para leitura de build regressões e filtros avançados no histórico operacional.
+- implementado filtro por nível/severidade no histórico operacional (`error`, `warning`, `info`, `success`);
+- ainda precisa de refinamento de UX para leitura de regressões em build/up/smoke.
 
 ### Fase 10: Catalogo Local, Skills E Tools Reutilizaveis
 

@@ -15,6 +15,7 @@ const DOCKER_BUILD_PROGRESS_CACHE_MAX = 20;
 export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect" | "cancel";
 export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error" | "canceled";
 export type DockerBuildProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
+export type DockerRuntimeHistoryLevel = "error" | "warning" | "info" | "success";
 
 interface DockerBuildProgressEvent {
   stage: string;
@@ -142,6 +143,7 @@ export interface DockerRuntimeHistoryQuery {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  level?: DockerRuntimeHistoryLevel;
   progressStage?: string;
   progressStatus?: DockerBuildProgressStatus;
   from?: string;
@@ -153,6 +155,7 @@ interface DockerRuntimeHistoryFilter {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  level?: DockerRuntimeHistoryLevel;
   progressStage?: string;
   progressStatus?: DockerBuildProgressStatus;
   fromMs?: number;
@@ -779,6 +782,7 @@ export class DockerRuntimeManager {
     const operationFilter = query.operation;
     const okFilter = query.ok;
     const searchFilter = query.search?.toLowerCase();
+    const levelFilter = query.level;
     const progressStageFilter = query.progressStage?.toLowerCase();
     const progressStatusFilter = query.progressStatus;
     const fromMs = query.fromMs;
@@ -820,6 +824,9 @@ export class DockerRuntimeManager {
           if (!haystack.includes(searchFilter)) {
             return false;
           }
+        }
+        if (levelFilter && !entryMatchesHistoryLevel(entry, levelFilter)) {
+          return false;
         }
         if (progressStageFilter && !entryProgressMatchesStage(entry, progressStageFilter)) {
           return false;
@@ -1536,6 +1543,7 @@ interface DockerRuntimeHistoryFilterQuery {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  level?: DockerRuntimeHistoryLevel;
   progressStage?: string;
   progressStatus?: DockerBuildProgressStatus;
   fromMs?: number;
@@ -1555,6 +1563,7 @@ function normalizeDockerRuntimeHistoryQuery(
     status: source.status,
     ok: source.ok,
     search: source.search?.trim() || undefined,
+    level: source.level,
     progressStage: source.progressStage?.trim() || undefined,
     progressStatus: source.progressStatus,
     fromMs: Number.isFinite(fromMs) ? fromMs : undefined,
@@ -1570,6 +1579,25 @@ function entryProgressMatchesStage(entry: DockerRuntimeHistoryEntry, needle: str
 
 function entryProgressMatchesStatus(entry: DockerRuntimeHistoryEntry, status: DockerBuildProgressStatus): boolean {
   return (entry.progress ?? []).some((step) => step.status === status);
+}
+
+function entryMatchesHistoryLevel(entry: DockerRuntimeHistoryEntry, level: DockerRuntimeHistoryLevel): boolean {
+  const progressStatuses = new Set((entry.progress ?? []).map((step) => step.status));
+  const logText = [entry.message, ...entry.logs].join("\n").toLowerCase();
+  if (level === "error") {
+    return !entry.ok || entry.status === "error" || entry.status === "canceled" || progressStatuses.has("error") || progressStatuses.has("canceled");
+  }
+  if (level === "warning") {
+    return progressStatuses.has("warning") || /\b(warn|warning|aviso|deprecated|deprecat)/.test(logText);
+  }
+  if (level === "success") {
+    return entry.ok && entry.status === "success";
+  }
+  return (
+    progressStatuses.has("info") ||
+    entry.status === "running" ||
+    entry.status === "idle"
+  );
 }
 
 function isDockerBuildProgress(value: unknown): value is DockerBuildProgressEvent {

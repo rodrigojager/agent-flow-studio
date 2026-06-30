@@ -790,6 +790,35 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(dockerHistoryFilteredSearch.statusCode, 200);
   assert.equal(Array.isArray(dockerHistoryFilteredSearch.json().entries), true);
 
+  const dockerHistoryFilteredErrorLevel = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&level=error&limit=20",
+  });
+  assert.equal(dockerHistoryFilteredErrorLevel.statusCode, 200);
+  assert.ok(dockerHistoryFilteredErrorLevel.json().entries.length >= 1);
+  assert.ok(
+    dockerHistoryFilteredErrorLevel
+      .json()
+      .entries.every((entry: { ok: boolean; status: string; progress?: Array<{ status: string }> }) =>
+        !entry.ok ||
+        entry.status === "error" ||
+        entry.status === "canceled" ||
+        (entry.progress ?? []).some((step) => step.status === "error" || step.status === "canceled"),
+      ),
+  );
+
+  const dockerHistoryFilteredSuccessLevel = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&level=success&limit=20",
+  });
+  assert.equal(dockerHistoryFilteredSuccessLevel.statusCode, 200);
+  assert.ok(dockerHistoryFilteredSuccessLevel.json().entries.length >= 1);
+  assert.ok(
+    dockerHistoryFilteredSuccessLevel
+      .json()
+      .entries.every((entry: { ok: boolean; status: string }) => entry.ok && entry.status === "success"),
+  );
+
   const dockerHistoryFilteredProgressStage = await app.inject({
     method: "GET",
     url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&progressStage=metadata&limit=20",
@@ -882,6 +911,13 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   });
   assert.equal(dockerHistoryInvalidProgressStatus.statusCode, 400);
   assert.equal(dockerHistoryInvalidProgressStatus.json().error, "workspace_error");
+
+  const dockerHistoryInvalidLevel = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&level=debug",
+  });
+  assert.equal(dockerHistoryInvalidLevel.statusCode, 400);
+  assert.equal(dockerHistoryInvalidLevel.json().error, "workspace_error");
 
   const dockerHistoryInvalidFrom = await app.inject({
     method: "GET",

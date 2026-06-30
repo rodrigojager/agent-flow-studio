@@ -109,7 +109,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
   - smoke test;
   - inspeção de serviços;
   - logs;
-  - histórico operacional com filtros por operação, status, resultado, texto, etapa de build e status do progresso.
+  - histórico operacional com filtros por operação, status, resultado, nível, texto, etapa de build e status do progresso.
 - Progresso incremental durante `docker compose build`, com percentuais estimados quando o output do Docker não traz contagem explícita.
 - Links para `/docs` e `/openapi.json` do runtime final.
 

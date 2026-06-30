@@ -273,6 +273,9 @@ test("Docker operations render loading, running, stopped and error states", asyn
   await page.getByRole("button", { name: /^Smoke$/ }).click();
   await expect(page.getByText(/Smoke test falhou/).first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("erro").first()).toBeVisible();
+  await page.getByLabel("Nível").selectOption("error");
+  await page.getByRole("button", { name: /^Aplicar$/ }).click();
+  await expect(page.getByText(/Smoke test falhou/).first()).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole("button", { name: /^Down$/ }).click();
   await expect(page.getByText("Container Docker final parado.").first()).toBeVisible({ timeout: 10_000 });

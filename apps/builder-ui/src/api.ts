@@ -515,6 +515,9 @@ function generatedRuntimeHistoryQuery(
   if (filters.search) {
     params.set("search", filters.search);
   }
+  if (filters.level) {
+    params.set("level", filters.level);
+  }
   if (filters.progressStage) {
     params.set("progressStage", filters.progressStage);
   }
