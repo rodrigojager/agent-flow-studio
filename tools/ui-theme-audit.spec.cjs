@@ -244,6 +244,10 @@ test("runtime manifest editor saves visual changes", async ({ page }) => {
   await expect(runtimePanel.locator(".runtime-pill", { hasText: "multiagent" })).toBeVisible();
   await runtimePanel.getByRole("button", { name: /Validar/ }).click();
   await expect(runtimePanel.getByText("Agentes válidos")).toBeVisible();
+  await expect(runtimePanel.getByText("Mapa do bundle multiagente")).toBeVisible();
+  await expect(runtimePanel.getByText("/reference-interview/sessions")).toBeVisible();
+  await expect(runtimePanel.getByText("agents/reference-interview")).toBeVisible();
+  await expect(runtimePanel.getByText("Validado contra o flow do workspace.")).toBeVisible();
 
   await expectNoDocumentHorizontalOverflow(page);
   await expectTopbarControlsToFit(page);

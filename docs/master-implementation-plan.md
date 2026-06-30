@@ -39,6 +39,7 @@ Ja existe uma base funcional importante:
 - Codegen para sandbox LangGraph compatível.
 - Codegen multiagente inicial por `runtime.manifest.json`.
 - Editor visual inicial de `runtime.manifest.json` na aba `Runtime`, com metadata, LLM padrão, empacotamento, agentes e prefixos de rota.
+- Mapa operacional inicial de bundle multiagente na aba `Runtime`, com app raiz, rotas montadas, runtime por agente e endpoints resolvidos pela validação.
 - Identidade operacional inicial por agente com `agent_id` em `/metadata`, sessão, eventos, runs locais, resumo por agente e timeline filtrável no Studio.
 - Builder API para flows, assets, validacao, artefatos, import/export, manifest e geracao.
 - Builder UI inicial com React Flow, canvas, inspector, arquivos, validacao, artefatos e runtime.
@@ -805,7 +806,7 @@ Entregaveis:
 - manifest editor visual inicial ja implementado para `runtime.manifest.json`;
 - runs por agente ja possuem filtro inicial no Studio;
 - trace por agente ja possui filtro inicial na timeline e resumo por agente no Studio;
-- visão multiagente dedicada por bundle;
+- mapa de bundle multiagente ja implementado para app raiz, rotas, metadata, runtime por agente e endpoint de sessão;
 - isolamento por rota/agente;
 - Postgres compartilhado em teste real;
 - validacao de bundle pela UI.

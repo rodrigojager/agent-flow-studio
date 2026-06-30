@@ -448,7 +448,12 @@ export async function validateRuntimeManifest(workspaceRoot: string) {
     agents: agents.map((agent) => ({
       id: agent.id,
       flowId: agent.flow.id,
+      flowName: agent.flow.name,
+      flowVersion: agent.flow.version,
+      flowPath: loaded.manifest.agents.find((manifestAgent) => manifestAgent.id === agent.id)?.flowPath ?? "",
       routePrefix: agent.routePrefix,
+      resourceName: agent.flow.api.resourceName,
+      contract: agent.flow.api.contract,
     })),
   };
 }

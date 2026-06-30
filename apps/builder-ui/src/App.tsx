@@ -214,6 +214,21 @@ interface DockerOperationAlert {
   entryId: string | null;
 }
 
+interface RuntimeBundleAgentView {
+  id: string;
+  flowId: string;
+  flowName: string;
+  flowVersion: string;
+  flowPath: string;
+  routePrefix: string;
+  runtimeDir: string;
+  metadataPath: string;
+  sessionCollectionPath: string | null;
+  resourceName: string | null;
+  contract: string | null;
+  isValidated: boolean;
+}
+
 interface StatusState {
   kind: StatusKind;
   message: string;
@@ -6254,6 +6269,9 @@ function RuntimeManifestPanel({
   const defaultLlmEnabled = Boolean(defaultLlm);
   const adapterOptions = llmAdapterOptions(llmAdapters, defaultLlm?.adapter ?? "");
   const generatedAgents = generation?.agents ?? [];
+  const bundleAgents = buildRuntimeBundleAgentViews(manifest, validation, flows);
+  const bundleStatus = dirty ? "rascunho" : generation ? "gerado" : validation ? "validado" : "pendente";
+  const bundleModeLabel = manifest.packaging === "multiagent" ? "multiagente" : "monoagente";
   return (
     <div className="runtime-manifest-body">
       <section className="sandbox-section">
@@ -6409,6 +6427,46 @@ function RuntimeManifestPanel({
                 <Trash2 size={16} aria-hidden="true" />
                 Remover agente
               </button>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="sandbox-section multiagent-bundle-map">
+        <div className="sandbox-header">
+          <strong>Mapa do bundle {bundleModeLabel}</strong>
+          <span className={bundleStatus === "gerado" || bundleStatus === "validado" ? "runtime-pill running" : "runtime-pill"}>
+            {bundleStatus}
+          </span>
+        </div>
+        <div className="bundle-root-card">
+          <div>
+            <strong>App raiz FastAPI</strong>
+            <span>{manifest.id}</span>
+          </div>
+          <div className="bundle-endpoint-row">
+            <code>/health</code>
+            <code>/metadata</code>
+            {generation ? <code>{generation.outDir}</code> : null}
+          </div>
+        </div>
+        <div className="bundle-agent-grid">
+          {bundleAgents.map((agent) => (
+            <article className="bundle-agent-card" key={`bundle-agent-${agent.id}`}>
+              <div className="bundle-agent-title">
+                <strong>{agent.id}</strong>
+                <span>{agent.routePrefix}</span>
+              </div>
+              <dl className="kv-list inspector-list">
+                <Field label="Flow" value={agent.flowName || agent.flowId} />
+                <Field label="Flow path" value={agent.flowPath} />
+                <Field label="Runtime" value={agent.runtimeDir} />
+                <Field label="Metadata" value={agent.metadataPath} />
+                <Field label="Recurso" value={agent.resourceName ?? "Validar para resolver resourceName"} />
+                <Field label="Sessões" value={agent.sessionCollectionPath ?? "Validar para resolver resourceName"} />
+                <Field label="Contrato" value={agent.contract ?? "Validar para resolver contrato"} />
+              </dl>
+              <small>{agent.isValidated ? "Validado contra o flow do workspace." : "Pendente de validação do flow referenciado."}</small>
             </article>
           ))}
         </div>
@@ -11032,6 +11090,34 @@ function cloneRuntimeManifest(manifest: RuntimeManifest): RuntimeManifest {
   return JSON.parse(JSON.stringify(manifest)) as RuntimeManifest;
 }
 
+function buildRuntimeBundleAgentViews(
+  manifest: RuntimeManifest,
+  validation: RuntimeManifestValidationResult | null,
+  flows: FlowSummary[],
+): RuntimeBundleAgentView[] {
+  const validatedById = new Map((validation?.agents ?? []).map((agent) => [agent.id, agent]));
+  return manifest.agents.map((agent) => {
+    const validated = validatedById.get(agent.id);
+    const flow = flows.find((item) => item.path === agent.flowPath || item.id === validated?.flowId);
+    const routePrefix = normalizeManifestRoutePrefix(agent.routePrefix);
+    const resourceName = validated?.resourceName ?? null;
+    return {
+      id: agent.id,
+      flowId: validated?.flowId ?? flow?.id ?? manifestAgentIdFromFlowPath(agent.flowPath),
+      flowName: validated?.flowName ?? flow?.name ?? flow?.id ?? manifestAgentIdFromFlowPath(agent.flowPath),
+      flowVersion: validated?.flowVersion ?? flow?.version ?? "",
+      flowPath: validated?.flowPath ?? agent.flowPath,
+      routePrefix,
+      runtimeDir: `agents/${safeRuntimeSegment(agent.id)}`,
+      metadataPath: joinRuntimePath(routePrefix, "metadata"),
+      sessionCollectionPath: resourceName ? joinRuntimePath(routePrefix, resourceName) : null,
+      resourceName,
+      contract: validated?.contract ?? null,
+      isValidated: Boolean(validated),
+    };
+  });
+}
+
 function ensureManifestRoutePrefixes(manifest: RuntimeManifest): RuntimeManifest {
   const used = new Set<string>();
   return {
@@ -11113,6 +11199,25 @@ function slugIdentifier(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "agent";
+}
+
+function safeRuntimeSegment(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-|-$/g, "") || "agent";
+}
+
+function joinRuntimePath(prefix: string, suffix: string): string {
+  const normalizedPrefix = normalizeManifestRoutePrefix(prefix);
+  const normalizedSuffix = suffix.replace(/^\/+|\/+$/g, "");
+  if (!normalizedSuffix) {
+    return normalizedPrefix;
+  }
+  if (normalizedPrefix === "/") {
+    return `/${normalizedSuffix}`;
+  }
+  return `${normalizedPrefix}/${normalizedSuffix}`;
 }
 
 function manifestFlowOptions(flows: FlowSummary[], currentPath: string): FlowSummary[] {

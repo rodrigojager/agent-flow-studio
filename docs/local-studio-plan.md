@@ -422,6 +422,7 @@ Entregáveis:
 
 - visualizar manifestos multiagente;
 - editar visualmente `runtime.manifest.json` com agentes, LLM padrão, empacotamento e prefixos de rota;
+- visualizar mapa operacional do bundle com app raiz, rotas, metadata, runtime por agente e endpoint de sessão;
 - testar agentes por `agent_id`;
 - isolamento por rota/agente;
 - runs por agente;
@@ -512,7 +513,8 @@ Mas a ferramenta não deve depender disso para operar.
    - filtros por agente em runs locais do Studio já foram implementados;
    - resumo por agente e filtro por agente na timeline já foram implementados;
    - editor visual inicial de `runtime.manifest.json` já foi implementado na aba `Runtime`;
-   - falta ampliar o trace/histórico multiagente para uma visão dedicada de bundle.
+   - mapa inicial de bundle multiagente já foi implementado na aba `Runtime`;
+   - falta ampliar ações operacionais por agente dentro do bundle.
 
 ## Regra de decisão para novos comportamentos
 

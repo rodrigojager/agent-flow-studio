@@ -1142,6 +1142,9 @@ test("Builder API reads, validates and generates a runtime manifest bundle", asy
   assert.equal(validated.json().status, "ok");
   assert.equal(validated.json().agents[0].flowId, "reference-interview");
   assert.equal(validated.json().agents[0].routePrefix, "/reference-interview");
+  assert.equal(validated.json().agents[0].resourceName, "sessions");
+  assert.equal(validated.json().agents[0].contract, "sessions-v1");
+  assert.equal(validated.json().agents[0].flowPath, "flows/reference-interview/agent.flow.json");
 
   const generated = await app.inject({
     method: "POST",

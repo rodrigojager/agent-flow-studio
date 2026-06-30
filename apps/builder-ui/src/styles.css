@@ -1212,6 +1212,75 @@ button:disabled {
   white-space: nowrap;
 }
 
+.multiagent-bundle-map {
+  gap: 12px;
+}
+
+.bundle-root-card,
+.bundle-agent-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #d7ddd8;
+  border-radius: 7px;
+  background: #fbfcfa;
+}
+
+.bundle-root-card > div:first-child,
+.bundle-agent-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bundle-root-card strong,
+.bundle-agent-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #17211f;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-root-card span,
+.bundle-agent-title span,
+.bundle-agent-card small {
+  min-width: 0;
+  overflow: hidden;
+  color: #63736f;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-endpoint-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bundle-endpoint-row code,
+.bundle-agent-card code {
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid #d7ddd8;
+  border-radius: 6px;
+  color: #17211f;
+  background: #ffffff;
+  font-family: ui-monospace, "Cascadia Code", "Segoe UI Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.bundle-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
 .sandbox-body,
 .runtime-manifest-body {
   display: grid;
@@ -2173,6 +2242,8 @@ button:disabled {
 [data-theme] .brand-block h1,
 [data-theme] .sandbox-header strong,
 [data-theme] .runtime-item strong,
+[data-theme] .bundle-root-card strong,
+[data-theme] .bundle-agent-title strong,
 [data-theme] .kv-list dd,
 [data-theme] .tabs button.active {
   color: var(--text-strong);
@@ -2186,6 +2257,9 @@ button:disabled {
 [data-theme] .sandbox-header span,
 [data-theme] .runtime-item span,
 [data-theme] .runtime-item small,
+[data-theme] .bundle-root-card span,
+[data-theme] .bundle-agent-title span,
+[data-theme] .bundle-agent-card small,
 [data-theme] .statusbar,
 [data-theme] .tabs button {
   color: var(--text-muted);
@@ -2206,6 +2280,10 @@ button:disabled {
 [data-theme] .asset-section,
 [data-theme] .sandbox-section,
 [data-theme] .runtime-item,
+[data-theme] .bundle-root-card,
+[data-theme] .bundle-agent-card,
+[data-theme] .bundle-endpoint-row code,
+[data-theme] .bundle-agent-card code,
 [data-theme] .reference-box,
 [data-theme] .empty-state,
 [data-theme] .artifact-file-button,

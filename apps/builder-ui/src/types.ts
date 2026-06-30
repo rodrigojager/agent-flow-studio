@@ -249,7 +249,12 @@ export interface RuntimeManifestValidationResult {
   agents: Array<{
     id: string;
     flowId: string;
+    flowName: string;
+    flowVersion: string;
+    flowPath: string;
     routePrefix: string;
+    resourceName: string;
+    contract: string;
   }>;
 }
 
