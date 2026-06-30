@@ -27,6 +27,7 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
 
   const dockerCalls: DockerCommandInvocation[] = [];
+  let cancelNextBuild = false;
   const app = buildApp({
     workspaceRoot,
     dockerRunner: async (invocation) => {
@@ -54,6 +55,23 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
         };
       }
       if (invocation.args.join(" ") === "compose build api") {
+        if (cancelNextBuild) {
+          invocation.onOutput?.("#1 [internal] load build definition from Dockerfile\n");
+          return new Promise((resolve) => {
+            const finishCanceled = () =>
+              resolve({
+                exitCode: 130,
+                stdout: "#1 [internal] load build definition from Dockerfile\n",
+                stderr: "Comando cancelado pelo usuário.",
+                aborted: true,
+              });
+            if (invocation.signal?.aborted) {
+              finishCanceled();
+              return;
+            }
+            invocation.signal?.addEventListener("abort", finishCanceled, { once: true });
+          });
+        }
         invocation.onOutput?.("#1 [internal] load build definition from Dockerfile\n");
         await new Promise((resolve) => setTimeout(resolve, 50));
         invocation.onOutput?.("#2 [internal] load metadata for docker.io/library/node:20\n#2 DONE 0.2s\n");
@@ -615,6 +633,33 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.ok(dockerBuild.json().progress.length >= 3);
   assert.ok(dockerBuild.json().progress.every((step: { stage: string }) => typeof step.stage === "string"));
 
+  cancelNextBuild = true;
+  const dockerBuildToCancelPromise = app.inject({
+    method: "POST",
+    url: "/docker-runtime/build",
+    headers: { "content-type": "application/json" },
+    payload: { outDir: "generated/reference-interview-approved-runtime" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const dockerCancel = await app.inject({
+    method: "POST",
+    url: "/docker-runtime/cancel",
+    headers: { "content-type": "application/json" },
+    payload: { outDir: "generated/reference-interview-approved-runtime" },
+  });
+  assert.equal(dockerCancel.statusCode, 200);
+  assert.equal(dockerCancel.json().operation, "cancel");
+  assert.equal(dockerCancel.json().ok, true);
+
+  const dockerBuildCanceled = await dockerBuildToCancelPromise;
+  assert.equal(dockerBuildCanceled.statusCode, 200);
+  assert.equal(dockerBuildCanceled.json().ok, false);
+  assert.equal(dockerBuildCanceled.json().lastOperation, "build");
+  assert.equal(dockerBuildCanceled.json().lastStatus, "canceled");
+  assert.equal(dockerBuildCanceled.json().progress.at(-1).status, "canceled");
+  assert.match(dockerBuildCanceled.json().message, /cancelado/i);
+  cancelNextBuild = false;
+
   const dockerUp = await app.inject({
     method: "POST",
     url: "/docker-runtime/up",
@@ -646,7 +691,7 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(dockerDown.statusCode, 200);
   assert.equal(dockerDown.json().lastOperation, "down");
   assert.deepEqual(dockerDown.json().args, ["compose", "down"]);
-  assert.equal(dockerCalls.length, 5);
+  assert.equal(dockerCalls.length, 6);
 
   const dockerHistory = await app.inject({
     method: "GET",
@@ -669,6 +714,16 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(dockerHistoryFilteredOperation.statusCode, 200);
   assert.ok(dockerHistoryFilteredOperation.json().entries.length >= 1);
   assert.ok(dockerHistoryFilteredOperation.json().entries.every((entry: { operation: string }) => entry.operation === "build"));
+
+  const dockerHistoryFilteredCanceled = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&status=canceled&limit=20",
+  });
+  assert.equal(dockerHistoryFilteredCanceled.statusCode, 200);
+  assert.ok(dockerHistoryFilteredCanceled.json().entries.length >= 1);
+  assert.ok(
+    dockerHistoryFilteredCanceled.json().entries.every((entry: { status: string }) => entry.status === "canceled"),
+  );
 
   const dockerHistoryFilteredStatus = await app.inject({
     method: "GET",

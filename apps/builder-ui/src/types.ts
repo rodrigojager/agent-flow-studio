@@ -269,10 +269,10 @@ export interface GeneratedArtifactFileContent {
   truncated: boolean;
 }
 
-export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect";
-export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error";
+export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect" | "cancel";
+export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error" | "canceled";
 
-export type DockerRuntimeProgressStatus = "running" | "done" | "error" | "warning" | "info";
+export type DockerRuntimeProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
 
 export interface DockerRuntimeProgressEvent {
   stage: string;

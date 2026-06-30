@@ -89,6 +89,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
   - preparar `.env`;
   - configurar portas;
   - build;
+  - cancelamento de build em andamento;
   - compose up;
   - compose down;
   - smoke test;

@@ -430,6 +430,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     return dockerRuntimeManager.build(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
   });
 
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/cancel", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.cancel(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
+  });
+
   app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/prepare-env", async (request) => {
     const outDir = requiredBodyString(request.body?.outDir, "outDir");
     return dockerRuntimeManager.prepareEnv(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
@@ -607,11 +612,12 @@ function optionalDockerRuntimeOperation(value: string | undefined, name: string)
     normalized === "up" ||
     normalized === "down" ||
     normalized === "smoke" ||
-    normalized === "inspect"
+    normalized === "inspect" ||
+    normalized === "cancel"
   ) {
     return normalized;
   }
-  throw new WorkspaceError(`${name} deve ser prepare_env, configure_ports, build, up, down, smoke ou inspect.`, 400);
+  throw new WorkspaceError(`${name} deve ser prepare_env, configure_ports, build, up, down, smoke, inspect ou cancel.`, 400);
 }
 
 function optionalDockerRuntimeStatus(value: string | undefined, name: string): DockerRuntimeOperationStatus | undefined {
@@ -622,10 +628,10 @@ function optionalDockerRuntimeStatus(value: string | undefined, name: string): D
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "idle" || normalized === "running" || normalized === "success" || normalized === "error") {
+  if (normalized === "idle" || normalized === "running" || normalized === "success" || normalized === "error" || normalized === "canceled") {
     return normalized;
   }
-  throw new WorkspaceError(`${name} deve ser idle, running, success ou error.`, 400);
+  throw new WorkspaceError(`${name} deve ser idle, running, success, error ou canceled.`, 400);
 }
 
 function parseDateQuery(value: string | undefined, name: string): string | undefined {

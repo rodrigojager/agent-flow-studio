@@ -39,6 +39,7 @@ import {
   Pin,
   Save,
   Sparkles,
+  Square,
   Sun,
   Terminal,
   Trash2,
@@ -57,6 +58,7 @@ import {
   deletePromptAsset,
   deleteSchemaAsset,
   dockerRuntimeBuild,
+  dockerRuntimeCancel,
   dockerRuntimeConfigurePorts,
   dockerRuntimeDown,
   dockerRuntimeHistory,
@@ -215,7 +217,7 @@ const dockerHistoryOperationOptions: DockerRuntimeOperation[] = [
   "smoke",
   "inspect",
 ];
-const dockerHistoryStatusOptions: DockerRuntimeOperationStatus[] = ["idle", "running", "success", "error"];
+const dockerHistoryStatusOptions: DockerRuntimeOperationStatus[] = ["idle", "running", "success", "error", "canceled"];
 const dockerHistoryFilterDefaults: DockerHistoryFilterForm = {
   operation: "",
   status: "",
@@ -1564,11 +1566,29 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       setDockerRuntimeUrl(result.runtimeUrl);
       syncDockerPortFields(result);
       await refreshDockerHistoryData(artifactListing.outDir, result.runtimeUrl);
-      setStatus({ kind: result.ok ? "ok" : "error", message: result.message });
+      setStatus({ kind: result.ok || result.lastStatus === "canceled" ? "ok" : "error", message: result.message });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     } finally {
       setDockerRuntimeBusy(null);
+    }
+  }
+
+  async function handleCancelDockerBuild() {
+    if (!artifactListing) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Cancelando build Docker de ${artifactListing.outDir}.` });
+    try {
+      const result = await dockerRuntimeCancel(artifactListing.outDir, dockerRuntimeUrl);
+      setDockerRuntimeOperation(result);
+      setDockerRuntimeStatusData(result);
+      setDockerRuntimeUrl(result.runtimeUrl);
+      syncDockerPortFields(result);
+      await refreshDockerHistoryData(artifactListing.outDir, result.runtimeUrl);
+      setStatus({ kind: "ok", message: result.message });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
     }
   }
 
@@ -2559,6 +2579,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onRefreshDocker={handleRefreshDockerRuntime}
               onConfigureDockerPorts={handleConfigureDockerPorts}
               onDockerAction={handleDockerRuntimeAction}
+              onCancelDockerBuild={handleCancelDockerBuild}
               dockerHistoryFilterDraft={dockerHistoryFilterDraft}
               dockerHistoryFilterHasChanges={dockerHistoryFilterHasChanges}
               dockerHistoryOperationOptions={dockerHistoryOperationOptions}
@@ -3508,6 +3529,7 @@ function GeneratedArtifactPanel({
   onRefreshDocker,
   onConfigureDockerPorts,
   onDockerAction,
+  onCancelDockerBuild,
   dockerHistoryFilterDraft,
   dockerHistoryFilterHasChanges,
   dockerHistoryOperationOptions,
@@ -3539,6 +3561,7 @@ function GeneratedArtifactPanel({
   onRefreshDocker: () => void;
   onConfigureDockerPorts: () => void;
   onDockerAction: (operation: DockerRuntimeOperation) => void;
+  onCancelDockerBuild: () => void;
   dockerHistoryFilterDraft: DockerHistoryFilterForm;
   dockerHistoryFilterHasChanges: boolean;
   dockerHistoryOperationOptions: readonly DockerRuntimeOperation[];
@@ -3691,6 +3714,16 @@ function GeneratedArtifactPanel({
             >
               <Terminal size={16} aria-hidden="true" />
               Build
+            </button>
+            <button
+              type="button"
+              className="command-button danger"
+              onClick={onCancelDockerBuild}
+              disabled={dockerBusy !== "build"}
+              title="Cancelar build Docker em andamento"
+            >
+              <Square size={16} aria-hidden="true" />
+              Cancelar
             </button>
             <button
               type="button"
@@ -5826,6 +5859,9 @@ async function runDockerRuntimeOperation(
   if (operation === "build") {
     return dockerRuntimeBuild(outDir, runtimeUrl);
   }
+  if (operation === "cancel") {
+    return dockerRuntimeCancel(outDir, runtimeUrl);
+  }
   if (operation === "up") {
     return dockerRuntimeUp(outDir, runtimeUrl);
   }
@@ -5848,6 +5884,9 @@ function dockerOperationLabel(operation: DockerRuntimeOperation): string {
   if (operation === "build") {
     return "Build Docker final";
   }
+  if (operation === "cancel") {
+    return "Cancelando build Docker";
+  }
   if (operation === "up") {
     return "Subindo container final";
   }
@@ -5869,6 +5908,9 @@ function dockerOperationName(operation: DockerRuntimeOperation): string {
   }
   if (operation === "build") {
     return "Build";
+  }
+  if (operation === "cancel") {
+    return "Cancel";
   }
   if (operation === "up") {
     return "Up";
@@ -5994,6 +6036,9 @@ function dockerRuntimeStatusLabel(
   if (status.lastStatus === "error") {
     return "erro";
   }
+  if (status.lastStatus === "canceled") {
+    return "cancelado";
+  }
   return status.ready ? "pronto" : "pendente";
 }
 
@@ -6002,6 +6047,9 @@ function dockerRuntimePillClass(status: DockerRuntimeStatus | null): string {
     return "running";
   }
   if (status?.lastStatus === "error") {
+    return "stopped";
+  }
+  if (status?.lastStatus === "canceled") {
     return "stopped";
   }
   return "";
@@ -6014,7 +6062,7 @@ function dockerProgressClass(status: string): string {
   if (status === "warning") {
     return "progress-warning";
   }
-  if (status === "error") {
+  if (status === "error" || status === "canceled") {
     return "progress-error";
   }
   return "progress-running";

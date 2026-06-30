@@ -80,6 +80,8 @@
 - Topbar do Builder/Studio passou a conter overflow de toolbar localmente, evitando alargar o documento em viewport desktop comum.
 - Docker Runtime Manager atualiza progresso de `docker compose build` enquanto o comando ainda está rodando, via callback de streaming no runner padrão e registro em memória consultável por `/docker-runtime/status`.
 - Builder UI consulta `/docker-runtime/status` durante `Build`, mesmo com a operação ocupada, para atualizar painel de progresso/logs antes da resposta final do comando.
+- Docker Runtime Manager registra operações Docker ativas por runtime, expõe `/docker-runtime/cancel` e aborta builds em andamento por `AbortController`, marcando o resultado final como `canceled` em status, progresso e histórico.
+- Builder UI mostra ação `Cancelar` durante `Build`, mantendo polling de progresso até o backend confirmar o cancelamento e registrando o evento no histórico operacional.
 
 ## Verificado
 
@@ -121,6 +123,7 @@ Também foi validado localmente:
 - `npm run typecheck`, `npm run test:builder-api` e `npm --workspace @agent-flow-builder/builder-ui run build` passaram após o painel `Contexto do nó` e a nova ordenação causal.
 - Builder UI validado via Playwright em `http://127.0.0.1:5173` com viewport `1440x900`: aba `Studio` abriu, clique no nó `start` preencheu `Contexto do nó` com 4 cards, tema alternou entre escuro/claro preservando o painel e `body.scrollWidth` permaneceu dentro do viewport.
 - `npm run test:builder-api` cobre progresso incremental do Docker build: enquanto o `POST /docker-runtime/build` ainda está pendente, `GET /docker-runtime/status` retorna `lastOperation=build`, `lastStatus=running` e `progress` já preenchido.
+- `npm run test:builder-api` cobre cancelamento de build Docker: `/docker-runtime/cancel` aborta o runner pendente via signal, o build retorna `lastStatus=canceled`, o progresso termina com status `canceled` e o filtro de histórico por `status=canceled` encontra a entrada cancelada.
 
 ## Ainda não implementado
 
@@ -140,7 +143,6 @@ Também foi validado localmente:
 Para chegar ao objetivo completo de "studio local + aprovação + API Docker" sem regressão de capacidade, a sequência recomendada é:
 
 1. **Refino do pipeline Docker (Alta prioridade)**
-   - adicionar cancelamento/abort visual para build longo;
    - filtrar histórico/progresso por etapa e severidade (info/warn/error);
    - melhorar percentuais quando o output do Docker não fornece contagem explícita.
 

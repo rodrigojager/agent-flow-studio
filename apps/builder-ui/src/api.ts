@@ -222,6 +222,10 @@ export async function dockerRuntimeBuild(outDir: string, runtimeUrl?: string): P
   return dockerRuntimeCommand("build", outDir, runtimeUrl);
 }
 
+export async function dockerRuntimeCancel(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("cancel", outDir, runtimeUrl);
+}
+
 export async function dockerRuntimePrepareEnv(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
   return dockerRuntimeCommand("prepare-env", outDir, runtimeUrl);
 }
@@ -449,7 +453,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function dockerRuntimeCommand(
-  operation: "prepare-env" | "build" | "up" | "down" | "smoke" | "inspect",
+  operation: "prepare-env" | "build" | "cancel" | "up" | "down" | "smoke" | "inspect",
   outDir: string,
   runtimeUrl?: string,
 ): Promise<DockerRuntimeOperationResult> {

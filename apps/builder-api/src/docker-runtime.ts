@@ -12,9 +12,9 @@ const FETCH_TIMEOUT_MS = 15_000;
 const MAX_COMMAND_BUFFER = 20 * 1024 * 1024;
 const DOCKER_BUILD_PROGRESS_CACHE_MAX = 20;
 
-export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect";
-export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error";
-type DockerBuildProgressStatus = "running" | "done" | "error" | "warning" | "info";
+export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect" | "cancel";
+export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error" | "canceled";
+type DockerBuildProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
 
 interface DockerBuildProgressEvent {
   stage: string;
@@ -31,12 +31,14 @@ export interface DockerCommandInvocation {
   cwd: string;
   timeoutMs: number;
   onOutput?: (chunk: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface DockerCommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  aborted?: boolean;
 }
 
 export type DockerCommandRunner = (invocation: DockerCommandInvocation) => Promise<DockerCommandResult>;
@@ -193,6 +195,11 @@ interface RuntimeRecord {
   progress?: DockerBuildProgressEvent[];
 }
 
+interface ActiveDockerOperation {
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">;
+  controller: AbortController;
+}
+
 interface DockerRuntimeManagerOptions {
   runner?: DockerCommandRunner;
 }
@@ -201,6 +208,7 @@ export class DockerRuntimeManager {
   private readonly workspaceRoot: string;
   private readonly runner: DockerCommandRunner;
   private readonly records = new Map<string, RuntimeRecord>();
+  private readonly activeOperations = new Map<string, ActiveDockerOperation>();
 
   constructor(workspaceRoot: string, options: DockerRuntimeManagerOptions = {}) {
     this.workspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
@@ -225,6 +233,48 @@ export class DockerRuntimeManager {
 
   async build(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
     return this.runDockerCompose(outDir, "build", ["compose", "build", "api"], runtimeUrl);
+  }
+
+  async cancel(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    const active = this.activeOperations.get(project.outDir);
+    if (!active || active.operation !== "build") {
+      throw new WorkspaceError("Nenhum build Docker em execução para cancelar.", 409);
+    }
+
+    active.controller.abort();
+    const logs = [
+      ...this.readRecord(project.outDir).logs,
+      "Cancelamento do build Docker solicitado pelo usuário.",
+    ].slice(-40);
+    this.updateRecord(project.outDir, {
+      ...this.readRecord(project.outDir),
+      lastOperation: "build",
+      lastStatus: "running",
+      lastExitCode: null,
+      updatedAt: new Date().toISOString(),
+      logs,
+    });
+    await this.appendHistory(project, {
+      operation: "cancel",
+      ok: true,
+      status: "success",
+      exitCode: 0,
+      startedAt: new Date().toISOString(),
+      message: "Cancelamento do build Docker solicitado.",
+      command: "docker",
+      args: ["compose", "build", "api"],
+      logs,
+    });
+
+    return {
+      ...(await this.statusFromProject(project)),
+      operation: "cancel",
+      ok: true,
+      command: "docker",
+      args: ["compose", "build", "api"],
+      message: "Cancelamento do build Docker solicitado.",
+    };
   }
 
   async prepareEnv(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
@@ -518,12 +568,17 @@ export class DockerRuntimeManager {
 
   private async runDockerCompose(
     outDir: string,
-    operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect">,
+    operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
     args: string[],
     runtimeUrl?: string,
   ): Promise<DockerRuntimeOperationResult> {
     const project = await this.resolveProject(outDir, runtimeUrl);
+    if (this.activeOperations.has(project.outDir)) {
+      throw new WorkspaceError("Já existe uma operação Docker em execução para este runtime.", 409);
+    }
+    const controller = new AbortController();
     const startedAt = new Date().toISOString();
+    this.activeOperations.set(project.outDir, { operation, controller });
     this.updateRecord(project.outDir, {
       lastOperation: operation,
       lastStatus: "running",
@@ -563,31 +618,38 @@ export class DockerRuntimeManager {
         cwd: project.absoluteOutDir,
         timeoutMs: COMMAND_TIMEOUT_MS,
         onOutput: onBuildOutput,
+        signal: controller.signal,
       });
     } catch (error) {
       result = commandErrorToResult(error);
+    } finally {
+      const active = this.activeOperations.get(project.outDir);
+      if (active?.controller === controller) {
+        this.activeOperations.delete(project.outDir);
+      }
     }
 
     const logs = commandLogs(result);
     const ok = result.exitCode === 0;
+    const canceled = result.aborted === true;
     const now = new Date().toISOString();
     const progress = operation === "build"
-      ? withBuildProgressTail(dedupeDockerBuildProgress(parseDockerBuildProgress(logs)), ok, now)
+      ? withBuildProgressTail(dedupeDockerBuildProgress(parseDockerBuildProgress(logs)), ok, now, canceled)
       : [];
     this.updateRecord(project.outDir, {
       lastOperation: operation,
-      lastStatus: ok ? "success" : "error",
+      lastStatus: canceled ? "canceled" : ok ? "success" : "error",
       lastExitCode: result.exitCode,
       updatedAt: new Date().toISOString(),
       logs,
       inspection: this.readRecord(project.outDir).inspection,
       progress,
     });
-    const message = ok ? dockerSuccessMessage(operation) : dockerFailureMessage(operation, result);
+    const message = canceled ? dockerCanceledMessage(operation) : ok ? dockerSuccessMessage(operation) : dockerFailureMessage(operation, result);
     await this.appendHistory(project, {
       operation,
       ok,
-      status: ok ? "success" : "error",
+      status: canceled ? "canceled" : ok ? "success" : "error",
       exitCode: result.exitCode,
       startedAt,
       message,
@@ -783,6 +845,7 @@ async function defaultDockerCommandRunner(invocation: DockerCommandInvocation): 
       timeout: invocation.timeoutMs,
       windowsHide: true,
       maxBuffer: MAX_COMMAND_BUFFER,
+      signal: invocation.signal,
     });
     return {
       exitCode: 0,
@@ -810,6 +873,7 @@ function runStreamingCommand(invocation: DockerCommandInvocation): Promise<Docke
       }
       settled = true;
       clearTimeout(timer);
+      invocation.signal?.removeEventListener("abort", abortHandler);
       resolve(result);
     };
 
@@ -831,6 +895,21 @@ function runStreamingCommand(invocation: DockerCommandInvocation): Promise<Docke
         stderr: stderr || `Comando excedeu timeout de ${invocation.timeoutMs}ms.`,
       });
     }, invocation.timeoutMs);
+
+    const abortHandler = () => {
+      child.kill();
+      finish({
+        exitCode: 130,
+        stdout,
+        stderr: stderr || "Comando cancelado pelo usuário.",
+        aborted: true,
+      });
+    };
+    if (invocation.signal?.aborted) {
+      abortHandler();
+      return;
+    }
+    invocation.signal?.addEventListener("abort", abortHandler, { once: true });
 
     child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
     child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
@@ -860,6 +939,14 @@ function appendLimited(current: string, chunk: string): string {
 }
 
 function commandErrorToResult(error: unknown): DockerCommandResult {
+  if (error instanceof Error && error.name === "AbortError") {
+    return {
+      exitCode: 130,
+      stdout: "",
+      stderr: "Comando cancelado pelo usuário.",
+      aborted: true,
+    };
+  }
   if (isExecError(error)) {
     return {
       exitCode: typeof error.code === "number" ? error.code : 1,
@@ -997,7 +1084,21 @@ function withBuildProgressTail(
   progress: DockerBuildProgressEvent[],
   ok: boolean,
   timestamp: string,
+  canceled = false,
 ): DockerBuildProgressEvent[] {
+  if (canceled) {
+    const canceledEvent: DockerBuildProgressEvent = {
+      stage: "cancel",
+      status: "canceled",
+      message: "Build cancelado pelo usuário.",
+      line: "Build cancelado pelo usuário.",
+      timestamp,
+    };
+    return [
+      ...progress,
+      canceledEvent,
+    ].slice(-DOCKER_BUILD_PROGRESS_CACHE_MAX);
+  }
   if (!progress.length) {
     return [
       {
@@ -1094,7 +1195,7 @@ function stripAnsi(value: string): string {
 }
 
 function dockerSuccessMessage(
-  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect">,
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
 ): string {
   if (operation === "build") {
     return "Build Docker final concluido.";
@@ -1106,7 +1207,7 @@ function dockerSuccessMessage(
 }
 
 function dockerFailureMessage(
-  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect">,
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
   result: DockerCommandResult,
 ): string {
   const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.exitCode}`;
@@ -1117,6 +1218,18 @@ function dockerFailureMessage(
     return `Inicialização do container final falhou: ${detail}`;
   }
   return `Parada do container final falhou: ${detail}`;
+}
+
+function dockerCanceledMessage(
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
+): string {
+  if (operation === "build") {
+    return "Build Docker final cancelado pelo usuário.";
+  }
+  if (operation === "up") {
+    return "Inicialização do container final cancelada pelo usuário.";
+  }
+  return "Parada do container final cancelada pelo usuário.";
 }
 
 function dockerInspectionFailureMessage(ps: DockerCommandResult, logs: DockerCommandResult): string {
