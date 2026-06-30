@@ -624,6 +624,7 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(dockerBuildRunning.json().lastOperation, "build");
   assert.equal(dockerBuildRunning.json().lastStatus, "running");
   assert.ok((dockerBuildRunning.json().progress?.length ?? 0) >= 1);
+  assert.equal(typeof dockerBuildRunning.json().progress[0].percent, "number");
 
   const dockerBuild = await dockerBuildPromise;
   assert.equal(dockerBuild.statusCode, 200);
@@ -632,6 +633,8 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(Array.isArray(dockerBuild.json().progress), true);
   assert.ok(dockerBuild.json().progress.length >= 3);
   assert.ok(dockerBuild.json().progress.every((step: { stage: string }) => typeof step.stage === "string"));
+  assert.ok(dockerBuild.json().progress.every((step: { percent?: number }) => typeof step.percent === "number"));
+  assert.equal(dockerBuild.json().progress.at(-1).percent, 100);
 
   cancelNextBuild = true;
   const dockerBuildToCancelPromise = app.inject({

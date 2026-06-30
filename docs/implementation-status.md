@@ -83,6 +83,7 @@
 - Docker Runtime Manager registra operações Docker ativas por runtime, expõe `/docker-runtime/cancel` e aborta builds em andamento por `AbortController`, marcando o resultado final como `canceled` em status, progresso e histórico.
 - Builder UI mostra ação `Cancelar` durante `Build`, mantendo polling de progresso até o backend confirmar o cancelamento e registrando o evento no histórico operacional.
 - Histórico Docker aceita filtros por etapa textual do progresso (`progressStage`) e status/severidade do progresso (`progressStatus`: running/done/error/warning/info/canceled); a Builder UI expõe os filtros `Etapa` e `Progresso` no painel `Artefato` e aplica o mesmo recorte à lista de progresso visível.
+- Parser de progresso Docker estima percentuais mesmo quando o output do BuildKit não traz contagem explícita, usando etapa inferida, contexto de linhas `#N DONE` e evento final em 100% para builds concluídos.
 
 ## Verificado
 
@@ -126,6 +127,7 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre progresso incremental do Docker build: enquanto o `POST /docker-runtime/build` ainda está pendente, `GET /docker-runtime/status` retorna `lastOperation=build`, `lastStatus=running` e `progress` já preenchido.
 - `npm run test:builder-api` cobre cancelamento de build Docker: `/docker-runtime/cancel` aborta o runner pendente via signal, o build retorna `lastStatus=canceled`, o progresso termina com status `canceled` e o filtro de histórico por `status=canceled` encontra a entrada cancelada.
 - `npm run test:builder-api` cobre filtros de histórico/progresso Docker por `progressStage=metadata`, `progressStatus=done`, `progressStatus=canceled` e rejeição de `progressStatus` inválido.
+- `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 
 ## Ainda não implementado
 
@@ -144,30 +146,27 @@ Também foi validado localmente:
 
 Para chegar ao objetivo completo de "studio local + aprovação + API Docker" sem regressão de capacidade, a sequência recomendada é:
 
-1. **Refino do pipeline Docker (Alta prioridade)**
-   - melhorar percentuais quando o output do Docker não fornece contagem explícita.
-
-2. **Auditoria visual completa de tema claro/escuro (Alta prioridade)**
+1. **Auditoria visual completa de tema claro/escuro (Alta prioridade)**
    - validar todas as abas principais em desktop e viewport menor;
    - corrigir contraste, overflow e estados vazios/erro/loading que ainda escaparem;
    - registrar checklist manual objetivo para evitar regressão visual.
 
-3. **Canvas/produtos de trabalho refinados (Média prioridade)**
+2. **Canvas/produtos de trabalho refinados (Média prioridade)**
    - grupos colapsáveis, atalhos e estado dirty/stale por nó/aresta;
    - edição visual de metadados e esquemas no painel lateral sem precisar abrir JSON;
    - atalhos de fluxo (Ctrl+S, Ctrl+Enter, A, F, Esc, filtros).
 
-4. **Cenários + pinning avançado (Média prioridade)**
+3. **Cenários + pinning avançado (Média prioridade)**
    - consolidar cenários nomeados por agente/run;
    - pinning de payload e output por nó com indicador visual;
    - reexecução determinística com histórico de comparação.
 
-5. **Adapters de código não nativos (Média/Longo prazo)**
+4. **Adapters de código não nativos (Média/Longo prazo)**
    - adicionar contrato de execução HTTP/MCP/sidecar;
    - mapa de segurança (timeout, retry, payload whitelist, redaction);
    - logs por nó no Studio Local e inclusão no hash de aprovação.
 
-6. **Multiagente operacional**
+5. **Multiagente operacional**
    - rota/agent_id estável no runtime e no Studio;
    - trace e histórico por agente no UI.
 

@@ -1077,19 +1077,32 @@ function dedupeDockerBuildProgress(progress: DockerBuildProgressEvent[]): Docker
 }
 
 function parseDockerBuildProgress(lines: string[]): DockerBuildProgressEvent[] {
-  return lines
-    .flatMap((rawLine) => {
-      const text = stripAnsi(rawLine);
-      if (!text.trim()) {
-        return [];
+  const events: DockerBuildProgressEvent[] = [];
+  const stepContext = new Map<string, { stage: string; percent?: number }>();
+  for (const rawLine of lines) {
+    const text = stripAnsi(rawLine);
+    if (!text.trim()) {
+      continue;
+    }
+    for (const line of text.split(/\r?\n/)) {
+      for (const parsed of parseDockerBuildLine(line)) {
+        const stepId = dockerBuildStepId(parsed.line);
+        const previous = stepId ? stepContext.get(stepId) : undefined;
+        const stage = parsed.stage === "build" && previous ? previous.stage : parsed.stage;
+        const percent = parsed.percent ?? previous?.percent ?? estimateDockerBuildPercent(parsed.line, stage);
+        const event: DockerBuildProgressEvent = {
+          ...parsed,
+          stage,
+          percent,
+        };
+        if (stepId) {
+          stepContext.set(stepId, { stage, percent });
+        }
+        events.push(event);
       }
-      return text
-        .split(/\r?\n/)
-        .flatMap((line) => parseDockerBuildLine(line))
-        .filter((item): item is DockerBuildProgressEvent => item !== null);
-    })
-    .filter((item): item is DockerBuildProgressEvent => item !== null)
-    .slice(-DOCKER_BUILD_PROGRESS_CACHE_MAX);
+    }
+  }
+  return smoothDockerBuildPercents(events).slice(-DOCKER_BUILD_PROGRESS_CACHE_MAX);
 }
 
 function withBuildProgressTail(
@@ -1104,6 +1117,7 @@ function withBuildProgressTail(
       status: "canceled",
       message: "Build cancelado pelo usuário.",
       line: "Build cancelado pelo usuário.",
+      percent: progress.at(-1)?.percent,
       timestamp,
     };
     return [
@@ -1118,6 +1132,7 @@ function withBuildProgressTail(
         status: ok ? "done" : "error",
         message: ok ? "Build finalizado." : "Build falhou.",
         line: ok ? "Build finalizado." : "Build falhou.",
+        percent: ok ? 100 : undefined,
         timestamp,
       },
     ];
@@ -1132,6 +1147,7 @@ function withBuildProgressTail(
           status: "done",
           message: "Build finalizado.",
           line: "Build finalizado.",
+          percent: 100,
           timestamp,
         },
       ];
@@ -1177,6 +1193,56 @@ function parsePercentFromLine(line: string): number | undefined {
     return undefined;
   }
   return Math.round((value / total) * 100);
+}
+
+function dockerBuildStepId(line: string): string | undefined {
+  return /^(#\d+)\b/.exec(line.trim())?.[1];
+}
+
+function estimateDockerBuildPercent(line: string, stage: string): number | undefined {
+  const lower = line.toLowerCase();
+  if (lower.includes("load .dockerignore")) {
+    return 8;
+  }
+  if (lower.includes("load build definition")) {
+    return 12;
+  }
+  if (stage === "metadata") {
+    return 20;
+  }
+  if (stage === "resolução") {
+    return 28;
+  }
+  if (stage === "download") {
+    return 36;
+  }
+  if (stage === "copy") {
+    return 48;
+  }
+  if (stage === "run") {
+    return 70;
+  }
+  if (lower.includes("exporting layers")) {
+    return 88;
+  }
+  if (stage === "export") {
+    return lower.includes("writing image") || lower.includes("writing manifest") ? 96 : 90;
+  }
+  return undefined;
+}
+
+function smoothDockerBuildPercents(progress: DockerBuildProgressEvent[]): DockerBuildProgressEvent[] {
+  let previous = 0;
+  return progress.map((event, index) => {
+    const fallback = Math.round(((index + 1) / Math.max(progress.length + 2, 3)) * 90);
+    const rawPercent = typeof event.percent === "number" ? event.percent : fallback;
+    const percent = Math.max(previous, Math.min(rawPercent, 99));
+    previous = percent;
+    return {
+      ...event,
+      percent,
+    };
+  });
 }
 
 function inferDockerBuildStage(line: string): string {
