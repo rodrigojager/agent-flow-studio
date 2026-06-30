@@ -487,6 +487,9 @@ export interface LocalCatalogItem {
   tags: string[];
   scope: "local";
   source: "builtin" | "local";
+  version: string;
+  revision: number;
+  contentHash: string;
   createdAt: string;
   updatedAt: string;
   content?: string;

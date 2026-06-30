@@ -79,6 +79,7 @@ export async function saveLocalCatalogItem(item: {
   name: string;
   description?: string;
   tags?: string[];
+  version?: string;
   content?: string;
   nodePatch?: Record<string, unknown>;
 }): Promise<LocalCatalogSaveResult> {

@@ -1482,7 +1482,11 @@ test("Builder API saves and applies local catalog items", async (t) => {
   const catalog = await app.inject({ method: "GET", url: "/catalog" });
   assert.equal(catalog.statusCode, 200);
   assert.equal(catalog.json().format, "agent-flow-builder.local-catalog.v1");
-  assert.ok(catalog.json().items.some((item: { kind: string; id: string }) => item.kind === "tool" && item.id === "http-json-tool"));
+  const builtinHttpTool = catalog.json().items.find((item: { kind: string; id: string }) => item.kind === "tool" && item.id === "http-json-tool");
+  assert.ok(builtinHttpTool);
+  assert.equal(builtinHttpTool.version, "1.0.0");
+  assert.equal(builtinHttpTool.revision, 1);
+  assert.match(builtinHttpTool.contentHash, /^[0-9a-f]{12}$/);
   assert.ok(
     catalog
       .json()
@@ -1536,7 +1540,30 @@ test("Builder API saves and applies local catalog items", async (t) => {
   });
   assert.equal(savedPrompt.statusCode, 200);
   assert.equal(savedPrompt.json().item.source, "local");
+  assert.equal(savedPrompt.json().item.version, "1.0.0");
+  assert.equal(savedPrompt.json().item.revision, 1);
+  assert.match(savedPrompt.json().item.contentHash, /^[0-9a-f]{12}$/);
   await access(path.join(workspaceRoot, ".agent-flow", "catalog", "registry.json"));
+
+  const savedPromptRevision = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "prompt",
+      id: "catalog-system",
+      name: "Prompt catalogado",
+      version: "1.1.0",
+      description: "Prompt reutilizável local revisado.",
+      tags: ["catalog", "test"],
+      content: "Use {topic} para gerar uma resposta objetiva com exemplos.",
+    },
+  });
+  assert.equal(savedPromptRevision.statusCode, 200);
+  assert.equal(savedPromptRevision.json().item.version, "1.1.0");
+  assert.equal(savedPromptRevision.json().item.revision, 2);
+  assert.equal(savedPromptRevision.json().item.createdAt, savedPrompt.json().item.createdAt);
+  assert.notEqual(savedPromptRevision.json().item.contentHash, savedPrompt.json().item.contentHash);
 
   const appliedPrompt = await app.inject({
     method: "POST",

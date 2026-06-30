@@ -5875,6 +5875,7 @@ function CatalogPanel({
           return true;
         }
         const searchable = [item.id, item.name, item.description, item.kind, item.source, ...item.tags]
+          .concat([item.version, `rev-${item.revision}`, item.contentHash])
           .join(" ")
           .toLowerCase();
         return searchable.includes(normalizedQuery);
@@ -6008,6 +6009,11 @@ function CatalogPanel({
                 </div>
                 <strong>{item.name}</strong>
                 <p>{item.description || item.id}</p>
+                <div className="catalog-card-meta">
+                  <span>v{item.version}</span>
+                  <span>rev. {item.revision}</span>
+                  <span>{item.contentHash}</span>
+                </div>
                 <div className="catalog-tags">
                   {item.tags.slice(0, 4).map((tag) => (
                     <span key={`${item.id}-${tag}`}>{tag}</span>

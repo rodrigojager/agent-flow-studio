@@ -168,6 +168,8 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
 
   await expect(page.getByText("Catálogo local")).toBeVisible();
   await expect(page.getByText("HTTP JSON tool")).toBeVisible();
+  await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toContainText("v1.0.0");
+  await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toContainText("rev. 1");
   await expect(page.getByText("Prompt de perguntas guiadas")).toBeVisible();
   await expect(page.getByText("Agente gerador de perguntas por conteúdo")).toBeVisible();
   await expect(page.getByText("Skill de perguntas estruturadas")).toBeVisible();
@@ -181,6 +183,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
     timeout: 10_000,
   });
   await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toBeVisible();
+  await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toContainText("rev. 1");
 
   await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
