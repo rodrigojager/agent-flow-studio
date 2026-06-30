@@ -133,7 +133,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 
 ### Próximo Ciclo
 
-- Ampliar auditoria visual automatizada para estados gerais de erro/loading fora do fluxo Docker.
+- Ampliar auditoria visual automatizada para estados gerais de erro/loading em painéis específicos além do status global e do fluxo Docker.
 - Melhorar ergonomia do canvas com grupos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.
 - Consolidar cenários salvos, pin/mock data e reexecução determinística.

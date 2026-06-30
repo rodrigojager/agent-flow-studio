@@ -101,6 +101,46 @@ for (const theme of themes) {
 }
 
 for (const theme of themes) {
+  test(`general non-Docker status renders loading and error in ${theme} theme`, async ({ page }) => {
+    const pageErrors = attachBrowserErrorCollector(page);
+    await page.route(`${apiUrl}/flows/reference-interview/validate`, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "workspace_error",
+          message: "Falha controlada de validação visual.",
+        }),
+      });
+    });
+
+    await openBuilder(page, theme, viewports[0]);
+    const validationRequest = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url() === `${apiUrl}/flows/reference-interview/validate`,
+    );
+    await page.getByRole("button", { name: /^Validar$/ }).click();
+    await validationRequest;
+
+    const busyStatus = page.getByRole("status");
+    await expect(busyStatus).toHaveAttribute("data-state", "busy");
+    await expect(busyStatus).toHaveAttribute("aria-busy", "true");
+    await expect(busyStatus).toContainText("Validando reference-interview.");
+
+    const errorStatus = page.getByRole("alert");
+    await expect(errorStatus).toHaveAttribute("data-state", "error");
+    await expect(errorStatus).toHaveAttribute("aria-live", "assertive");
+    await expect(errorStatus).toContainText("Falha controlada de validação visual.");
+    await expect(page.locator(".app-shell")).toHaveAttribute("data-theme", theme);
+
+    await expectNoDocumentHorizontalOverflow(page);
+    await expectTopbarControlsToFit(page);
+    const unexpectedErrors = pageErrors.filter((message) => !message.includes("422 (Unprocessable Entity)"));
+    expect(unexpectedErrors, `Unexpected browser errors in non-Docker status ${theme}`).toEqual([]);
+  });
+}
+
+for (const theme of themes) {
   test(`approval and Docker artifact render in ${theme} theme`, async ({ page }) => {
     const pageErrors = attachBrowserErrorCollector(page);
 

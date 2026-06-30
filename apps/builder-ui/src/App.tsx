@@ -2872,7 +2872,14 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         </aside>
       </main>
 
-      <footer className={`statusbar ${status.kind}`}>
+      <footer
+        className={`statusbar ${status.kind}`}
+        data-state={status.kind}
+        role={status.kind === "error" ? "alert" : "status"}
+        aria-live={status.kind === "error" ? "assertive" : "polite"}
+        aria-atomic="true"
+        aria-busy={status.kind === "busy"}
+      >
         <Send size={16} aria-hidden="true" />
         <span>{status.message}</span>
       </footer>

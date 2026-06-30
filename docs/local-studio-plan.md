@@ -374,6 +374,7 @@ Status 2026-06-30:
 - implementado: drill-down contextual por nó com input/output, eventos, diffs, logs correlacionados, prompt renderizado, metadados LLM, métricas de usage/custo/duração e spans estruturados;
 - implementado: diagnóstico operacional por nó com causa provável, próximas ações e evidências derivadas de payload/safety/status/snapshot/cadeia causal, com regras específicas para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics;
 - implementado: fork de checkpoint/evento para cenário local reexecutável, preservando origem de run, evento, snapshot, input/output e metadata da nova execução;
+- implementado: status global acessível (`status`/`alert`) com cobertura visual automatizada de loading/erro fora do fluxo Docker em tema claro e escuro;
 - pendente: filtros avançados de histórico operacional e restauração real de estado por checkpointer/runtime.
 
 ### Fase 7.5: Grafo Interativo de Execução
@@ -479,7 +480,8 @@ Mas a ferramenta não deve depender disso para operar.
    - replay com comparação de métricas.
 4. auditoria completa de tema:
    - verificar fluxo em ambas paletas;
-   - revisar contraste e tooltips em telas `Flow`, `Studio`, `Artefatos`, `Runtime`.
+   - revisar contraste e tooltips em telas `Flow`, `Studio`, `Artefatos`, `Runtime`;
+   - ampliar estados internos de erro/loading em painéis específicos além do status global já coberto.
 
 ### Prioridade 3 (seguinte)
 

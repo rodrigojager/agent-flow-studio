@@ -1305,6 +1305,7 @@ button:disabled {
   min-width: 0;
   padding: 0 16px;
   border-top: 1px solid #d7ddd8;
+  border-left: 4px solid transparent;
   color: #43504d;
   background: #fbfcfa;
   font-size: 13px;
@@ -1318,15 +1319,21 @@ button:disabled {
 }
 
 .statusbar.ok {
+  border-left-color: #0d5e52;
   color: #0d5e52;
+  background: color-mix(in srgb, var(--accent-soft) 50%, var(--panel-bg));
 }
 
 .statusbar.error {
+  border-left-color: #9b2c2c;
   color: #9b2c2c;
+  background: color-mix(in srgb, var(--danger-soft) 54%, var(--panel-bg));
 }
 
 .statusbar.busy {
+  border-left-color: #795b1f;
   color: #795b1f;
+  background: color-mix(in srgb, var(--warning-soft) 54%, var(--panel-bg));
 }
 
 @media (max-width: 1100px) {
