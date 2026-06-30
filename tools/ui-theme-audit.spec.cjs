@@ -78,6 +78,13 @@ for (const theme of themes) {
     await expect(spansSection).toBeVisible();
     await expect(spansSection.getByText("llm_call", { exact: true })).toBeVisible();
     await expect(spansSection.getByText("168 tokens")).toBeVisible();
+    await page.getByRole("button", { name: /^Criar fork$/ }).click();
+    await expect(page.getByText("Fork criado a partir do evento #4.")).toBeVisible();
+    const scenarioSection = page.locator(".sandbox-section", { hasText: "Cenários de teste" });
+    const selectedScenarioCard = scenarioSection.locator(".runtime-item", { hasText: "Fork llm_step #4" });
+    await expect(selectedScenarioCard.getByText("Fork llm_step #4", { exact: true })).toBeVisible();
+    await expect(selectedScenarioCard.getByText(/Fork de checkpoint: .*#4.*llm_step/)).toBeVisible();
+    await expect(page.locator(".turn-input")).toHaveValue("Aumentar conversões em onboarding.");
 
     await expectNoDocumentHorizontalOverflow(page);
     await expectTopbarControlsToFit(page);

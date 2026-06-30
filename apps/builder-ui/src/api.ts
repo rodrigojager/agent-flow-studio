@@ -298,14 +298,18 @@ export async function stopSandbox(flowId: string): Promise<SandboxStatus> {
   });
 }
 
-export async function createRuntimeSession(runtimeUrl: string, resourceName: string): Promise<{ session: SessionView }> {
+export async function createRuntimeSession(
+  runtimeUrl: string,
+  resourceName: string,
+  metadata: Record<string, unknown> = {},
+): Promise<{ session: SessionView }> {
   return runtimeRequest<{ session: SessionView }>(runtimeUrl, `/${resourceName}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "Idempotency-Key": `ui-create-${Date.now()}`,
     },
-    body: JSON.stringify({ metadata: { source: "builder-ui" }, max_turns: 3 }),
+    body: JSON.stringify({ metadata: { source: "builder-ui", ...metadata }, max_turns: 3 }),
   });
 }
 

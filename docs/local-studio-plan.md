@@ -372,7 +372,8 @@ Status 2026-06-30:
 - implementado: comparação entre runs com diffs semânticos por nó, cadeia causal visual (upstream/impact), pinning de cenário e execução reprodutível;
 - implementado: progresso incremental de build no histórico e painel de progresso no artefato;
 - implementado: drill-down contextual por nó com input/output, eventos, diffs, logs correlacionados, prompt renderizado, metadados LLM, métricas de usage/custo/duração e spans estruturados;
-- pendente: filtros avançados de histórico operacional e reexecução/fork por checkpoint.
+- implementado: fork de checkpoint/evento para cenário local reexecutável, preservando origem de run, evento, snapshot, input/output e metadata da nova execução;
+- pendente: filtros avançados de histórico operacional e restauração real de estado por checkpointer/runtime.
 
 ### Fase 7.5: Grafo Interativo de Execução
 
@@ -464,7 +465,7 @@ Mas a ferramenta não deve depender disso para operar.
 1. aprofundar o drill-down contextual no Studio:
    - abrir node-io e eventos no mesmo clique do nó falho/impactado;
    - explicar causa provável e próximas ações no inspector;
-   - permitir reexecução/fork a partir de checkpoint ou evento selecionado.
+   - evoluir o fork local de checkpoint para restauração real quando o runtime expuser retomada por estado/checkpointer.
 2. melhorar inspeção de execução longa:
    - histórico operacional com filtro por nível;
    - status persistente de build/up/smoke com alertas visuais de regressão.

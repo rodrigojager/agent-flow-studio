@@ -173,6 +173,23 @@ interface StudioScenario {
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
+  checkpoint: StudioScenarioCheckpoint | null;
+}
+
+interface StudioScenarioCheckpoint {
+  sourceRunId: string;
+  sourceSessionId: string;
+  eventSeq: number;
+  eventType: string;
+  nodeId: string | null;
+  snapshotSeq: number | null;
+  status: string | null;
+  phase: string | null;
+  turn: number | null;
+  state: unknown;
+  input: unknown;
+  output: unknown;
+  createdAt: string;
 }
 
 interface StudioNodeDebugContext {
@@ -2115,6 +2132,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         createdAt: now,
         updatedAt: now,
         lastUsedAt: null,
+        checkpoint: null,
       };
       nextScenarios.unshift(created);
       setStudioSelectedScenarioId(created.id);
@@ -2178,6 +2196,51 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     }
   }
 
+  function handleForkSelectedCheckpoint() {
+    if (!selectedFlowId || !selectedStudioEvent) {
+      setStatus({ kind: "error", message: "Selecione um evento da timeline para criar um fork." });
+      return;
+    }
+    const now = new Date().toISOString();
+    const nodeId = selectedStudioEvent.node ?? null;
+    const input = inferCheckpointForkInput(selectedStudioEvent, transcript);
+    const checkpoint: StudioScenarioCheckpoint = {
+      sourceRunId: selectedStudioRunId || "run-atual",
+      sourceSessionId: runtimeSession?.session_id ?? "",
+      eventSeq: selectedStudioEvent.seq,
+      eventType: selectedStudioEvent.event_type,
+      nodeId,
+      snapshotSeq: selectedStateSnapshot?.seq ?? null,
+      status: typeof selectedStudioEvent.payload.status === "string" ? selectedStudioEvent.payload.status : selectedStateSnapshot?.status ?? null,
+      phase: typeof selectedStudioEvent.payload.phase === "string" ? selectedStudioEvent.payload.phase : selectedStateSnapshot?.phase ?? null,
+      turn: typeof selectedStudioEvent.payload.turn === "number" ? selectedStudioEvent.payload.turn : selectedStateSnapshot?.turn ?? null,
+      state: selectedStateSnapshot?.state ?? null,
+      input: inferEventInput(selectedStudioEvent, transcript),
+      output: inferEventOutput(selectedStudioEvent.payload),
+      createdAt: now,
+    };
+    const label = `Fork ${nodeId ?? "runtime"} #${selectedStudioEvent.seq}`;
+    const tags = splitTags(["fork", "checkpoint", nodeId ?? "runtime", `evento-${selectedStudioEvent.seq}`].join(", "));
+    const scenario: StudioScenario = {
+      id: `scenario-fork-${Date.now()}`,
+      label,
+      input,
+      tags,
+      isPinned: false,
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: null,
+      checkpoint,
+    };
+    const nextScenarios = sortScenarios([scenario, ...studioScenarios]);
+    persistStudioScenarios(selectedFlowId, nextScenarios);
+    setStudioSelectedScenarioId(scenario.id);
+    setStudioScenarioLabel(label);
+    setStudioScenarioTags(tags.join(", "));
+    setUserMessage(input);
+    setStatus({ kind: "ok", message: `Fork criado a partir do evento #${selectedStudioEvent.seq}.` });
+  }
+
   async function handleRunStudioScenario() {
     if (!selectedFlowId || !draftFlow) {
       return;
@@ -2201,7 +2264,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       }
       const resourceName = draftFlow.api.resourceName;
       const sandboxUrl = runningSandbox.url;
-      const created = await createRuntimeSession(sandboxUrl, resourceName);
+      const created = await createRuntimeSession(sandboxUrl, resourceName, studioScenarioExecutionMetadata(selected));
       if (!created.session.session_id) {
         setStatus({ kind: "error", message: "Sessão de execução não retornou ID." });
         return;
@@ -2776,6 +2839,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onStudioPinnedScenarioRun={handleRunPinnedScenario}
               onStudioScenarioPin={toggleStudioScenarioPin}
               onStudioScenarioDelete={handleDeleteStudioScenario}
+              onForkCheckpoint={handleForkSelectedCheckpoint}
               onStudioScenarioLabelChange={setStudioScenarioLabel}
               onStudioScenarioTagsChange={setStudioScenarioTags}
               onStartSandbox={handleStartSandbox}
@@ -4299,6 +4363,7 @@ function SandboxPanel({
   onStudioPinnedScenarioRun,
   onStudioScenarioPin,
   onStudioScenarioDelete,
+  onForkCheckpoint,
   onStudioScenarioLabelChange,
   onStudioScenarioTagsChange,
   onExportComparison,
@@ -4367,6 +4432,7 @@ function SandboxPanel({
   onStudioPinnedScenarioRun: () => void;
   onStudioScenarioPin: () => void;
   onStudioScenarioDelete: () => void;
+  onForkCheckpoint: () => void;
   onStudioScenarioLabelChange: (value: string) => void;
   onStudioScenarioTagsChange: (value: string) => void;
   onSelectEvent: (seq: number) => void;
@@ -4548,6 +4614,12 @@ function SandboxPanel({
           <article className="runtime-item">
             <strong>{selectedScenario.label}</strong>
             <small>{selectedScenario.tags.join(", ") || "Sem tags"} · Atualizado em {formatDateTime(selectedScenario.updatedAt)}</small>
+            {selectedScenario.checkpoint ? (
+              <small>
+                Fork de checkpoint: {selectedScenario.checkpoint.sourceRunId} · #{selectedScenario.checkpoint.eventSeq} ·{" "}
+                {selectedScenario.checkpoint.nodeId ?? "runtime"}
+              </small>
+            ) : null}
             <span>Último uso: {selectedScenario.lastUsedAt ? formatDateTime(selectedScenario.lastUsedAt) : "nunca"}</span>
           </article>
         ) : (
@@ -5155,6 +5227,12 @@ function SandboxPanel({
         <div className="sandbox-header">
           <strong>State inspector</strong>
           <span>{selectedStateSnapshot ? `#${selectedStateSnapshot.seq}` : session?.is_complete ? "completa" : "ativa"}</span>
+        </div>
+        <div className="sandbox-actions">
+          <button type="button" className="command-button" onClick={onForkCheckpoint} disabled={!selectedEvent}>
+            <GitBranch size={16} aria-hidden="true" />
+            Criar fork
+          </button>
         </div>
         <pre className="mini-json">{formatInspectorValue(selectedStateSnapshot?.state ?? session ?? { status: "no_session" })}</pre>
         {selectedStateSnapshot?.diff.length ? (
@@ -6453,6 +6531,43 @@ function formatDateTime(value: string): string {
   return date.toLocaleString();
 }
 
+function inferCheckpointForkInput(event: EventView, transcript: MessageView[]): string {
+  const custom = isRecord(event.payload.custom) ? event.payload.custom : null;
+  for (const key of ["user_message", "message", "input", "content", "prompt"]) {
+    const value = custom?.[key] ?? event.payload[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  const lastUserMessage = [...transcript].reverse().find((message) => message.role === "user" && message.content.trim());
+  return lastUserMessage?.content.trim() ?? `Reexecutar checkpoint ${event.event_type} #${event.seq}`;
+}
+
+function studioScenarioExecutionMetadata(scenario: StudioScenario): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    scenario: {
+      id: scenario.id,
+      label: scenario.label,
+      tags: scenario.tags,
+    },
+  };
+  if (scenario.checkpoint) {
+    metadata.checkpoint = {
+      sourceRunId: scenario.checkpoint.sourceRunId,
+      sourceSessionId: scenario.checkpoint.sourceSessionId,
+      eventSeq: scenario.checkpoint.eventSeq,
+      eventType: scenario.checkpoint.eventType,
+      nodeId: scenario.checkpoint.nodeId,
+      snapshotSeq: scenario.checkpoint.snapshotSeq,
+      status: scenario.checkpoint.status,
+      phase: scenario.checkpoint.phase,
+      turn: scenario.checkpoint.turn,
+      mode: "scenario-fork",
+    };
+  }
+  return metadata;
+}
+
 function loadStudioScenarios(flowId: string): StudioScenario[] {
   if (typeof window === "undefined") {
     return [];
@@ -6496,6 +6611,32 @@ function normalizeStudioScenario(value: unknown): StudioScenario | null {
     createdAt,
     updatedAt,
     lastUsedAt: value.lastUsedAt === null || typeof value.lastUsedAt === "string" ? value.lastUsedAt : null,
+    checkpoint: normalizeStudioScenarioCheckpoint(value.checkpoint),
+  };
+}
+
+function normalizeStudioScenarioCheckpoint(value: unknown): StudioScenarioCheckpoint | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (typeof value.eventSeq !== "number" || !Number.isFinite(value.eventSeq)) {
+    return null;
+  }
+  const createdAt = typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString();
+  return {
+    sourceRunId: typeof value.sourceRunId === "string" && value.sourceRunId.trim() ? value.sourceRunId : "run-atual",
+    sourceSessionId: typeof value.sourceSessionId === "string" ? value.sourceSessionId : "",
+    eventSeq: value.eventSeq,
+    eventType: typeof value.eventType === "string" && value.eventType.trim() ? value.eventType : "event",
+    nodeId: typeof value.nodeId === "string" && value.nodeId.trim() ? value.nodeId : null,
+    snapshotSeq: typeof value.snapshotSeq === "number" && Number.isFinite(value.snapshotSeq) ? value.snapshotSeq : null,
+    status: typeof value.status === "string" ? value.status : null,
+    phase: typeof value.phase === "string" ? value.phase : null,
+    turn: typeof value.turn === "number" && Number.isFinite(value.turn) ? value.turn : null,
+    state: "state" in value ? value.state : null,
+    input: "input" in value ? value.input : null,
+    output: "output" in value ? value.output : null,
+    createdAt,
   };
 }
 
