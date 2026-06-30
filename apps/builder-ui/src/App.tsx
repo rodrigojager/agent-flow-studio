@@ -172,6 +172,10 @@ interface DirtyTopology {
   edgeIds: Set<string>;
 }
 
+interface StaleTopology {
+  nodeIds: Set<string>;
+}
+
 interface DockerHistoryFilterForm {
   operation: DockerRuntimeOperation | "";
   status: DockerRuntimeOperationStatus | "";
@@ -1097,6 +1101,14 @@ export default function App() {
     () => buildDirtyTopology(loadedFlow?.flow ?? null, draftFlow),
     [draftFlow, loadedFlow],
   );
+  const selectedStudioScenario = useMemo(
+    () => studioScenarios.find((scenario) => scenario.id === studioSelectedScenarioId) ?? null,
+    [studioScenarios, studioSelectedScenarioId],
+  );
+  const staleTopology = useMemo(
+    () => buildStaleTopology(draftFlow, studioNodePins, selectedStudioScenario),
+    [draftFlow, selectedStudioScenario, studioNodePins],
+  );
 
   useEffect(() => {
     if (nodeTypeFilter && !nodeTypeFilters.some((option) => option.type === nodeTypeFilter)) {
@@ -1115,6 +1127,7 @@ export default function App() {
       nodeSearchActive,
       nodeSearchMatchedNodeIds,
       dirtyTopology,
+      staleTopology,
     ),
     [
       activeStudioNodeId,
@@ -1122,6 +1135,7 @@ export default function App() {
       nodeSearchActive,
       nodeSearchMatchedNodeIds,
       dirtyTopology,
+      staleTopology,
       runtimeEventsData,
       selectedEdgeId,
       selectedNodeId,
@@ -8400,6 +8414,27 @@ function stableFlowValue(value: unknown): string {
   return value === undefined ? "" : JSON.stringify(value);
 }
 
+function buildStaleTopology(
+  flow: AgentFlow | null,
+  pins: StudioNodePin[],
+  selectedScenario: StudioScenario | null,
+): StaleTopology {
+  const stale: StaleTopology = { nodeIds: new Set() };
+  for (const pin of pins) {
+    if (hashStudioNodeDefinition(studioPinNodeForHash(flow, pin.nodeId)) !== pin.nodeHash) {
+      stale.nodeIds.add(pin.nodeId);
+    }
+  }
+  const checkpointCompatibility = selectedScenario?.checkpoint?.compatibility;
+  if (checkpointCompatibility?.nodeId && checkpointCompatibility.nodeHash) {
+    const currentNodeHash = hashStudioNodeDefinition(studioPinNodeForHash(flow, checkpointCompatibility.nodeId));
+    if (currentNodeHash !== checkpointCompatibility.nodeHash) {
+      stale.nodeIds.add(checkpointCompatibility.nodeId);
+    }
+  }
+  return stale;
+}
+
 function toReactFlowGraph(
   flow: AgentFlow | undefined,
   selectedNodeId: string,
@@ -8410,6 +8445,7 @@ function toReactFlowGraph(
   nodeSearchActive: boolean,
   nodeSearchMatchedNodeIds: Set<string>,
   dirtyTopology: DirtyTopology,
+  staleTopology: StaleTopology,
 ): { nodes: Node[]; edges: Edge[] } {
   if (!flow) {
     return { nodes: [], edges: [] };
@@ -8439,6 +8475,7 @@ function toReactFlowGraph(
         : "search-dimmed"
       : "";
     const dirtyClass = dirtyTopology.nodeIds.has(id) ? "dirty-node" : "";
+    const staleClass = staleTopology.nodeIds.has(id) ? "stale-node" : "";
     return {
       id,
       position: flowNode?.position ?? defaultNodePosition(index),
@@ -8449,7 +8486,7 @@ function toReactFlowGraph(
       selected: selectedNodeId === id,
       className: `flow-node ${isVirtual ? "virtual" : flowNode?.type ?? ""} ${
         nodeState?.status ? `status-${nodeState.status}` : ""
-      } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""} ${nodeSearchClass} ${dirtyClass}`.trim(),
+      } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""} ${nodeSearchClass} ${dirtyClass} ${staleClass}`.trim(),
       draggable: !isVirtual,
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
@@ -8482,6 +8519,7 @@ function toReactFlowGraph(
       : "";
     const currentEdgeId = edgeId(edge, index);
     const dirtyEdgeClass = dirtyTopology.edgeIds.has(currentEdgeId) ? "dirty-edge" : "";
+    const staleEdgeClass = staleTopology.nodeIds.has(edge.from) || staleTopology.nodeIds.has(edge.to) ? "stale-edge" : "";
 
     return {
       id: currentEdgeId,
@@ -8490,7 +8528,7 @@ function toReactFlowGraph(
       label: edge.condition,
       selected: selectedEdgeId === currentEdgeId,
       markerEnd: { type: MarkerType.ArrowClosed },
-      className: `${edgeClass} ${edgeExecutionClass} ${causalClass} ${edgeSearchClass} ${dirtyEdgeClass}`.trim(),
+      className: `${edgeClass} ${edgeExecutionClass} ${causalClass} ${edgeSearchClass} ${dirtyEdgeClass} ${staleEdgeClass}`.trim(),
     };
   });
   return { nodes, edges };

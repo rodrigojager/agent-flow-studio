@@ -522,6 +522,12 @@ button:disabled {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent);
 }
 
+.react-flow__node.flow-node.stale-node {
+  border-style: dotted;
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
 .react-flow__node.flow-node.status-queued {
   border-style: dashed;
   border-color: #7a817f;
@@ -617,6 +623,12 @@ button:disabled {
   stroke: var(--warning);
   stroke-width: 2.1;
   stroke-dasharray: 6 4;
+}
+
+.react-flow__edge.stale-edge .react-flow__edge-path {
+  stroke: var(--danger);
+  stroke-width: 2.2;
+  stroke-dasharray: 2 5;
 }
 
 .react-flow__edge.status-queued-edge .react-flow__edge-path {
@@ -2194,6 +2206,12 @@ button:disabled {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent);
 }
 
+[data-theme] .react-flow__node.flow-node.stale-node {
+  border-style: dotted;
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
 [data-theme] .react-flow__edge-path {
   stroke: var(--text-muted);
 }
@@ -2255,6 +2273,12 @@ button:disabled {
   stroke: var(--warning);
   stroke-width: 2.1;
   stroke-dasharray: 6 4;
+}
+
+[data-theme] .react-flow__edge.stale-edge .react-flow__edge-path {
+  stroke: var(--danger);
+  stroke-width: 2.2;
+  stroke-dasharray: 2 5;
 }
 
 [data-theme] .timeline-item-causal-origin {

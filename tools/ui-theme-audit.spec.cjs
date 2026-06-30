@@ -42,6 +42,27 @@ for (const theme of themes) {
 test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
   const pageErrors = attachBrowserErrorCollector(page);
 
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "agent-flow-builder.studio-node-pins.reference-interview",
+      JSON.stringify([
+        {
+          id: "pin-ui-audit-stale",
+          nodeId: "input_safety_check",
+          nodeType: "safety_gate",
+          runId: "run-ui-audit-stale",
+          sessionId: "session-ui-audit-stale",
+          eventSeq: 3,
+          eventType: "node_completed",
+          nodeHash: "deadbeef",
+          input: {},
+          output: {},
+          createdAt: "2026-06-30T00:00:00.000Z",
+          updatedAt: "2026-06-30T00:00:00.000Z",
+        },
+      ]),
+    );
+  });
   await openBuilder(page, "light", viewports[0]);
 
   const searchInput = page.getByLabel("Buscar nós no canvas");
@@ -55,6 +76,8 @@ test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
   await inputSafetyChip.click();
   await expect(inputSafetyChip).toHaveClass(/selected/);
   await expect(page.locator(".react-flow__node.selected")).toContainText("input_safety_check");
+  await expect(page.locator(".react-flow__node.stale-node.selected")).toContainText("input_safety_check");
+  await expect(page.locator(".react-flow__edge.stale-edge")).not.toHaveCount(0);
   await page.locator(".right-panel").getByLabel("Descrição").fill("Checagem visual de entrada.");
   await expect(page.locator(".react-flow__node.dirty-node.selected")).toContainText("input_safety_check");
 
