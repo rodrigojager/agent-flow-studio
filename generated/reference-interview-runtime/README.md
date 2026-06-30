@@ -20,6 +20,8 @@ pytest -q
 uvicorn app.main:app --reload --port 8080
 ```
 
+Se o fluxo usa nó `code` em JavaScript, o ambiente local também precisa ter `node` disponível. O Dockerfile gerado já instala `nodejs` e `npm` para executar esses nós no container final.
+
 ## Container Docker
 
 ```powershell

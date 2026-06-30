@@ -119,6 +119,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "session_metadata": row.metadata_json or {},
                 "executed_nodes": [],
             },
             row.session_id,
@@ -172,6 +173,7 @@ class ReferenceAgentService:
                 "max_turns": row.max_turns,
                 "user_message": user_message,
                 "recent_messages": recent_messages[-RECENT_LIMIT:],
+                "session_metadata": row.metadata_json or {},
                 "executed_nodes": [],
             },
             row.session_id,
@@ -221,6 +223,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "session_metadata": row.metadata_json or {},
                 "executed_nodes": [],
             },
             row.session_id,
@@ -323,6 +326,15 @@ class ReferenceAgentService:
             elif node_id in INPUT_SAFETY_NODE_IDS or node_id in OUTPUT_SAFETY_NODE_IDS:
                 payload["safety"] = result.get("safety") or {"blocked": False, "decision": "allow"}
             elif node_id in CODE_NODE_IDS:
+                custom_payload = (result.get("custom") or {}).get(node_id, {})
+                if custom_payload:
+                    if custom_payload.get("status") == "custom_code_executed":
+                        event_type = "custom_code_executed"
+                    elif custom_payload.get("status") == "custom_code_failed":
+                        event_type = "custom_code_failed"
+                    else:
+                        event_type = "custom_code_declared"
+                    payload["custom"] = custom_payload
                 payload["handler"] = "code"
             elif node_id in SWITCH_NODE_IDS:
                 event_type = "switch_evaluated"

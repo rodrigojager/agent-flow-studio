@@ -1564,6 +1564,7 @@ class ReferenceState(TypedDict, total=False):
     scores: dict[str, Any]
     analytics: dict[str, Any]
     custom: dict[str, Any]
+    session_metadata: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -1670,6 +1671,153 @@ def build_graph(
         if isinstance(value, dict):
             return {str(key): jsonable(item) for key, item in value.items()}
         return str(value)
+
+    def pinned_node_output(state: ReferenceState, node_id: str) -> tuple[bool, Any]:
+        metadata = state.get("session_metadata") or {}
+        if not isinstance(metadata, dict):
+            return False, None
+        node_pins = metadata.get("nodePins") or metadata.get("node_pins")
+        if not isinstance(node_pins, dict) or node_pins.get("enabled") is not True:
+            return False, None
+        items = node_pins.get("items")
+        if not isinstance(items, list):
+            return False, None
+        for item in items:
+            if isinstance(item, dict) and item.get("nodeId") == node_id:
+                return True, item.get("output")
+        return False, None
+
+    def pinned_payload(output: Any) -> dict[str, Any]:
+        payload = dict(output) if isinstance(output, dict) else {"value": output}
+        payload.setdefault("mock", True)
+        payload.setdefault("pinned", True)
+        return payload
+
+    def pinned_assistant_message(output: Any, fallback: str) -> dict[str, str]:
+        payload = output if isinstance(output, dict) else {}
+        assistant = None
+        if isinstance(payload, dict):
+            assistant = payload.get("assistant_message") or payload.get("assistantMessage")
+        if isinstance(assistant, dict):
+            text = assistant.get("text") or assistant.get("content") or fallback
+            code = assistant.get("code") or "PIN"
+            return {"code": str(code), "text": str(text)}
+        if isinstance(payload, dict):
+            for key in ("text", "content", "message", "value"):
+                value = payload.get(key)
+                if isinstance(value, (str, int, float, bool)) and str(value).strip():
+                    return {"code": "PIN", "text": str(value)}
+        if output is not None and not isinstance(output, dict):
+            return {"code": "PIN", "text": str(output)}
+        return {"code": "PIN", "text": fallback}
+
+    def pinned_category_updates(
+        state: ReferenceState,
+        node_id: str,
+        root_key: str,
+        result_path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {}
+        results = dict(state.get(root_key) or {})
+        results[node_id] = payload
+        updates[root_key] = results
+        default_path = f"{root_key}.{node_id}"
+        if result_path != default_path:
+            assign_state_path(updates, state, result_path, payload)
+        return updates
+
+    def apply_pinned_state_overrides(updates: dict[str, Any], payload: dict[str, Any]) -> None:
+        for key in ("status", "phase", "turn", "is_complete"):
+            if key in payload:
+                updates[key] = payload[key]
+        assistant = payload.get("assistant_message") or payload.get("assistantMessage")
+        if isinstance(assistant, dict) and "assistant_message" not in updates:
+            updates["assistant_message"] = {
+                "code": str(assistant.get("code") or "PIN"),
+                "text": str(assistant.get("text") or assistant.get("content") or "Resposta fixada por pin de nó."),
+            }
+
+    def pinned_node_update(
+        state: ReferenceState,
+        node_id: str,
+        kind: str,
+        *,
+        result_path: str | None = None,
+    ) -> ReferenceState | None:
+        found, output = pinned_node_output(state, node_id)
+        if not found:
+            return None
+        payload = pinned_payload(output)
+        updates: dict[str, Any] = {}
+        if kind == "start":
+            updates.update({
+                "status": "active",
+                "phase": "awaiting_turn",
+                "assistant_message": pinned_assistant_message(output, START_MESSAGE),
+                "is_complete": False,
+            })
+        elif kind == "finish":
+            updates.update({
+                "status": "completed",
+                "phase": "closing",
+                "assistant_message": pinned_assistant_message(output, "Sessão finalizada por replay de pin."),
+                "is_complete": True,
+            })
+        elif kind == "human_input":
+            updates.update({
+                "status": "active",
+                "phase": "awaiting_turn",
+                "is_complete": False,
+                "assistant_message": pinned_assistant_message(output, "Aguardando entrada do usuário."),
+            })
+        elif kind == "llm":
+            llm_payload = dict(payload)
+            llm_payload.setdefault("provider", "pinned")
+            llm_payload.setdefault("model", "pinned")
+            llm_payload.setdefault("attempts", 0)
+            llm_payload.setdefault("node_id", node_id)
+            updates["assistant_message"] = pinned_assistant_message(output, "Resposta fixada por pin de nó.")
+            updates["llm"] = llm_payload
+        elif kind == "safety":
+            safety_source = payload.get("safety") if isinstance(payload.get("safety"), dict) else payload
+            safety_payload = dict(safety_source) if isinstance(safety_source, dict) else {"value": safety_source}
+            safety_payload.setdefault("blocked", False)
+            safety_payload.setdefault("decision", "allow")
+            safety_payload.setdefault("mock", True)
+            safety_payload.setdefault("pinned", True)
+            updates["safety"] = safety_payload
+            if safety_payload.get("blocked"):
+                updates["assistant_message"] = pinned_assistant_message(output, "Mensagem bloqueada por replay de pin.")
+                updates["phase"] = "safety"
+                updates["is_complete"] = safety_payload.get("decision") == "block"
+                updates["status"] = "completed" if updates["is_complete"] else "active"
+        elif kind == "code":
+            payload.setdefault("status", "custom_code_executed")
+            payload.setdefault("node_id", node_id)
+            updates.update(pinned_category_updates(state, node_id, "custom", result_path or f"custom.{node_id}", payload))
+        elif kind == "http":
+            updates.update(pinned_category_updates(state, node_id, "http", result_path or f"http.{node_id}", payload))
+        elif kind == "transform":
+            updates.update(pinned_category_updates(state, node_id, "transforms", result_path or f"transforms.{node_id}", payload))
+        elif kind == "database":
+            updates.update(pinned_category_updates(state, node_id, "database", result_path or f"database.{node_id}", payload))
+        elif kind == "file":
+            updates.update(pinned_category_updates(state, node_id, "files", result_path or f"files.{node_id}", payload))
+        elif kind == "rag":
+            updates.update(pinned_category_updates(state, node_id, "rag", result_path or f"rag.{node_id}", payload))
+        elif kind == "approval":
+            updates.update(pinned_category_updates(state, node_id, "approvals", result_path or f"approvals.{node_id}", payload))
+        elif kind == "score":
+            updates.update(pinned_category_updates(state, node_id, "scores", result_path or f"scores.{node_id}", payload))
+        elif kind == "analytics":
+            updates.update(pinned_category_updates(state, node_id, "analytics", result_path or f"analytics.{node_id}", payload))
+        else:
+            custom = dict(state.get("custom") or {})
+            custom[node_id] = payload
+            updates["custom"] = custom
+        apply_pinned_state_overrides(updates, payload)
+        return mark_node(state, node_id, updates)
 
     def normalized_params(value: Any, state: ReferenceState) -> dict[str, Any]:
         if value is None:
@@ -2025,6 +2173,9 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "start")
+            if pinned is not None:
+                return pinned
             return mark_node(state, node_id, {
                 "status": "active",
                 "phase": "awaiting_turn",
@@ -2039,6 +2190,9 @@ def build_graph(
         stage = config.get("stage")
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "safety")
+            if pinned is not None:
+                return pinned
             if stage == "input":
                 decision = safety_gate.check_input(state.get("user_message", ""))
                 if decision.blocked:
@@ -2081,6 +2235,9 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "llm")
+            if pinned is not None:
+                return pinned
             result = llm_client.generate(
                 system_prompt=prompt_for_node(config),
                 user_message=state.get("user_message", ""),
@@ -2122,6 +2279,9 @@ def build_graph(
         }
 
         def deterministic_gate(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "code", result_path=result_path)
+            if pinned is not None:
+                return pinned
             next_turn = int(state.get("turn") or 0) + 1
             max_turns = int(state.get("max_turns") or 3)
             if next_turn >= max_turns:
@@ -2144,6 +2304,9 @@ def build_graph(
             })
 
         def run_custom_code(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "code", result_path=result_path)
+            if pinned is not None:
+                return pinned
             contract = {key: value for key, value in custom_contract.items() if value not in (None, "", False)}
             if not contract:
                 return mark_node(state, node_id, {})
@@ -2155,6 +2318,9 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "state")
+            if pinned is not None:
+                return pinned
             return mark_node(state, node_id, {})
 
         return run
@@ -2163,6 +2329,9 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "human_input")
+            if pinned is not None:
+                return pinned
             updates: ReferenceState = {
                 "status": "active",
                 "phase": "awaiting_turn",
@@ -2183,6 +2352,9 @@ def build_graph(
         timeout = int(config.get("timeoutSeconds") or 10)
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "http", result_path=response_path)
+            if pinned is not None:
+                return pinned
             request_body = state_path_value(state, body_path) if body_path else None
             if not url:
                 response = {
@@ -2254,6 +2426,9 @@ def build_graph(
         output_path = str(config.get("outputPath") or f"transforms.{node_id}")
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "transform", result_path=output_path)
+            if pinned is not None:
+                return pinned
             value = state_path_value(state, input_path)
             transformed = {
                 "node_id": node_id,
@@ -2278,6 +2453,9 @@ def build_graph(
         max_rows = int(config.get("maxRows") or 50)
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "database", result_path=result_path)
+            if pinned is not None:
+                return pinned
             if not query.strip():
                 result_payload = {
                     "ok": False,
@@ -2324,6 +2502,9 @@ def build_graph(
         result_path = str(config.get("resultPath") or f"database.{node_id}")
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "database", result_path=result_path)
+            if pinned is not None:
+                return pinned
             data_value = jsonable(state_path_value(state, data_path))
             params = normalized_params(state_path_value(state, params_path), state)
             try:
@@ -2387,6 +2568,9 @@ def build_graph(
         max_chars = int(config.get("maxChars") or 20000)
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "file", result_path=content_path)
+            if pinned is not None:
+                return pinned
             try:
                 result_payload = read_asset_text(source_path, max_chars)
             except Exception as exc:
@@ -2409,6 +2593,9 @@ def build_graph(
         max_chars = int(config.get("maxChars") or 200000)
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "rag", result_path=context_path)
+            if pinned is not None:
+                return pinned
             query = str(state_path_value(state, query_path) or "")
             try:
                 root = safe_asset_path(collection_path)
@@ -2478,6 +2665,9 @@ def build_graph(
             return "pending"
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "approval", result_path=result_path)
+            if pinned is not None:
+                return pinned
             raw_value = state_path_value(state, decision_path)
             decision = normalize_decision(raw_value)
             result_payload = {
@@ -2518,6 +2708,9 @@ def build_graph(
             return max(0.1, min(1.0, len(words) / 30))
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "score", result_path=result_path)
+            if pinned is not None:
+                return pinned
             value = state_path_value(state, input_path)
             score = score_value(value)
             result_payload = {
@@ -2538,6 +2731,9 @@ def build_graph(
         result_path = str(config.get("resultPath") or f"analytics.{node_id}")
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "analytics", result_path=result_path)
+            if pinned is not None:
+                return pinned
             payload = jsonable(state_path_value(state, payload_path)) if payload_path else {
                 "session_id": state.get("session_id"),
                 "turn": state.get("turn"),
@@ -2582,6 +2778,9 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "finish")
+            if pinned is not None:
+                return pinned
             return mark_node(state, node_id, {
                 "status": "completed",
                 "phase": "closing",
@@ -2595,6 +2794,9 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
+            pinned = pinned_node_update(state, node_id, "state")
+            if pinned is not None:
+                return pinned
             return mark_node(state, node_id, {})
 
         return run
@@ -2917,6 +3119,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "session_metadata": row.metadata_json or {},
                 "executed_nodes": [],
             },
             row.session_id,
@@ -2970,6 +3173,7 @@ class ReferenceAgentService:
                 "max_turns": row.max_turns,
                 "user_message": user_message,
                 "recent_messages": recent_messages[-RECENT_LIMIT:],
+                "session_metadata": row.metadata_json or {},
                 "executed_nodes": [],
             },
             row.session_id,
@@ -3019,6 +3223,7 @@ class ReferenceAgentService:
                 "phase": row.phase,
                 "turn": row.turn,
                 "max_turns": row.max_turns,
+                "session_metadata": row.metadata_json or {},
                 "executed_nodes": [],
             },
             row.session_id,

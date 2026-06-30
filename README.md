@@ -83,6 +83,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
 - Diagnóstico contextual por tipo de nó para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics.
 - Fork de checkpoint/evento para cenário local reexecutável, preservando origem do run, evento, snapshot e metadata da reexecução.
 - Pin local de input/output por nó no Studio, com indicador `atual/stale` quando a definição do nó muda.
+- Cenários podem usar pins ativos como mock/replay determinístico por nó; a execução envia os pins na metadata da sessão e o runtime gerado evita efeitos reais do nó quando há pin compatível.
 
 ### Aprovação E Runtime Docker
 
@@ -137,7 +138,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 - Ampliar auditoria visual automatizada para estados gerais de erro/loading em painéis específicos além do status global e do fluxo Docker.
 - Melhorar ergonomia do canvas com grupos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.
-- Consolidar mock data por cenário e reexecução determinística avançada.
+- Evoluir replay por pins com comparação de métricas, restauração real de estado e fixtures exportáveis.
 
 ### Médio Prazo
 

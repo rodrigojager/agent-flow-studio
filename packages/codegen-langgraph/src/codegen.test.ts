@@ -121,6 +121,97 @@ test("generated runtime supports a simple flow without deterministic gate", asyn
   });
 });
 
+test("generated runtime replays node pins from session metadata", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-node-pins-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente com pins de nó");
+  await generateLangGraphRuntime({ flow: simpleFlow("node-pin-agent", "Agente Pinado"), flowRoot, outDir });
+
+  await writeFile(
+    path.join(outDir, "tests", "test_node_pins.py"),
+    `from fastapi.testclient import TestClient
+
+from app.generated_flow import API_RESOURCE
+from tests.conftest import set_test_env
+
+
+def _path(suffix: str = "") -> str:
+    return f"/{API_RESOURCE}{suffix}"
+
+
+def _client(tmp_path):
+    set_test_env(str(tmp_path / "node-pins.db"))
+    from app.db import engine
+    from app.main import create_app
+    from app.models import Base
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestClient(create_app())
+
+
+def test_llm_node_pin_replays_without_live_generation(tmp_path):
+    client = _client(tmp_path)
+    create_resp = client.post(
+        _path(),
+        headers={"Idempotency-Key": "create"},
+        json={
+            "metadata": {
+                "scenario": {"id": "scenario-1", "label": "Pinado", "useNodePins": True},
+                "nodePins": {
+                    "enabled": True,
+                    "mode": "mock",
+                    "items": [
+                        {
+                            "nodeId": "llm_step",
+                            "nodeType": "llm_prompt",
+                            "nodeHash": "fixture",
+                            "output": {
+                                "assistant_message": {"code": "PIN", "text": "Resposta congelada pelo pin."},
+                                "provider": "fixture",
+                                "model": "fixture-model",
+                            },
+                        }
+                    ],
+                },
+            },
+            "max_turns": 2,
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["session"]["session_id"]
+    client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "start"}, json={})
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "turn"},
+        json={"user_message": "teste"},
+    )
+    assert turn_resp.status_code == 200
+    data = turn_resp.json()
+    assert data["assistant_message"] == {"code": "PIN", "text": "Resposta congelada pelo pin."}
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    llm_events = [item for item in events if item["event_type"] == "llm_called"]
+    assert llm_events
+    payload = llm_events[-1]["payload"]
+    assert payload["pinned"] is True
+    assert payload["mock"] is True
+    assert payload["provider"] == "fixture"
+    assert payload["model"] == "fixture-model"
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
 test("generated runtime executes switch and human input nodes", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-switch-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

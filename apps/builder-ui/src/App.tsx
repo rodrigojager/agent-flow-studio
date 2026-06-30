@@ -170,6 +170,7 @@ interface StudioScenario {
   input: string;
   tags: string[];
   isPinned: boolean;
+  useNodePins: boolean;
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
@@ -363,6 +364,7 @@ export default function App() {
   const [studioSelectedScenarioId, setStudioSelectedScenarioId] = useState("");
   const [studioScenarioLabel, setStudioScenarioLabel] = useState("");
   const [studioScenarioTags, setStudioScenarioTags] = useState("");
+  const [studioScenarioUseNodePins, setStudioScenarioUseNodePins] = useState(false);
   const [studioNodePins, setStudioNodePins] = useState<StudioNodePin[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
@@ -532,6 +534,7 @@ export default function App() {
       setStudioSelectedScenarioId("");
       setStudioScenarioLabel("");
       setStudioScenarioTags("");
+      setStudioScenarioUseNodePins(false);
       setStudioNodePins([]);
       return;
     }
@@ -562,10 +565,12 @@ export default function App() {
         if (selectedScenario) {
           setStudioScenarioLabel(selectedScenario.label);
           setStudioScenarioTags(selectedScenario.tags.join(", "));
+          setStudioScenarioUseNodePins(selectedScenario.useNodePins);
           setUserMessage(selectedScenario.input);
         } else {
           setStudioScenarioLabel("");
           setStudioScenarioTags("");
+          setStudioScenarioUseNodePins(false);
         }
         const [nextSandbox, listResult, runList, approvalStatus] = await Promise.all([
           sandboxStatus(loaded.flow.id),
@@ -644,6 +649,7 @@ export default function App() {
         setStudioSelectedScenarioId("");
         setStudioScenarioLabel("");
         setStudioScenarioTags("");
+        setStudioScenarioUseNodePins(false);
         setStudioNodePins([]);
         setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
         setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
@@ -2116,6 +2122,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
   function resetScenarioForm() {
     setStudioScenarioLabel("");
     setStudioScenarioTags("");
+    setStudioScenarioUseNodePins(false);
   }
 
   function persistStudioScenarios(flowId: string, scenarios: StudioScenario[]): void {
@@ -2177,6 +2184,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         label,
         input,
         tags,
+        useNodePins: studioScenarioUseNodePins,
         updatedAt: now,
       };
     } else {
@@ -2186,6 +2194,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         input,
         tags,
         isPinned: false,
+        useNodePins: studioScenarioUseNodePins,
         createdAt: now,
         updatedAt: now,
         lastUsedAt: null,
@@ -2208,6 +2217,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       setStudioSelectedScenarioId(selected.id);
       setStudioScenarioLabel(selected.label);
       setStudioScenarioTags(selected.tags.join(", "));
+      setStudioScenarioUseNodePins(selected.useNodePins);
       setUserMessage(selected.input);
       setStatus({ kind: "ok", message: `Cenário "${selected.label}" selecionado.` });
     } else {
@@ -2241,11 +2251,13 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     if (selected) {
       setStudioScenarioLabel(selected.label);
       setStudioScenarioTags(selected.tags.join(", "));
+      setStudioScenarioUseNodePins(selected.useNodePins);
       setUserMessage(selected.input);
       setStatus({ kind: "ok", message: "Cenário removido." });
     } else {
       setStudioScenarioLabel("");
       setStudioScenarioTags("");
+      setStudioScenarioUseNodePins(false);
       setStatus({ kind: "ok", message: "Cenário removido." });
     }
     if (!selected) {
@@ -2284,6 +2296,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       input,
       tags,
       isPinned: false,
+      useNodePins: studioScenarioUseNodePins,
       createdAt: now,
       updatedAt: now,
       lastUsedAt: null,
@@ -2294,6 +2307,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setStudioSelectedScenarioId(scenario.id);
     setStudioScenarioLabel(label);
     setStudioScenarioTags(tags.join(", "));
+    setStudioScenarioUseNodePins(scenario.useNodePins);
     setUserMessage(input);
     setStatus({ kind: "ok", message: `Fork criado a partir do evento #${selectedStudioEvent.seq}.` });
   }
@@ -2347,7 +2361,11 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       }
       const resourceName = draftFlow.api.resourceName;
       const sandboxUrl = runningSandbox.url;
-      const created = await createRuntimeSession(sandboxUrl, resourceName, studioScenarioExecutionMetadata(selected));
+      const created = await createRuntimeSession(
+        sandboxUrl,
+        resourceName,
+        studioScenarioExecutionMetadata(selected, selected.useNodePins ? activeStudioNodePins(studioNodePins, draftFlow) : []),
+      );
       if (!created.session.session_id) {
         setStatus({ kind: "error", message: "Sessão de execução não retornou ID." });
         return;
@@ -2897,6 +2915,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               studioSelectedScenarioId={studioSelectedScenarioId}
               studioScenarioLabel={studioScenarioLabel}
               studioScenarioTags={studioScenarioTags}
+              studioScenarioUseNodePins={studioScenarioUseNodePins}
               studioNodePins={studioNodePins}
               setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
@@ -2928,6 +2947,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onForkCheckpoint={handleForkSelectedCheckpoint}
               onStudioScenarioLabelChange={setStudioScenarioLabel}
               onStudioScenarioTagsChange={setStudioScenarioTags}
+              onStudioScenarioUseNodePinsChange={setStudioScenarioUseNodePins}
               onStartSandbox={handleStartSandbox}
               onStopSandbox={handleStopSandbox}
               onRefreshSandbox={handleRefreshSandbox}
@@ -4431,6 +4451,7 @@ function SandboxPanel({
   studioSelectedScenarioId,
   studioScenarioLabel,
   studioScenarioTags,
+  studioScenarioUseNodePins,
   studioNodePins,
   userMessage,
   studioRunSearch,
@@ -4462,6 +4483,7 @@ function SandboxPanel({
   onForkCheckpoint,
   onStudioScenarioLabelChange,
   onStudioScenarioTagsChange,
+  onStudioScenarioUseNodePinsChange,
   onExportComparison,
   onClearComparison,
   onSelectEvent,
@@ -4501,6 +4523,7 @@ function SandboxPanel({
   studioSelectedScenarioId: string;
   studioScenarioLabel: string;
   studioScenarioTags: string;
+  studioScenarioUseNodePins: boolean;
   studioNodePins: StudioNodePin[];
   userMessage: string;
   studioRunSearch: string;
@@ -4534,6 +4557,7 @@ function SandboxPanel({
   onForkCheckpoint: () => void;
   onStudioScenarioLabelChange: (value: string) => void;
   onStudioScenarioTagsChange: (value: string) => void;
+  onStudioScenarioUseNodePinsChange: (value: boolean) => void;
   onSelectEvent: (seq: number) => void;
   onTimelineNodeFilterChange: (value: string) => void;
   onRefreshRuns: () => void;
@@ -4587,6 +4611,7 @@ function SandboxPanel({
   const hasCausalAnalysis = studioRunCausalAnalysis.failedNode !== null;
   const selectedScenario = studioScenarios.find((scenario) => scenario.id === studioSelectedScenarioId);
   const pinnedScenario = studioScenarios.find((scenario) => scenario.isPinned);
+  const activeNodePinCount = activeStudioNodePins(studioNodePins, flow).length;
   const nodeFilterOptions = Array.from(
     new Set(["start", "end", ...((flow?.nodes ?? []).map((node) => node.id))]),
   ).sort();
@@ -4667,6 +4692,15 @@ function SandboxPanel({
             <span>Tags (separadas por vírgula)</span>
             <input value={studioScenarioTags} onChange={(event) => onStudioScenarioTagsChange(event.target.value)} />
           </label>
+          <label className="studio-checkbox-row">
+            <input
+              type="checkbox"
+              checked={studioScenarioUseNodePins}
+              onChange={(event) => onStudioScenarioUseNodePinsChange(event.target.checked)}
+            />
+            <span>Usar pins de nó como mock</span>
+            <small>{activeNodePinCount} pin(s) ativo(s) serão enviados na execução</small>
+          </label>
         </div>
         <div className="sandbox-actions">
           <button
@@ -4725,6 +4759,9 @@ function SandboxPanel({
                 {selectedScenario.checkpoint.nodeId ?? "runtime"}
               </small>
             ) : null}
+            {selectedScenario.useNodePins ? (
+              <small>Mock por pins de nó: {activeNodePinCount} pin(s) ativo(s)</small>
+            ) : null}
             <span>Último uso: {selectedScenario.lastUsedAt ? formatDateTime(selectedScenario.lastUsedAt) : "nunca"}</span>
           </article>
         ) : (
@@ -4743,7 +4780,7 @@ function SandboxPanel({
         {studioNodePins.length ? (
           <div className="node-pin-list">
             {studioNodePins.map((pin) => {
-              const currentNode = flow?.nodes.find((node) => node.id === pin.nodeId) ?? null;
+              const currentNode = studioPinNodeForHash(flow, pin.nodeId);
               const stale = hashStudioNodeDefinition(currentNode) !== pin.nodeHash;
               return (
                 <article className={`node-pin-row ${stale ? "stale" : ""}`} key={pin.id}>
@@ -5270,7 +5307,7 @@ function SandboxPanel({
                     eventType: selectedNodeContext.latestEvent.event_type,
                     nodeHash: selectedNodeHash,
                     input: selectedNodeContext.input,
-                    output: selectedNodeContext.output,
+                    output: buildStudioNodePinOutput(selectedNodeContext),
                   });
                 }}
               >
@@ -5657,6 +5694,23 @@ function inferEventOutput(payload: Record<string, unknown>): unknown {
     phase: payload.phase,
     turn: payload.turn,
   };
+}
+
+function buildStudioNodePinOutput(context: StudioNodeDebugContext): unknown {
+  const output = isRecord(context.output) ? { ...context.output } : context.output;
+  const nodeState = isRecord(context.nodeState) ? context.nodeState : null;
+  const assistantMessage = isRecord(nodeState?.assistant_message)
+    ? nodeState.assistant_message
+    : isRecord(nodeState?.assistantMessage)
+      ? nodeState.assistantMessage
+      : null;
+  if (assistantMessage && isRecord(output)) {
+    return { ...output, assistant_message: assistantMessage };
+  }
+  if (assistantMessage) {
+    return { value: output, assistant_message: assistantMessage };
+  }
+  return output;
 }
 
 function buildStudioNodeContext(
@@ -7132,12 +7186,13 @@ function inferCheckpointForkInput(event: EventView, transcript: MessageView[]): 
   return lastUserMessage?.content.trim() ?? `Reexecutar checkpoint ${event.event_type} #${event.seq}`;
 }
 
-function studioScenarioExecutionMetadata(scenario: StudioScenario): Record<string, unknown> {
+function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: StudioNodePin[] = []): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
     scenario: {
       id: scenario.id,
       label: scenario.label,
       tags: scenario.tags,
+      useNodePins: scenario.useNodePins,
     },
   };
   if (scenario.checkpoint) {
@@ -7152,6 +7207,25 @@ function studioScenarioExecutionMetadata(scenario: StudioScenario): Record<strin
       phase: scenario.checkpoint.phase,
       turn: scenario.checkpoint.turn,
       mode: "scenario-fork",
+    };
+  }
+  if (nodePins.length > 0) {
+    metadata.nodePins = {
+      enabled: true,
+      mode: "mock",
+      count: nodePins.length,
+      items: nodePins.map((pin) => ({
+        nodeId: pin.nodeId,
+        nodeType: pin.nodeType,
+        nodeHash: pin.nodeHash,
+        runId: pin.runId,
+        sessionId: pin.sessionId,
+        eventSeq: pin.eventSeq,
+        eventType: pin.eventType,
+        input: pin.input,
+        output: pin.output,
+        updatedAt: pin.updatedAt,
+      })),
     };
   }
   return metadata;
@@ -7249,6 +7323,7 @@ function normalizeStudioScenario(value: unknown): StudioScenario | null {
       ? value.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
       : [],
     isPinned: value.isPinned === true,
+    useNodePins: value.useNodePins === true,
     createdAt,
     updatedAt,
     lastUsedAt: value.lastUsedAt === null || typeof value.lastUsedAt === "string" ? value.lastUsedAt : null,
@@ -7290,6 +7365,23 @@ function normalizeScenarioDefaults(scenario: StudioScenario): StudioScenario {
     input,
     tags,
   };
+}
+
+function activeStudioNodePins(pins: StudioNodePin[], flow: AgentFlow | null): StudioNodePin[] {
+  return sortStudioNodePins(
+    pins.filter((pin) => hashStudioNodeDefinition(studioPinNodeForHash(flow, pin.nodeId)) === pin.nodeHash),
+  );
+}
+
+function studioPinNodeForHash(flow: AgentFlow | null, nodeId: string): FlowNode | null {
+  const existing = flow?.nodes.find((node) => node.id === nodeId);
+  if (existing) {
+    return existing;
+  }
+  if (nodeId === "start" || nodeId === "end") {
+    return { id: nodeId, type: nodeId } as FlowNode;
+  }
+  return null;
 }
 
 function scenarioStorageKey(flowId: string): string {

@@ -92,12 +92,15 @@ for (const theme of themes) {
     await expect(nodePinsSection.getByText("llm_step", { exact: true })).toBeVisible();
     await expect(nodePinsSection.getByText(/llm_prompt.*#4.*llm_completed/)).toBeVisible();
     await expect(nodePinsSection.getByText(/atual/).first()).toBeVisible();
+    await page.getByLabel("Usar pins de nó como mock").check();
+    await expect(page.getByLabel("Usar pins de nó como mock")).toBeChecked();
     await page.getByRole("button", { name: /^Criar fork$/ }).click();
     await expect(page.getByText("Fork criado a partir do evento #4.")).toBeVisible();
     const scenarioSection = page.locator(".sandbox-section", { hasText: "Cenários de teste" });
     const selectedScenarioCard = scenarioSection.locator(".runtime-item", { hasText: "Fork llm_step #4" });
     await expect(selectedScenarioCard.getByText("Fork llm_step #4", { exact: true })).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Fork de checkpoint: .*#4.*llm_step/)).toBeVisible();
+    await expect(selectedScenarioCard.getByText(/Mock por pins de nó: 1 pin/)).toBeVisible();
     await expect(page.locator(".turn-input")).toHaveValue("Aumentar conversões em onboarding.");
 
     await expectNoDocumentHorizontalOverflow(page);

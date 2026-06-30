@@ -78,6 +78,7 @@
 - Studio Local infere diagnóstico operacional por nó, com causa provável, próximas ações e evidências derivadas de payload, safety, status, fase, snapshot e cadeia causal, incluindo orientações específicas por tipo de nó para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics.
 - Studio Local permite criar fork de checkpoint/evento a partir do `State inspector`, salvando um cenário local reexecutável com origem do run, sessão, evento, snapshot, input/output e metadata de execução para rastrear a nova sessão.
 - Studio Local permite fixar input/output por nó no drill-down, persistindo pins locais por flow com origem de run/evento e indicador `atual/stale` quando a definição do nó muda.
+- Studio Local permite ativar mock por pins no cenário; a execução envia pins ativos na metadata da sessão e o runtime gerado aplica `pinned/mock` por nó antes de chamar LLM, código, HTTP, banco, arquivos/RAG, approval, scoring, analytics ou handlers de controle.
 - Causalidade ao vivo da UI foi alinhada ao backend: usa a falha mais recente, o parent executado mais próximo antes da falha e descendentes realmente observados depois da falha.
 - Ordenação de `impactedNodes` passou a seguir ordem causal/de execução, com o nó da falha primeiro e descendentes ordenados pelo primeiro evento impactado, em vez de lista alfabética.
 - Topbar do Builder/Studio passou a conter overflow de toolbar localmente, evitando alargar o documento em viewport desktop comum.
@@ -137,7 +138,7 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 - Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
 - `npm run typecheck` e `npm run build:builder-ui` passaram após a inclusão dos atalhos globais iniciais.
-- `npm run test:ui-theme` passou com 12 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, pin local de input/output por nó, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, e estados operacionais Docker de loading/progresso, container running, smoke com erro e container stopped.
+- `npm run test:ui-theme` passou com 12 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, pin local de input/output por nó, toggle de mock por pins em cenário, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, e estados operacionais Docker de loading/progresso, container running, smoke com erro e container stopped.
 
 ## Ainda não implementado
 
@@ -168,7 +169,7 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
 
 3. **Cenários + pinning avançado (Média prioridade)**
    - consolidar cenários nomeados por agente/run;
-   - ampliar pinning já implementado para mocking/replay determinístico por nó;
+   - ampliar replay por pins com comparação de métricas, regressão e fixtures exportáveis;
    - reexecução determinística com histórico de comparação.
 
 4. **Adapters de código não nativos (Média/Longo prazo)**
