@@ -5846,10 +5846,43 @@ function CatalogPanel({
   onSaveSkill: () => void;
 }) {
   const [kindFilter, setKindFilter] = useState<LocalCatalogItemKind | "">("");
+  const [sourceFilter, setSourceFilter] = useState<LocalCatalogItem["source"] | "">("");
+  const [tagFilter, setTagFilter] = useState("");
+  const [query, setQuery] = useState("");
+  const availableTags = useMemo(() => {
+    const tags = new Set<string>();
+    for (const item of catalog?.items ?? []) {
+      for (const tag of item.tags) {
+        tags.add(tag);
+      }
+    }
+    return Array.from(tags).sort((left, right) => left.localeCompare(right));
+  }, [catalog]);
   const items = useMemo(
-    () => (catalog?.items ?? []).filter((item) => !kindFilter || item.kind === kindFilter),
-    [catalog, kindFilter],
+    () => {
+      const normalizedQuery = query.trim().toLowerCase();
+      return (catalog?.items ?? []).filter((item) => {
+        if (kindFilter && item.kind !== kindFilter) {
+          return false;
+        }
+        if (sourceFilter && item.source !== sourceFilter) {
+          return false;
+        }
+        if (tagFilter && !item.tags.includes(tagFilter)) {
+          return false;
+        }
+        if (!normalizedQuery) {
+          return true;
+        }
+        const searchable = [item.id, item.name, item.description, item.kind, item.source, ...item.tags]
+          .join(" ")
+          .toLowerCase();
+        return searchable.includes(normalizedQuery);
+      });
+    },
+    [catalog, kindFilter, query, sourceFilter, tagFilter],
   );
+  const totalItems = catalog?.items.length ?? 0;
 
   if (!flow) {
     return (
@@ -5869,6 +5902,15 @@ function CatalogPanel({
         </div>
         <PanelNotice state={loadState} />
         <div className="catalog-toolbar">
+          <label className="catalog-search">
+            <span>Busca</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Nome, descrição ou tag"
+              aria-label="Buscar no catálogo"
+            />
+          </label>
           <label>
             <span>Tipo</span>
             <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as LocalCatalogItemKind | "")}>
@@ -5880,9 +5922,42 @@ function CatalogPanel({
               ))}
             </select>
           </label>
+          <label>
+            <span>Origem</span>
+            <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as LocalCatalogItem["source"] | "")}>
+              <option value="">Todas</option>
+              <option value="builtin">Embutidos</option>
+              <option value="local">Locais</option>
+            </select>
+          </label>
+          <label>
+            <span>Tag</span>
+            <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+              <option value="">Todas</option>
+              {availableTags.map((tag) => (
+                <option value={tag} key={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+          </label>
           <button type="button" className="command-button" onClick={onRefresh}>
             <RefreshCw size={16} aria-hidden="true" />
             Atualizar
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={() => {
+              setKindFilter("");
+              setSourceFilter("");
+              setTagFilter("");
+              setQuery("");
+            }}
+            disabled={!kindFilter && !sourceFilter && !tagFilter && !query}
+          >
+            <Search size={16} aria-hidden="true" />
+            Limpar
           </button>
         </div>
         <div className="catalog-toolbar">
@@ -5918,7 +5993,9 @@ function CatalogPanel({
       <section className="asset-section">
         <div className="asset-metadata-title">
           <strong>Itens reutilizáveis</strong>
-          <span>{items.length}</span>
+          <span>
+            {items.length}/{totalItems}
+          </span>
         </div>
         {items.length ? (
           <div className="catalog-list">

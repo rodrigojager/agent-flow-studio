@@ -164,12 +164,17 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await openBuilder(page, "light", viewports[0]);
   await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
   await openInspectorTab(page, "Catálogo");
+  const catalogPanel = page.locator(".catalog-body");
 
   await expect(page.getByText("Catálogo local")).toBeVisible();
   await expect(page.getByText("HTTP JSON tool")).toBeVisible();
   await expect(page.getByText("Prompt de perguntas guiadas")).toBeVisible();
   await expect(page.getByText("Agente gerador de perguntas por conteúdo")).toBeVisible();
   await expect(page.getByText("Skill de perguntas estruturadas")).toBeVisible();
+  await catalogPanel.getByLabel("Buscar no catálogo").fill("HTTP");
+  await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toBeVisible();
+  await expect(page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" })).toHaveCount(0);
+  await catalogPanel.getByRole("button", { name: /^Limpar$/ }).click();
 
   await page.getByRole("button", { name: /^Salvar tool atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Tool do nó deterministic_gate salva no catálogo local", {
@@ -180,6 +185,11 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
   await expect(page.locator(".catalog-card", { hasText: "Prompt principal para conduzir" })).toBeVisible();
+  await catalogPanel.getByLabel("Origem").selectOption("local");
+  await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toBeVisible();
+  await expect(page.locator(".catalog-card", { hasText: "Prompt principal para conduzir" })).toBeVisible();
+  await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toHaveCount(0);
+  await catalogPanel.getByRole("button", { name: /^Limpar$/ }).click();
 
   const httpTool = page.locator(".catalog-card", { hasText: "HTTP JSON tool" });
   await httpTool.getByRole("button", { name: /^Usar no nó$/ }).click();

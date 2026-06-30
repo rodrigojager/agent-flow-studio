@@ -830,7 +830,7 @@ button:disabled {
 
 .catalog-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 8px;
   align-items: end;
 }
@@ -848,6 +848,7 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.catalog-toolbar input,
 .catalog-toolbar select {
   width: 100%;
   min-height: 34px;
@@ -858,6 +859,15 @@ button:disabled {
   background: var(--surface-bg);
   font: inherit;
   font-size: 12px;
+}
+
+.catalog-toolbar .command-button {
+  align-self: end;
+  min-height: 34px;
+}
+
+.catalog-search {
+  grid-column: span 2;
 }
 
 .catalog-list {
