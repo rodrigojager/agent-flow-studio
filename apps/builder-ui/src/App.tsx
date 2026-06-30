@@ -418,6 +418,23 @@ interface StudioNodeStructuredLog {
   error: string | null;
 }
 
+interface StudioNodeStructuredLogExport {
+  format: "agent-flow-builder.node-structured-logs.v1";
+  exportedAt: string;
+  flowId: string;
+  runId: string | null;
+  sessionId: string | null;
+  nodeId: string;
+  filters: {
+    mode: string;
+    status: string;
+    query: string;
+  };
+  totalLogs: number;
+  filteredLogs: number;
+  logs: StudioNodeStructuredLog[];
+}
+
 interface StudioNodeMetric {
   label: string;
   value: string;
@@ -6260,6 +6277,9 @@ function SandboxPanel({
   const selectedFlowNode =
     flow?.nodes.find((node) => node.id === selectedNodeContext?.nodeId) ??
     (selectedNodeContext?.nodeId === "start" ? ({ id: "start", type: "start" } as FlowNode) : null);
+  const [nodeStructuredLogModeFilter, setNodeStructuredLogModeFilter] = useState("");
+  const [nodeStructuredLogStatusFilter, setNodeStructuredLogStatusFilter] = useState("");
+  const [nodeStructuredLogSearch, setNodeStructuredLogSearch] = useState("");
   const selectedPromptRef =
     selectedFlowNode?.promptId && flow
       ? flow.prompts.find((prompt) => prompt.id === selectedFlowNode.promptId) ?? null
@@ -6300,6 +6320,42 @@ function SandboxPanel({
   const nodeFilterOptions = Array.from(
     new Set(["start", "end", ...((flow?.nodes ?? []).map((node) => node.id))]),
   ).sort();
+  const structuredLogModeOptions = Array.from(new Set((selectedNodeContext?.structuredLogs ?? []).map((log) => log.mode))).sort();
+  const structuredLogStatusOptions = Array.from(new Set((selectedNodeContext?.structuredLogs ?? []).map((log) => log.status))).sort();
+  const filteredStructuredLogs = filterStudioNodeStructuredLogs(
+    selectedNodeContext?.structuredLogs ?? [],
+    nodeStructuredLogModeFilter,
+    nodeStructuredLogStatusFilter,
+    nodeStructuredLogSearch,
+  );
+
+  useEffect(() => {
+    setNodeStructuredLogModeFilter("");
+    setNodeStructuredLogStatusFilter("");
+    setNodeStructuredLogSearch("");
+  }, [selectedNodeContext?.nodeId]);
+
+  function handleExportNodeStructuredLogs(): void {
+    if (!flow || !selectedNodeContext || !filteredStructuredLogs.length) {
+      return;
+    }
+    const payload = buildStudioNodeStructuredLogExport(
+      flow.id,
+      selectedRunId || null,
+      session?.session_id ?? null,
+      selectedNodeContext.nodeId,
+      selectedNodeContext.structuredLogs.length,
+      filteredStructuredLogs,
+      {
+        mode: nodeStructuredLogModeFilter,
+        status: nodeStructuredLogStatusFilter,
+        query: nodeStructuredLogSearch.trim(),
+      },
+    );
+    const fileName = `node-structured-logs-${sanitizeFileNamePart(flow.id)}-${sanitizeFileNamePart(selectedNodeContext.nodeId)}.json`;
+    downloadJsonFile(fileName, payload);
+  }
+
   return (
     <div className="sandbox-body">
       <section className="sandbox-section">
@@ -7292,20 +7348,78 @@ function SandboxPanel({
               <div className="node-context-section">
                 <div className="node-context-section-header">
                   <strong>Logs estruturados</strong>
-                  <span>{selectedNodeContext.structuredLogs.length}</span>
+                  <span>
+                    {filteredStructuredLogs.length}/{selectedNodeContext.structuredLogs.length}
+                  </span>
+                </div>
+                <div className="node-context-toolbar">
+                  <label>
+                    <span className="visually-hidden">Buscar logs estruturados</span>
+                    <input
+                      value={nodeStructuredLogSearch}
+                      onChange={(event) => setNodeStructuredLogSearch(event.target.value)}
+                      placeholder="Buscar logs"
+                    />
+                  </label>
+                  <label>
+                    <span className="visually-hidden">Filtrar logs estruturados por modo</span>
+                    <select
+                      value={nodeStructuredLogModeFilter}
+                      onChange={(event) => setNodeStructuredLogModeFilter(event.target.value)}
+                      title="Filtrar logs por modo"
+                    >
+                      <option value="">Todos os modos</option>
+                      {structuredLogModeOptions.map((mode) => (
+                        <option value={mode} key={`structured-log-mode-${mode}`}>
+                          {mode}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span className="visually-hidden">Filtrar logs estruturados por status</span>
+                    <select
+                      value={nodeStructuredLogStatusFilter}
+                      onChange={(event) => setNodeStructuredLogStatusFilter(event.target.value)}
+                      title="Filtrar logs por status"
+                    >
+                      <option value="">Todos os status</option>
+                      {structuredLogStatusOptions.map((status) => (
+                        <option value={status} key={`structured-log-status-${status}`}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="command-button"
+                    onClick={handleExportNodeStructuredLogs}
+                    disabled={!filteredStructuredLogs.length}
+                  >
+                    <Download size={16} aria-hidden="true" />
+                    Exportar
+                  </button>
                 </div>
                 <div className="node-context-spans">
-                  {selectedNodeContext.structuredLogs.slice(-8).map((log, index) => (
-                    <article className="node-context-span" key={`${log.eventSeq}-${log.mode}-${index}`}>
-                      <strong>{log.mode}</strong>
-                      <span>{log.status}</span>
-                      <small>
-                        #{log.eventSeq} · {log.durationMs === null ? "-" : formatRunDuration(log.durationMs)}
-                        {log.error ? ` · ${log.error}` : ""}
-                      </small>
-                      <small>{log.detail}</small>
+                  {filteredStructuredLogs.length ? (
+                    filteredStructuredLogs.slice(-8).map((log, index) => (
+                      <article className="node-context-span" key={`${log.eventSeq}-${log.mode}-${index}`}>
+                        <strong>{log.mode}</strong>
+                        <span>{log.status}</span>
+                        <small>
+                          #{log.eventSeq} · {log.durationMs === null ? "-" : formatRunDuration(log.durationMs)}
+                          {log.error ? ` · ${log.error}` : ""}
+                        </small>
+                        <small>{log.detail}</small>
+                      </article>
+                    ))
+                  ) : (
+                    <article className="runtime-item">
+                      <strong>Nenhum log no filtro</strong>
+                      <span>Sem resultados para o filtro atual.</span>
                     </article>
-                  ))}
+                  )}
                 </div>
               </div>
             ) : null}
@@ -8229,6 +8343,60 @@ function collectStudioNodeStructuredLogs(events: EventView[]): StudioNodeStructu
     });
   }
   return logs;
+}
+
+function filterStudioNodeStructuredLogs(
+  logs: StudioNodeStructuredLog[],
+  modeFilter: string,
+  statusFilter: string,
+  search: string,
+): StudioNodeStructuredLog[] {
+  const query = search.trim().toLowerCase();
+  return logs.filter((log) => {
+    if (modeFilter && log.mode !== modeFilter) {
+      return false;
+    }
+    if (statusFilter && log.status !== statusFilter) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    return [
+      log.mode,
+      log.status,
+      log.detail,
+      log.error ?? "",
+      String(log.eventSeq),
+      log.durationMs === null ? "" : String(log.durationMs),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
+}
+
+function buildStudioNodeStructuredLogExport(
+  flowId: string,
+  runId: string | null,
+  sessionId: string | null,
+  nodeId: string,
+  totalLogs: number,
+  logs: StudioNodeStructuredLog[],
+  filters: StudioNodeStructuredLogExport["filters"],
+): StudioNodeStructuredLogExport {
+  return {
+    format: "agent-flow-builder.node-structured-logs.v1",
+    exportedAt: new Date().toISOString(),
+    flowId,
+    runId,
+    sessionId,
+    nodeId,
+    filters,
+    totalLogs,
+    filteredLogs: logs.length,
+    logs,
+  };
 }
 
 function readExecutionLogError(record: Record<string, unknown>): string | null {

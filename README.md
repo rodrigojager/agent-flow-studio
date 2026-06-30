@@ -79,7 +79,7 @@ O nó de código customizado aceita Python, JavaScript e TypeScript no runtime a
 - Comparação entre runs.
 - Comparação de regressão entre runs com modo live/mock/pinned, eventos pinados/mock, tokens, custo estimado e veredito de revisão.
 - Destaque causal no grafo: upstream, nó de falha, impacto e cascata.
-- Painel "Contexto do nó" com status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output, estado, métricas, logs estruturados de código customizado, spans estruturados, diffs e logs correlacionados.
+- Painel "Contexto do nó" com status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output, estado, métricas, logs estruturados de código customizado com filtros/exportação JSON, spans estruturados, diffs e logs correlacionados.
 - Diagnóstico automático por nó com causa provável, próximas ações e evidências do evento/snapshot.
 - Diagnóstico contextual por tipo de nó para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics.
 - Fork de checkpoint/evento para cenário local reexecutável, preservando origem do run, evento, snapshot e metadata da reexecução.

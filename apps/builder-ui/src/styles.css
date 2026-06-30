@@ -2083,6 +2083,10 @@ button:disabled {
     max-width: 150px;
   }
 
+  .node-context-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .left-panel,
   .right-panel {
     border-right: 0;
@@ -2983,6 +2987,35 @@ button:disabled {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.node-context-toolbar {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(128px, 0.55fr) minmax(128px, 0.55fr) auto;
+  gap: 7px;
+  min-width: 0;
+  align-items: center;
+}
+
+.node-context-toolbar label {
+  min-width: 0;
+}
+
+.node-context-toolbar input,
+.node-context-toolbar select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface-bg);
+}
+
+.node-context-toolbar .command-button {
+  min-height: 32px;
+  justify-content: center;
 }
 
 .node-context-metrics,

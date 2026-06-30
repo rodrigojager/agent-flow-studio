@@ -77,7 +77,7 @@ Estado atual implementado:
 - o runtime registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed` em `/events`, com `execution_log` e `span` estruturados para o Studio Local;
 - outras linguagens continuam representaveis por contrato e podem rodar por HTTP, MCP ou sidecar quando o runtime/container tiver o executavel necessario; runtime adapter dedicado segue pendente.
 
-Proxima etapa necessaria: implementar runtime adapters dedicados quando HTTP/MCP/sidecar nao forem suficientes, isolamento dedicado por no e recursos avancados de logs/filtros/exportacao por no.
+Proxima etapa necessaria: implementar runtime adapters dedicados quando HTTP/MCP/sidecar nao forem suficientes, isolamento dedicado por no e recursos avancados de logs por sandbox isolado.
 
 ## Capacidades ProUp Que Precisam Ser Recriaveis
 

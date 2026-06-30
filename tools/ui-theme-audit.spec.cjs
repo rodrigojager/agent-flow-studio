@@ -273,9 +273,29 @@ for (const theme of themes) {
     await expect(spansSection.getByText("168 tokens")).toBeVisible();
     const structuredLogsSection = page.locator(".node-context-section", { hasText: "Logs estruturados" });
     await expect(structuredLogsSection).toBeVisible();
-    await expect(structuredLogsSection.getByText("mcp", { exact: true })).toBeVisible();
-    await expect(structuredLogsSection.getByText("custom_code_executed", { exact: true })).toBeVisible();
-    await expect(structuredLogsSection.getByText(/target generate_questions/)).toBeVisible();
+    const structuredLogCard = structuredLogsSection.locator(".node-context-span", { hasText: "target generate_questions" });
+    await expect(structuredLogCard.getByText("mcp", { exact: true })).toBeVisible();
+    await expect(structuredLogCard.getByText("custom_code_executed", { exact: true })).toBeVisible();
+    await expect(structuredLogCard.getByText(/target generate_questions/)).toBeVisible();
+    await structuredLogsSection.getByLabel("Buscar logs estruturados").fill("generate_questions");
+    await structuredLogsSection.getByLabel("Filtrar logs estruturados por modo").selectOption("mcp");
+    await structuredLogsSection.getByLabel("Filtrar logs estruturados por status").selectOption("custom_code_executed");
+    await expect(structuredLogsSection.getByText("1/1", { exact: true })).toBeVisible();
+    const [structuredLogsDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      structuredLogsSection.getByRole("button", { name: /^Exportar$/ }).click(),
+    ]);
+    expect(structuredLogsDownload.suggestedFilename()).toBe("node-structured-logs-reference-interview-llm_step.json");
+    const structuredLogsPath = await structuredLogsDownload.path();
+    if (!structuredLogsPath) {
+      throw new Error("Structured logs download path was not available.");
+    }
+    const structuredLogsExport = JSON.parse(await fs.readFile(structuredLogsPath, "utf8"));
+    expect(structuredLogsExport.format).toBe("agent-flow-builder.node-structured-logs.v1");
+    expect(structuredLogsExport.nodeId).toBe("llm_step");
+    expect(structuredLogsExport.filters.query).toBe("generate_questions");
+    expect(structuredLogsExport.logs[0].mode).toBe("mcp");
+    expect(structuredLogsExport.logs[0].status).toBe("custom_code_executed");
     await expect(page.getByText("Restore de checkpoint", { exact: true })).toBeVisible();
     await expect(page.getByText(/Origem: snapshot.*sessão ui-audit-source.*turno 1/)).toBeVisible();
     await expect(page.getByText(/Estado: session, recent_messages, nodes/)).toBeVisible();
