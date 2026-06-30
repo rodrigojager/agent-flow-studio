@@ -789,6 +789,7 @@ Entregaveis:
 - registry local em `.agent-flow/catalog/registry.json`;
 - seeds locais para prompts, schemas, tools comuns, templates de agente e skills;
 - salvar prompt/schema atual no registry local;
+- salvar nó atual como tool/skill local reutilizável;
 - reutilizar prompt/schema/tool/skill em flows sem copiar arquivos manualmente;
 - criar novo flow a partir de template de agente;
 - evoluir catalogo para tools compostas e skills compostas;
@@ -807,7 +808,7 @@ Status 2026-06-30:
 - tools aplicadas pelo catalogo criam ou atualizam no `code` com contrato visual/runtime existente;
 - templates de agente criam novos flows completos; os seeds atuais incluem conversa guiada e gerador de perguntas por conteúdo/RAG;
 - skills aplicadas pelo catalogo materializam bundles de prompt/schema e podem transformar o no selecionado por patch seguro; o seed atual adiciona geração estruturada de perguntas a um nó LLM;
-- implementada aba `Catalogo` na Builder UI com filtro por tipo, refresh, cards de itens, salvar prompt/schema atual, criar flow por template e aplicar item/skill no flow/no selecionado;
+- implementada aba `Catalogo` na Builder UI com filtro por tipo, refresh, cards de itens, salvar prompt/schema atual, salvar nó selecionado como tool/skill, criar flow por template e aplicar item/skill no flow/no selecionado;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
 - pendente evoluir para skills compostas, tools compostas, curadoria/versionamento visual e compartilhamento real.
 

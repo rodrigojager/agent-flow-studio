@@ -115,6 +115,7 @@ import {
 import type {
   AgentFlow,
   EventView,
+  FlowAssetContent,
   FlowEdge,
   FlowDiagnostic,
   FlowNode,
@@ -2313,6 +2314,70 @@ export default function App() {
     }
   }
 
+  async function handleSaveSelectedNodeAsToolToCatalog() {
+    if (!draftFlow || !selectedNode || selectedNode.id === "start" || selectedNode.id === "end") {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando tool do nó ${selectedNode.id} no catálogo local.` });
+    try {
+      const result = await saveLocalCatalogItem({
+        id: localCatalogId(draftFlow.id, `${selectedNode.id}-tool`),
+        kind: "tool",
+        name: `${selectedNode.id} (${selectedNode.type})`,
+        description: selectedNode.description || `Tool reutilizável baseada no nó ${selectedNode.id} de ${draftFlow.name}.`,
+        tags: uniqueTextList(["tool", "node", "flow", draftFlow.id, selectedNode.type]),
+        nodePatch: catalogNodePatchFromNode(selectedNode, { includeAssetRefs: false }),
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Tool do nó ${selectedNode.id} salva no catálogo local.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleSaveSelectedNodeAsSkillToCatalog() {
+    if (!selectedFlowId || !draftFlow || !selectedNode || selectedNode.id === "start" || selectedNode.id === "end") {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando skill do nó ${selectedNode.id} no catálogo local.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const prompts = selectedNode.promptId ? [await catalogPromptAssetForNode(selectedFlowId, draftFlow, selectedNode.promptId)] : [];
+      const schemas = selectedNode.outputSchema ? [await catalogSchemaAssetForNode(selectedFlowId, draftFlow, selectedNode.outputSchema)] : [];
+      const result = await saveLocalCatalogItem({
+        id: localCatalogId(draftFlow.id, `${selectedNode.id}-skill`),
+        kind: "skill",
+        name: `${selectedNode.id} skill`,
+        description: selectedNode.description || `Skill reutilizável baseada no nó ${selectedNode.id} de ${draftFlow.name}.`,
+        tags: uniqueTextList([
+          "skill",
+          "node",
+          "flow",
+          draftFlow.id,
+          selectedNode.type,
+          ...(selectedNode.promptId ? [selectedNode.promptId] : []),
+          ...(selectedNode.outputSchema ? [selectedNode.outputSchema] : []),
+        ]),
+        content: JSON.stringify(
+          {
+            format: "agent-flow-builder.skill.v1",
+            prompts,
+            schemas,
+            targetNodePatch: catalogNodePatchFromNode(selectedNode, { includeAssetRefs: false }),
+          },
+          null,
+          2,
+        ),
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Skill do nó ${selectedNode.id} salva no catálogo local.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleApplyCatalogItem(item: LocalCatalogItem, targetNodeId?: string) {
     if (!selectedFlowId) {
       return;
@@ -4131,6 +4196,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onCreateAgentTemplate={handleCreateFlowFromCatalogTemplate}
               onSavePrompt={handleSaveSelectedPromptToCatalog}
               onSaveSchema={handleSaveSelectedSchemaToCatalog}
+              onSaveTool={handleSaveSelectedNodeAsToolToCatalog}
+              onSaveSkill={handleSaveSelectedNodeAsSkillToCatalog}
             />
           ) : inspectorTab === "validation" ? (
             <ValidationPanel
@@ -5761,6 +5828,8 @@ function CatalogPanel({
   onCreateAgentTemplate,
   onSavePrompt,
   onSaveSchema,
+  onSaveTool,
+  onSaveSkill,
 }: {
   flow: AgentFlow | null;
   selectedNodeId: string;
@@ -5773,6 +5842,8 @@ function CatalogPanel({
   onCreateAgentTemplate: (item: LocalCatalogItem) => void;
   onSavePrompt: () => void;
   onSaveSchema: () => void;
+  onSaveTool: () => void;
+  onSaveSkill: () => void;
 }) {
   const [kindFilter, setKindFilter] = useState<LocalCatalogItemKind | "">("");
   const items = useMemo(
@@ -5822,6 +5893,24 @@ function CatalogPanel({
           <button type="button" className="command-button" onClick={onSaveSchema} disabled={!selectedSchemaId}>
             <Save size={16} aria-hidden="true" />
             Salvar schema atual
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onSaveTool}
+            disabled={!selectedNodeId || selectedNodeId === "start" || selectedNodeId === "end"}
+          >
+            <Save size={16} aria-hidden="true" />
+            Salvar tool atual
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onSaveSkill}
+            disabled={!selectedNodeId || selectedNodeId === "start" || selectedNodeId === "end"}
+          >
+            <Save size={16} aria-hidden="true" />
+            Salvar skill atual
           </button>
         </div>
       </section>
@@ -11447,6 +11536,43 @@ function catalogKindLabel(kind: LocalCatalogItemKind): string {
     return "Template de agente";
   }
   return "Skill";
+}
+
+async function catalogPromptAssetForNode(flowId: string, flow: AgentFlow, promptId: string): Promise<FlowAssetContent> {
+  const ref = flow.prompts.find((prompt) => prompt.id === promptId);
+  const asset = await loadPromptAsset(flowId, promptId);
+  return {
+    id: ref?.id ?? asset.id,
+    path: ref?.path ?? asset.path,
+    content: asset.content,
+  };
+}
+
+async function catalogSchemaAssetForNode(flowId: string, flow: AgentFlow, schemaId: string): Promise<FlowAssetContent> {
+  const ref = flow.schemas.find((schema) => schema.id === schemaId);
+  const asset = await loadSchemaAsset(flowId, schemaId);
+  return {
+    id: ref?.id ?? asset.id,
+    path: ref?.path ?? asset.path,
+    content: asset.content,
+  };
+}
+
+function catalogNodePatchFromNode(
+  node: FlowNode,
+  options: { includeAssetRefs: boolean },
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (value === undefined || key === "id" || key === "position") {
+      continue;
+    }
+    if (!options.includeAssetRefs && (key === "promptId" || key === "outputSchema")) {
+      continue;
+    }
+    patch[key] = value;
+  }
+  return patch;
 }
 
 function localCatalogId(flowId: string, assetId: string): string {

@@ -1572,6 +1572,45 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(savedSchema.statusCode, 200);
   assert.match(savedSchema.json().item.content, /summary/);
 
+  const savedTool = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "tool",
+      id: "local-deterministic-tool",
+      name: "Tool determinística local",
+      description: "Node patch salvo como tool local.",
+      tags: ["tool", "local"],
+      nodePatch: { type: "code", handler: "deterministic_gate" },
+    },
+  });
+  assert.equal(savedTool.statusCode, 200);
+  assert.equal(savedTool.json().item.source, "local");
+  assert.equal(savedTool.json().item.nodePatch.handler, "deterministic_gate");
+
+  const savedSkill = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "skill",
+      id: "local-empty-skill",
+      name: "Skill local",
+      description: "Skill local mínima.",
+      tags: ["skill", "local"],
+      content: JSON.stringify({
+        format: "agent-flow-builder.skill.v1",
+        prompts: [],
+        schemas: [],
+        targetNodePatch: { type: "code", handler: "deterministic_gate" },
+      }),
+    },
+  });
+  assert.equal(savedSkill.statusCode, 200);
+  assert.equal(savedSkill.json().item.source, "local");
+  assert.match(savedSkill.json().item.content, /agent-flow-builder\.skill\.v1/);
+
   const appliedSchema = await app.inject({
     method: "POST",
     url: "/flows/reference-interview/catalog/apply",

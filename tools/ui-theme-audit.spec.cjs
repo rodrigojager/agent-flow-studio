@@ -171,6 +171,12 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.getByText("Agente gerador de perguntas por conteúdo")).toBeVisible();
   await expect(page.getByText("Skill de perguntas estruturadas")).toBeVisible();
 
+  await page.getByRole("button", { name: /^Salvar tool atual$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Tool do nó deterministic_gate salva no catálogo local", {
+    timeout: 10_000,
+  });
+  await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toBeVisible();
+
   await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
   await expect(page.locator(".catalog-card", { hasText: "Prompt principal para conduzir" })).toBeVisible();
@@ -196,6 +202,12 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(labeledSelect(inspector, "Schema")).toHaveValue("question_list");
 
   await openInspectorTab(page, "Catálogo");
+  await page.getByRole("button", { name: /^Salvar skill atual$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Skill do nó llm_step salva no catálogo local", {
+    timeout: 10_000,
+  });
+  await expect(page.locator(".catalog-card", { hasText: "llm_step skill" })).toBeVisible();
+
   const questionAgent = page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" });
   page.once("dialog", (dialog) => dialog.accept("catalog-template-ui-agent"));
   await questionAgent.getByRole("button", { name: /^Criar flow$/ }).click();
