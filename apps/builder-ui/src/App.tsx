@@ -2327,7 +2327,11 @@ export default function App() {
       setFlowValidation(null);
       setStudioScenarioBatchResults([]);
       setStudioScenarioBatchApproval(null);
-      if (result.prompt) {
+      if (result.node) {
+        setSelectedNodeId(result.node.id);
+        setSelectedEdgeId("");
+        setInspectorTab("properties");
+      } else if (result.prompt) {
         setSelectedPromptId(result.prompt.id);
         setPromptContent(result.prompt.content);
         setPromptDirty(false);
@@ -2337,10 +2341,6 @@ export default function App() {
         setSchemaContent(result.schema.content);
         setSchemaDirty(false);
         setInspectorTab("files");
-      } else if (result.node) {
-        setSelectedNodeId(result.node.id);
-        setSelectedEdgeId("");
-        setInspectorTab("properties");
       }
       await refreshFlows(true);
       setStatus({ kind: "ok", message: `${item.name} aplicado ao flow.` });
@@ -5852,11 +5852,6 @@ function CatalogPanel({
                     <button type="button" className="command-button" onClick={() => onCreateAgentTemplate(item)}>
                       <Plus size={16} aria-hidden="true" />
                       Criar flow
-                    </button>
-                  ) : item.kind === "skill" ? (
-                    <button type="button" className="command-button" disabled title="Skills serão aplicadas em uma etapa posterior.">
-                      <Sparkles size={16} aria-hidden="true" />
-                      Em breve
                     </button>
                   ) : (
                     <>

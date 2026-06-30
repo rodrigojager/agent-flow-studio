@@ -155,8 +155,11 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   expect(pageErrors, "Unexpected browser errors while editing asset metadata").toEqual([]);
 });
 
-test("catalog panel saves local assets and applies a tool", async ({ page }) => {
+test("catalog panel saves local assets and applies a tool", async ({ page, request }) => {
   const pageErrors = attachBrowserErrorCollector(page);
+  const originalFlowResponse = await request.get(`${apiUrl}/flows/reference-interview`);
+  await expectApiOk(originalFlowResponse, "load original reference flow before catalog test");
+  const originalFlow = (await originalFlowResponse.json()).flow;
 
   await openBuilder(page, "light", viewports[0]);
   await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
@@ -166,6 +169,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page }) => 
   await expect(page.getByText("HTTP JSON tool")).toBeVisible();
   await expect(page.getByText("Prompt de perguntas guiadas")).toBeVisible();
   await expect(page.getByText("Agente gerador de perguntas por conteúdo")).toBeVisible();
+  await expect(page.getByText("Skill de perguntas estruturadas")).toBeVisible();
 
   await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
@@ -177,6 +181,19 @@ test("catalog panel saves local assets and applies a tool", async ({ page }) => 
   await expect(page.locator(".tabs button", { hasText: "Editar" })).toHaveClass(/active/);
   await expect(page.getByLabel("Modo de execução")).toHaveValue("http");
   await expect(page.getByLabel("URL do executor")).toHaveValue("http://127.0.0.1:9001/run");
+
+  await page.locator(".react-flow__node", { hasText: "llm_step" }).click();
+  await openInspectorTab(page, "Catálogo");
+  const questionSkill = page.locator(".catalog-card", { hasText: "Skill de perguntas estruturadas" });
+  await questionSkill.getByRole("button", { name: /^Usar no nó$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Skill de perguntas estruturadas aplicado ao flow", {
+    timeout: 10_000,
+  });
+  await expect(page.locator(".tabs button", { hasText: "Editar" })).toHaveClass(/active/);
+  const inspector = page.locator(".inspector-body");
+  await expect(labeledSelect(inspector, "Tipo")).toHaveValue("llm_structured");
+  await expect(labeledSelect(inspector, "Prompt")).toHaveValue("question_generation");
+  await expect(labeledSelect(inspector, "Schema")).toHaveValue("question_list");
 
   await openInspectorTab(page, "Catálogo");
   const questionAgent = page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" });
@@ -192,6 +209,10 @@ test("catalog panel saves local assets and applies a tool", async ({ page }) => 
 
   await expectNoDocumentHorizontalOverflow(page);
   await expectTopbarControlsToFit(page);
+  await expectApiOk(
+    await request.put(`${apiUrl}/flows/reference-interview`, { data: originalFlow }),
+    "restore original reference flow after catalog test",
+  );
   expect(pageErrors, "Unexpected browser errors while using local catalog").toEqual([]);
 });
 
@@ -626,6 +647,10 @@ async function openInspectorTab(page, tabName) {
   await tab.scrollIntoViewIfNeeded();
   await tab.click();
   await expect(tab).toHaveClass(/active/);
+}
+
+function labeledSelect(root, labelText) {
+  return root.getByRole("combobox", { name: labelText, exact: true });
 }
 
 async function generateApprovedDockerRuntime(page) {

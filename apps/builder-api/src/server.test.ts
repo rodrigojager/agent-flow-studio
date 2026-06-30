@@ -1488,6 +1488,11 @@ test("Builder API saves and applies local catalog items", async (t) => {
       .json()
       .items.some((item: { kind: string; id: string }) => item.kind === "agent_template" && item.id === "content-question-generator-agent"),
   );
+  assert.ok(
+    catalog
+      .json()
+      .items.some((item: { kind: string; id: string }) => item.kind === "skill" && item.id === "structured-question-generation-skill"),
+  );
   assert.ok(catalog.json().items.every((item: { scope: string }) => item.scope === "local"));
 
   const createdFromTemplate = await app.inject({
@@ -1596,6 +1601,28 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(appliedTool.json().node.type, "code");
   assert.equal(appliedTool.json().node.codeExecution, "http");
   assert.equal(appliedTool.json().node.url, "http://127.0.0.1:9001/run");
+
+  const appliedSkill = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/catalog/apply",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "structured-question-generation-skill",
+      kind: "skill",
+      targetNodeId: "llm_step",
+    },
+  });
+  assert.equal(appliedSkill.statusCode, 200);
+  assert.equal(appliedSkill.json().prompt.id, "question_generation");
+  assert.equal(appliedSkill.json().schema.id, "question_list");
+  assert.equal(appliedSkill.json().node.id, "llm_step");
+  assert.equal(appliedSkill.json().node.type, "llm_structured");
+  assert.equal(appliedSkill.json().node.promptId, "question_generation");
+  assert.equal(appliedSkill.json().node.outputSchema, "question_list");
+  assert.match(
+    await readFile(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "question_generation.md"), "utf-8"),
+    /transforma conteúdo em perguntas/,
+  );
 
   const validated = await app.inject({ method: "POST", url: "/flows/reference-interview/validate" });
   assert.equal(validated.statusCode, 200);

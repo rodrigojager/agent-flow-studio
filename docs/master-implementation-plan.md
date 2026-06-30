@@ -785,13 +785,13 @@ Objetivo:
 
 Entregaveis:
 
-- catalogo local inicial de prompts, schemas, tools e templates de agente reutilizaveis;
+- catalogo local inicial de prompts, schemas, tools, templates de agente e skills reutilizaveis;
 - registry local em `.agent-flow/catalog/registry.json`;
-- seeds locais para prompts, schemas, tools comuns e templates de agente;
+- seeds locais para prompts, schemas, tools comuns, templates de agente e skills;
 - salvar prompt/schema atual no registry local;
-- reutilizar prompt/schema/tool em flows sem copiar arquivos manualmente;
+- reutilizar prompt/schema/tool/skill em flows sem copiar arquivos manualmente;
 - criar novo flow a partir de template de agente;
-- evoluir catalogo para tools compostas/skills;
+- evoluir catalogo para tools compostas e skills compostas;
 - filtros local/shared quando existir compartilhamento real.
 
 Aceite:
@@ -806,9 +806,10 @@ Status 2026-06-30:
 - prompts e schemas aplicados pelo catalogo viram assets reais no flow e podem atualizar o no selecionado;
 - tools aplicadas pelo catalogo criam ou atualizam no `code` com contrato visual/runtime existente;
 - templates de agente criam novos flows completos; os seeds atuais incluem conversa guiada e gerador de perguntas por conteúdo/RAG;
-- implementada aba `Catalogo` na Builder UI com filtro por tipo, refresh, cards de itens, salvar prompt/schema atual, criar flow por template e aplicar item no flow/no selecionado;
+- skills aplicadas pelo catalogo materializam bundles de prompt/schema e podem transformar o no selecionado por patch seguro; o seed atual adiciona geração estruturada de perguntas a um nó LLM;
+- implementada aba `Catalogo` na Builder UI com filtro por tipo, refresh, cards de itens, salvar prompt/schema atual, criar flow por template e aplicar item/skill no flow/no selecionado;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para skills, tools compostas, curadoria/versionamento visual e compartilhamento real.
+- pendente evoluir para skills compostas, tools compostas, curadoria/versionamento visual e compartilhamento real.
 
 ### Fase 11: Multiagente Local
 

@@ -243,6 +243,7 @@ export interface GeneratedArtifactArchive {
 const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
 const LOCAL_CATALOG_FORMAT = "agent-flow-builder.local-catalog.v1";
 const AGENT_TEMPLATE_FORMAT = "agent-flow-builder.agent-template.v1";
+const SKILL_CATALOG_FORMAT = "agent-flow-builder.skill.v1";
 const LOCAL_CATALOG_PATH = ".agent-flow/catalog/registry.json";
 const GENERATED_ARTIFACT_MAX_FILES = 1000;
 const GENERATED_ARTIFACT_MAX_PREVIEW_BYTES = 512 * 1024;
@@ -1048,6 +1049,9 @@ export async function applyCatalogItemToFlow(
   if (item.kind === "tool") {
     return applyToolCatalogItem(workspaceRoot, flowId, item, input);
   }
+  if (item.kind === "skill") {
+    return applySkillCatalogItem(workspaceRoot, flowId, item, input);
+  }
   throw new WorkspaceError(`Aplicação de ${item.kind} ainda não está disponível para flows.`, 409);
 }
 
@@ -1163,6 +1167,13 @@ interface AgentTemplateDefinition {
   schemas: unknown;
 }
 
+interface SkillCatalogDefinition {
+  format: typeof SKILL_CATALOG_FORMAT;
+  prompts: unknown;
+  schemas: unknown;
+  targetNodePatch?: Record<string, unknown>;
+}
+
 function builtInCatalogItems(): LocalCatalogItem[] {
   const createdAt = "2026-06-30T00:00:00.000Z";
   return [
@@ -1273,6 +1284,37 @@ function builtInCatalogItems(): LocalCatalogItem[] {
             content: questionListSchemaContent(),
           },
         ],
+      ),
+    },
+    {
+      id: "structured-question-generation-skill",
+      kind: "skill",
+      name: "Skill de perguntas estruturadas",
+      description: "Adiciona prompt e schema para transformar um nó LLM selecionado em gerador de perguntas estruturadas.",
+      tags: ["skill", "questions", "structured-output"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      content: skillCatalogContent(
+        [
+          {
+            id: "question_generation",
+            path: "prompts/question_generation.md",
+            content: contentQuestionGeneratorPrompt("Gerador de Perguntas"),
+          },
+        ],
+        [
+          {
+            id: "question_list",
+            path: "schemas/question_list.schema.json",
+            content: questionListSchemaContent(),
+          },
+        ],
+        {
+          type: "llm_structured",
+          description: "Gera perguntas estruturadas a partir do contexto disponível.",
+        },
       ),
     },
     {
@@ -1423,6 +1465,12 @@ function parseLocalCatalogItemInput(value: unknown): LocalCatalogItemInput {
       throw new WorkspaceError("Item agent_template precisa de content JSON.", 422);
     }
     item.content = normalizeAgentTemplateCatalogContent(content);
+  } else if (kind === "skill") {
+    const content = typeof value.content === "string" && value.content.trim() ? value.content : "";
+    if (!content) {
+      throw new WorkspaceError("Item skill precisa de content JSON.", 422);
+    }
+    item.content = normalizeSkillCatalogContent(content);
   } else if (typeof value.content === "string") {
     item.content = value.content;
   }
@@ -1556,6 +1604,38 @@ function substituteTemplateValue(value: unknown, context: { flowId: string; flow
   return value;
 }
 
+function normalizeSkillCatalogContent(content: string): string {
+  const parsed = parseSkillCatalogContent({ id: "local-skill", content } as LocalCatalogItem);
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+function parseSkillCatalogContent(item: LocalCatalogItem): SkillCatalogDefinition {
+  if (!item.content) {
+    throw new WorkspaceError(`Skill ${item.id} não possui content JSON.`, 422);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(item.content);
+  } catch (error) {
+    throw new WorkspaceError(`Skill ${item.id} não é JSON válida.`, 422, error);
+  }
+  if (!isRecord(parsed) || parsed.format !== SKILL_CATALOG_FORMAT) {
+    throw new WorkspaceError(`Skill ${item.id} deve usar formato ${SKILL_CATALOG_FORMAT}.`, 422);
+  }
+  if (!Array.isArray(parsed.prompts)) {
+    throw new WorkspaceError(`Skill ${item.id} precisa conter prompts.`, 422);
+  }
+  if (!Array.isArray(parsed.schemas)) {
+    throw new WorkspaceError(`Skill ${item.id} precisa conter schemas.`, 422);
+  }
+  return {
+    format: SKILL_CATALOG_FORMAT,
+    prompts: parsed.prompts,
+    schemas: parsed.schemas,
+    targetNodePatch: isRecord(parsed.targetNodePatch) ? sanitizeCatalogNodePatch(parsed.targetNodePatch) : undefined,
+  };
+}
+
 async function applyPromptCatalogItem(
   workspaceRoot: string,
   flowId: string,
@@ -1683,6 +1763,98 @@ async function applyToolCatalogItem(
     item,
     flow,
     flowPath: loaded.relativePath,
+    node,
+  };
+}
+
+async function applySkillCatalogItem(
+  workspaceRoot: string,
+  flowId: string,
+  item: LocalCatalogItem,
+  input: ApplyCatalogItemInput,
+): Promise<ApplyCatalogItemResult> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const skill = parseSkillCatalogContent(item);
+  const rawPrompts = parseAssetList(skill.prompts, "prompts");
+  const rawSchemas = parseAssetList(skill.schemas, "schemas");
+  const createdPrompts: FlowAssetContent[] = [];
+  const createdSchemas: FlowAssetContent[] = [];
+  let nextFlow = loaded.flow;
+
+  for (const promptAsset of rawPrompts) {
+    const id = uniqueCatalogRefId(promptAsset.id, nextFlow.prompts.map((prompt) => prompt.id));
+    const assetPath = uniqueCatalogAssetPath(nextFlow, "prompts", `${id}.md`);
+    const promptRef = {
+      id,
+      path: assetPath,
+      version: "v1",
+      description: item.description || undefined,
+      tags: uniqueCatalogTags(["catalog", "skill", ...item.tags]),
+      variables: extractPromptVariables(promptAsset.content),
+    };
+    nextFlow = parseAgentFlow({
+      ...nextFlow,
+      prompts: [...nextFlow.prompts, promptRef],
+    });
+    createdPrompts.push({ id, path: assetPath, content: promptAsset.content });
+  }
+
+  for (const schemaAsset of rawSchemas) {
+    const id = uniqueCatalogRefId(schemaAsset.id, nextFlow.schemas.map((schema) => schema.id));
+    const assetPath = uniqueCatalogAssetPath(nextFlow, "schemas", `${id}.schema.json`);
+    let content = schemaAsset.content;
+    try {
+      content = `${JSON.stringify(JSON.parse(content), null, 2)}\n`;
+    } catch (error) {
+      throw new WorkspaceError(`Schema da skill ${item.id} não é JSON válido: ${schemaAsset.id}.`, 422, error);
+    }
+    const schemaRef = {
+      id,
+      path: assetPath,
+      version: "v1",
+      description: item.description || undefined,
+      tags: uniqueCatalogTags(["catalog", "skill", ...item.tags]),
+    };
+    nextFlow = parseAgentFlow({
+      ...nextFlow,
+      schemas: [...nextFlow.schemas, schemaRef],
+    });
+    createdSchemas.push({ id, path: assetPath, content });
+  }
+
+  let node: AgentFlow["nodes"][number] | undefined;
+  if (input.targetNodeId) {
+    const firstPromptId = createdPrompts[0]?.id;
+    const firstSchemaId = createdSchemas[0]?.id;
+    const patch: Partial<AgentFlow["nodes"][number]> = {
+      ...(skill.targetNodePatch ?? {}),
+      ...(firstPromptId ? { promptId: firstPromptId } : {}),
+      ...(firstSchemaId ? { outputSchema: firstSchemaId } : {}),
+    };
+    const nodes = patchNodeById(nextFlow.nodes, input.targetNodeId, patch);
+    nextFlow = parseAgentFlow({
+      ...nextFlow,
+      nodes,
+    });
+    node = nextFlow.nodes.find((candidate) => candidate.id === input.targetNodeId);
+  }
+
+  for (const promptAsset of createdPrompts) {
+    await mkdir(path.dirname(safeResolveFlowAsset(loaded.flowRoot, promptAsset.path)), { recursive: true });
+    await writeFile(safeResolveFlowAsset(loaded.flowRoot, promptAsset.path), promptAsset.content, "utf-8");
+  }
+  for (const schemaAsset of createdSchemas) {
+    await mkdir(path.dirname(safeResolveFlowAsset(loaded.flowRoot, schemaAsset.path)), { recursive: true });
+    await writeFile(safeResolveFlowAsset(loaded.flowRoot, schemaAsset.path), schemaAsset.content, "utf-8");
+  }
+  await writeFlowFile(loaded, nextFlow);
+  return {
+    status: "ok",
+    item,
+    flow: nextFlow,
+    flowPath: loaded.relativePath,
+    prompt: createdPrompts[0],
+    schema: createdSchemas[0],
     node,
   };
 }
@@ -1973,6 +2145,14 @@ function titleFromId(id: string): string {
 
 function agentTemplateContent(flow: AgentFlow, prompts: FlowAssetContent[], schemas: FlowAssetContent[]): string {
   return `${JSON.stringify({ format: AGENT_TEMPLATE_FORMAT, flow, prompts, schemas }, null, 2)}\n`;
+}
+
+function skillCatalogContent(
+  prompts: FlowAssetContent[],
+  schemas: FlowAssetContent[],
+  targetNodePatch?: Record<string, unknown>,
+): string {
+  return `${JSON.stringify({ format: SKILL_CATALOG_FORMAT, prompts, schemas, targetNodePatch }, null, 2)}\n`;
 }
 
 function starterFlow(input: CreateFlowInput): AgentFlow {
