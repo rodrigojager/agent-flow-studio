@@ -104,7 +104,7 @@
 - Painéis `Arquivos`, `Runtime` e `Studio` exibem estados internos acessíveis de loading/erro, usando `role=status` para carregamento, `role=alert` para falhas e mensagens locais no painel sem depender apenas do status global.
 - Canvas da Builder UI possui finder compacto com busca textual, filtro por tipo, contador de resultados, chips de nós e foco/seleção do nó no React Flow sem alterar o contrato do `agent.flow.json`.
 - Canvas da Builder UI possui grupos colapsáveis locais por família semântica (`Controle`, `Safety`, `IA/RAG`, `Integrações`, `Lógica`, `Outros`), escondendo nós/arestas do grupo recolhido e reabrindo automaticamente o grupo quando um nó oculto é escolhido pelo finder.
-- Aba `Arquivos` possui editor visual inicial para JSON Schema top-level: lista propriedades, altera tipo, descrição, obrigatoriedade, enum e `items.type` de arrays, adiciona/remove campos e sincroniza o textarea JSON usado pelo salvamento do schema.
+- Aba `Arquivos` possui editor visual recursivo para JSON Schema de objetos: lista propriedades, altera tipo, descrição, obrigatoriedade, enum e `items.type` de arrays, edita objetos aninhados e objetos dentro de arrays, adiciona/remove campos e sincroniza o textarea JSON usado pelo salvamento do schema.
 - Canvas marca nós e arestas alterados no draft em relação ao último flow carregado/salvo, com borda/linha tracejada de aviso para orientar o que ainda está pendente de salvamento.
 - Canvas marca nós com pins/checkpoints defasados como `stale` quando o hash salvo diverge da definição atual do nó, e destaca as arestas conectadas para mostrar impacto visual no grafo.
 
@@ -154,11 +154,11 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 - Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
 - `npm run typecheck` e `npm run build:builder-ui` passaram após a inclusão dos atalhos globais iniciais.
-- `npm run test:ui-theme` passou com 15 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, busca/filtro/foco de nós no canvas, grupos colapsáveis e autoexpansão pelo finder, marcação dirty de nó editado, marcação stale por pin defasado, edição visual de metadados de prompt/schema e propriedades top-level de JSON Schema com enum e `items.type` na aba `Arquivos`, estados internos de loading/erro nos painéis `Arquivos`, `Runtime` e `Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, origem observada de restore de checkpoint, pin local de input/output por nó, toggle de mock por pins em cenário, thresholds de regressão por cenário, importação/exportação de fixture JSON de replay, ação de execução em lote, comparação de runs com veredito de regressão, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, alertas operacionais persistentes de Build/Up/Smoke, e estados Docker de loading/progresso, container running, smoke com erro e container stopped.
+- `npm run test:ui-theme` passou com 15 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, busca/filtro/foco de nós no canvas, grupos colapsáveis e autoexpansão pelo finder, marcação dirty de nó editado, marcação stale por pin defasado, edição visual de metadados de prompt/schema, propriedades top-level e propriedades aninhadas de JSON Schema com enum, `items.type`, required e descrição na aba `Arquivos`, estados internos de loading/erro nos painéis `Arquivos`, `Runtime` e `Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, origem observada de restore de checkpoint, pin local de input/output por nó, toggle de mock por pins em cenário, thresholds de regressão por cenário, importação/exportação de fixture JSON de replay, ação de execução em lote, comparação de runs com veredito de regressão, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, alertas operacionais persistentes de Build/Up/Smoke, e estados Docker de loading/progresso, container running, smoke com erro e container stopped.
 
 ## Ainda não implementado
 
-- Ergonomia refinada do canvas ainda precisa de comandos contextuais mais completos; a edição visual profunda/recursiva de JSON Schema para objetos aninhados continua pendente além das propriedades top-level já cobertas.
+- Ergonomia refinada do canvas ainda precisa de comandos contextuais mais completos; o editor visual de JSON Schema ainda não cobre recursos avançados como `oneOf`, `allOf`, `anyOf`, `$ref` navegável e mapas dinâmicos por `additionalProperties`.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
@@ -172,8 +172,8 @@ Também foi validado localmente:
 Para chegar ao objetivo completo de "studio local + aprovação + API Docker" sem regressão de capacidade, a sequência recomendada é:
 
 1. **Canvas/produtos de trabalho refinados (Média prioridade)**
-   - edição visual profunda/recursiva de objetos aninhados de JSON Schema no painel lateral sem precisar abrir JSON;
    - ampliar comandos contextuais para executar ações comuns sem depender de mouse.
+   - ampliar o editor visual de JSON Schema para composições (`oneOf`/`allOf`/`anyOf`), `$ref` navegável e mapas dinâmicos quando isso for necessário para agentes mais complexos.
 
 2. **Cenários + pinning avançado (Média prioridade)**
    - consolidar cenários nomeados por agente/run;

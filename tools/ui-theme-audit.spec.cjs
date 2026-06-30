@@ -119,6 +119,13 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expect(page.getByLabel("Enum de status")).toHaveValue("created, active, completed");
   await page.getByLabel("Enum de status").fill("created, active, completed, archived");
   await expect(page.getByLabel("Tipo dos itens de recent_messages")).toHaveValue("object");
+  await expect(page.getByLabel("recent_messages[].role obrigatório")).toBeChecked();
+  await page.getByLabel("Descrição de recent_messages[].role").fill("Papel da mensagem no histórico.");
+  await page.getByLabel("Nome da propriedade em recent_messages[]").fill("timestamp");
+  await page.getByLabel("Tipo da nova propriedade em recent_messages[]").selectOption("string");
+  await page.getByRole("button", { name: "Adicionar propriedade em recent_messages[]" }).click();
+  await expect(page.locator(".schema-editor")).toHaveValue(/"timestamp"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"Papel da mensagem no histórico."/);
   await page.getByLabel("Tipo dos itens de recent_messages").selectOption("string");
   await page.getByLabel("user_message obrigatório").check();
   await page.getByLabel("Nova propriedade do schema").fill("review_score");
@@ -128,6 +135,7 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expect(page.locator(".schema-editor")).toHaveValue(/"user_message"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"archived"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"items": \{\s+"type": "string"\s+\}/);
+  await expect(page.locator(".schema-editor")).not.toHaveValue(/"timestamp"/);
   await page.getByRole("button", { name: /^Salvar schema$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Schema salvo em");
 

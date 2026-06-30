@@ -966,6 +966,23 @@ button:disabled {
   gap: 7px;
 }
 
+.schema-object-editor {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.schema-property-shell {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.schema-property-shell.nested {
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
 .schema-property-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 92px 46px 34px;
@@ -1039,6 +1056,40 @@ button:disabled {
 
 .schema-property-row > .icon-button {
   justify-self: end;
+}
+
+.schema-nested-object {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface-bg));
+}
+
+.schema-nested-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.schema-nested-title span {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.schema-nested-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .schema-property-empty {

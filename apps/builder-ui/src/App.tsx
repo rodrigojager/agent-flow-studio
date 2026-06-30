@@ -4693,8 +4693,6 @@ function AssetsPanel({
 }
 
 function SchemaVisualEditor({ content, onChange }: { content: string; onChange: (value: string) => void }) {
-  const [newPropertyName, setNewPropertyName] = useState("");
-  const [newPropertyType, setNewPropertyType] = useState("string");
   const parsed = useMemo(() => parseSchemaObject(content), [content]);
   if (!parsed.ok) {
     return (
@@ -4709,57 +4707,11 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
   }
   const schema = parsed.schema;
   const properties = readSchemaProperties(schema);
-  const required = readSchemaRequired(schema);
-  const canAddProperty = isValidSchemaPropertyName(newPropertyName) && !properties.some(([name]) => name === newPropertyName.trim());
 
   function updateSchema(mutator: (schema: Record<string, unknown>) => void) {
     const next = cloneJsonObject(schema);
     mutator(next);
     onChange(`${JSON.stringify(next, null, 2)}\n`);
-  }
-
-  function updateProperty(name: string, mutator: (property: Record<string, unknown>) => void) {
-    updateSchema((next) => {
-      const nextProperties = ensureSchemaProperties(next);
-      const property = isRecord(nextProperties[name]) ? { ...nextProperties[name] } : {};
-      mutator(property);
-      nextProperties[name] = property;
-    });
-  }
-
-  function updateRequired(name: string, checked: boolean) {
-    updateSchema((next) => {
-      const nextRequired = readSchemaRequired(next).filter((item) => item !== name);
-      if (checked) {
-        nextRequired.push(name);
-      }
-      next.required = nextRequired;
-    });
-  }
-
-  function addProperty() {
-    const name = newPropertyName.trim();
-    if (!isValidSchemaPropertyName(name)) {
-      return;
-    }
-    updateSchema((next) => {
-      next.type = "object";
-      const nextProperties = ensureSchemaProperties(next);
-      if (nextProperties[name]) {
-        return;
-      }
-      nextProperties[name] = { type: newPropertyType };
-    });
-    setNewPropertyName("");
-    setNewPropertyType("string");
-  }
-
-  function removeProperty(name: string) {
-    updateSchema((next) => {
-      const nextProperties = ensureSchemaProperties(next);
-      delete nextProperties[name];
-      next.required = readSchemaRequired(next).filter((item) => item !== name);
-    });
   }
 
   return (
@@ -4770,129 +4722,110 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
           {properties.length} campo{properties.length === 1 ? "" : "s"}
         </span>
       </div>
+      <SchemaObjectVisualEditor
+        schema={schema}
+        contextLabel="schema"
+        depth={0}
+        emptyMessage="Sem propriedades top-level."
+        addNameLabel="Nova propriedade do schema"
+        addTypeLabel="Tipo da nova propriedade"
+        addButtonAriaLabel=""
+        onUpdateObject={updateSchema}
+      />
+    </div>
+  );
+}
+
+function SchemaObjectVisualEditor({
+  schema,
+  contextLabel,
+  depth,
+  emptyMessage,
+  addNameLabel,
+  addTypeLabel,
+  addButtonAriaLabel,
+  onUpdateObject,
+}: {
+  schema: Record<string, unknown>;
+  contextLabel: string;
+  depth: number;
+  emptyMessage: string;
+  addNameLabel: string;
+  addTypeLabel: string;
+  addButtonAriaLabel: string;
+  onUpdateObject: (mutator: (schema: Record<string, unknown>) => void) => void;
+}) {
+  const [newPropertyName, setNewPropertyName] = useState("");
+  const [newPropertyType, setNewPropertyType] = useState("string");
+  const properties = readSchemaProperties(schema);
+  const required = readSchemaRequired(schema);
+  const trimmedNewPropertyName = newPropertyName.trim();
+  const canAddProperty =
+    isValidSchemaPropertyName(trimmedNewPropertyName) && !properties.some(([name]) => name === trimmedNewPropertyName);
+
+  function updateProperty(name: string, mutator: (property: Record<string, unknown>) => void) {
+    onUpdateObject((next) => {
+      const nextProperties = ensureSchemaProperties(next);
+      const property = isRecord(nextProperties[name]) ? { ...nextProperties[name] } : {};
+      mutator(property);
+      nextProperties[name] = property;
+    });
+  }
+
+  function updateRequired(name: string, checked: boolean) {
+    onUpdateObject((next) => {
+      const nextRequired = readSchemaRequired(next).filter((item) => item !== name);
+      if (checked) {
+        nextRequired.push(name);
+      }
+      next.required = nextRequired;
+    });
+  }
+
+  function addProperty() {
+    const name = trimmedNewPropertyName;
+    if (!isValidSchemaPropertyName(name)) {
+      return;
+    }
+    onUpdateObject((next) => {
+      next.type = "object";
+      const nextProperties = ensureSchemaProperties(next);
+      if (nextProperties[name]) {
+        return;
+      }
+      nextProperties[name] = createDefaultSchemaProperty(newPropertyType);
+    });
+    setNewPropertyName("");
+    setNewPropertyType("string");
+  }
+
+  function removeProperty(name: string) {
+    onUpdateObject((next) => {
+      const nextProperties = ensureSchemaProperties(next);
+      delete nextProperties[name];
+      next.required = readSchemaRequired(next).filter((item) => item !== name);
+    });
+  }
+
+  return (
+    <div className={`schema-object-editor ${depth > 0 ? "nested" : ""}`} data-depth={Math.min(depth, 3)}>
       <div className="schema-property-list">
         {properties.length ? (
           properties.map(([name, property]) => (
-            <div className="schema-property-row" key={name}>
-              <strong title={name}>{name}</strong>
-              <label>
-                <span>Tipo</span>
-                <select
-                  aria-label={`Tipo de ${name}`}
-                  value={readSchemaPropertyType(property)}
-                  onChange={(event) =>
-                    updateProperty(name, (nextProperty) => {
-                      if (event.target.value) {
-                        nextProperty.type = event.target.value;
-                        if (event.target.value === "array" && !isRecord(nextProperty.items)) {
-                          nextProperty.items = { type: "string" };
-                        }
-                      } else {
-                        delete nextProperty.type;
-                      }
-                      if (event.target.value !== "array") {
-                        delete nextProperty.items;
-                      }
-                    })
-                  }
-                >
-                  <option value="">-</option>
-                  {schemaPropertyTypeOptions.map((type) => (
-                    <option value={type} key={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="schema-property-required">
-                <span>Req.</span>
-                <input
-                  type="checkbox"
-                  aria-label={`${name} obrigatório`}
-                  checked={required.includes(name)}
-                  onChange={(event) => updateRequired(name, event.target.checked)}
-                />
-              </label>
-              <label className="schema-property-description">
-                <span>Descrição</span>
-                <input
-                  aria-label={`Descrição de ${name}`}
-                  value={readSchemaPropertyDescription(property)}
-                  onChange={(event) =>
-                    updateProperty(name, (nextProperty) => {
-                      if (event.target.value.trim()) {
-                        nextProperty.description = event.target.value;
-                      } else {
-                        delete nextProperty.description;
-                      }
-                    })
-                  }
-                />
-              </label>
-              <label className="schema-property-enum">
-                <span>Enum</span>
-                <input
-                  aria-label={`Enum de ${name}`}
-                  value={readSchemaPropertyEnum(property).join(", ")}
-                  placeholder="valor_a, valor_b"
-                  onChange={(event) =>
-                    updateProperty(name, (nextProperty) => {
-                      const values = splitTags(event.target.value);
-                      if (values.length) {
-                        nextProperty.enum = values;
-                      } else {
-                        delete nextProperty.enum;
-                      }
-                    })
-                  }
-                />
-              </label>
-              {readSchemaPropertyType(property) === "array" ? (
-                <label className="schema-property-items">
-                  <span>Items</span>
-                  <select
-                    aria-label={`Tipo dos itens de ${name}`}
-                    value={readSchemaArrayItemType(property)}
-                    onChange={(event) =>
-                      updateProperty(name, (nextProperty) => {
-                        if (event.target.value) {
-                          const nextItems: Record<string, unknown> = {
-                            ...(isRecord(nextProperty.items) ? nextProperty.items : {}),
-                            type: event.target.value,
-                          };
-                          if (event.target.value !== "object") {
-                            delete nextItems.properties;
-                            delete nextItems.required;
-                          }
-                          nextProperty.items = nextItems;
-                        } else {
-                          delete nextProperty.items;
-                        }
-                      })
-                    }
-                  >
-                    <option value="">-</option>
-                    {schemaPropertyTypeOptions.map((type) => (
-                      <option value={type} key={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => removeProperty(name)}
-                title={`Remover propriedade ${name}`}
-                aria-label={`Remover propriedade ${name}`}
-              >
-                <Trash2 size={15} aria-hidden="true" />
-              </button>
-            </div>
+            <SchemaPropertyVisualRow
+              key={name}
+              name={name}
+              property={property}
+              propertyLabel={depth === 0 ? name : `${contextLabel}.${name}`}
+              depth={depth}
+              required={required.includes(name)}
+              updateProperty={updateProperty}
+              updateRequired={updateRequired}
+              removeProperty={removeProperty}
+            />
           ))
         ) : (
-          <div className="schema-property-empty">Sem propriedades top-level.</div>
+          <div className="schema-property-empty">{emptyMessage}</div>
         )}
       </div>
       <div className="schema-property-add">
@@ -4900,24 +4833,193 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
           value={newPropertyName}
           onChange={(event) => setNewPropertyName(event.target.value)}
           placeholder="nova_propriedade"
-          aria-label="Nova propriedade do schema"
+          aria-label={addNameLabel}
         />
-        <select
-          value={newPropertyType}
-          onChange={(event) => setNewPropertyType(event.target.value)}
-          aria-label="Tipo da nova propriedade"
-        >
+        <select value={newPropertyType} onChange={(event) => setNewPropertyType(event.target.value)} aria-label={addTypeLabel}>
           {schemaPropertyTypeOptions.map((type) => (
             <option value={type} key={type}>
               {type}
             </option>
           ))}
         </select>
-        <button type="button" className="command-button" onClick={addProperty} disabled={!canAddProperty}>
+        <button
+          type="button"
+          className="command-button"
+          onClick={addProperty}
+          disabled={!canAddProperty}
+          aria-label={addButtonAriaLabel || undefined}
+        >
           <Plus size={15} aria-hidden="true" />
           Adicionar
         </button>
       </div>
+    </div>
+  );
+}
+
+function SchemaPropertyVisualRow({
+  name,
+  property,
+  propertyLabel,
+  depth,
+  required,
+  updateProperty,
+  updateRequired,
+  removeProperty,
+}: {
+  name: string;
+  property: Record<string, unknown>;
+  propertyLabel: string;
+  depth: number;
+  required: boolean;
+  updateProperty: (name: string, mutator: (property: Record<string, unknown>) => void) => void;
+  updateRequired: (name: string, checked: boolean) => void;
+  removeProperty: (name: string) => void;
+}) {
+  const type = readSchemaPropertyType(property);
+  const itemType = readSchemaArrayItemType(property);
+  const nestedObjectLabel = propertyLabel;
+  const nestedArrayLabel = `${propertyLabel}[]`;
+  return (
+    <div className={`schema-property-shell ${depth > 0 ? "nested" : ""}`}>
+      <div className="schema-property-row">
+        <strong title={propertyLabel}>{name}</strong>
+        <label>
+          <span>Tipo</span>
+          <select
+            aria-label={`Tipo de ${propertyLabel}`}
+            value={type}
+            onChange={(event) =>
+              updateProperty(name, (nextProperty) => {
+                updateSchemaPropertyType(nextProperty, event.target.value);
+              })
+            }
+          >
+            <option value="">-</option>
+            {schemaPropertyTypeOptions.map((option) => (
+              <option value={option} key={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="schema-property-required">
+          <span>Req.</span>
+          <input
+            type="checkbox"
+            aria-label={`${propertyLabel} obrigatório`}
+            checked={required}
+            onChange={(event) => updateRequired(name, event.target.checked)}
+          />
+        </label>
+        <label className="schema-property-description">
+          <span>Descrição</span>
+          <input
+            aria-label={`Descrição de ${propertyLabel}`}
+            value={readSchemaPropertyDescription(property)}
+            onChange={(event) =>
+              updateProperty(name, (nextProperty) => {
+                if (event.target.value.trim()) {
+                  nextProperty.description = event.target.value;
+                } else {
+                  delete nextProperty.description;
+                }
+              })
+            }
+          />
+        </label>
+        <label className="schema-property-enum">
+          <span>Enum</span>
+          <input
+            aria-label={`Enum de ${propertyLabel}`}
+            value={readSchemaPropertyEnum(property).join(", ")}
+            placeholder="valor_a, valor_b"
+            onChange={(event) =>
+              updateProperty(name, (nextProperty) => {
+                const values = splitTags(event.target.value);
+                if (values.length) {
+                  nextProperty.enum = values;
+                } else {
+                  delete nextProperty.enum;
+                }
+              })
+            }
+          />
+        </label>
+        {type === "array" ? (
+          <label className="schema-property-items">
+            <span>Items</span>
+            <select
+              aria-label={`Tipo dos itens de ${propertyLabel}`}
+              value={itemType}
+              onChange={(event) =>
+                updateProperty(name, (nextProperty) => {
+                  updateSchemaArrayItemType(nextProperty, event.target.value);
+                })
+              }
+            >
+              <option value="">-</option>
+              {schemaPropertyTypeOptions.map((option) => (
+                <option value={option} key={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => removeProperty(name)}
+          title={`Remover propriedade ${propertyLabel}`}
+          aria-label={`Remover propriedade ${propertyLabel}`}
+        >
+          <Trash2 size={15} aria-hidden="true" />
+        </button>
+      </div>
+      {type === "object" ? (
+        <div className="schema-nested-object">
+          <div className="schema-nested-title">
+            <span>Objeto</span>
+            <strong>{nestedObjectLabel}</strong>
+          </div>
+          <SchemaObjectVisualEditor
+            schema={property}
+            contextLabel={nestedObjectLabel}
+            depth={depth + 1}
+            emptyMessage={`Sem propriedades em ${nestedObjectLabel}.`}
+            addNameLabel={`Nome da propriedade em ${nestedObjectLabel}`}
+            addTypeLabel={`Tipo da nova propriedade em ${nestedObjectLabel}`}
+            addButtonAriaLabel={`Adicionar propriedade em ${nestedObjectLabel}`}
+            onUpdateObject={(mutator) => updateProperty(name, mutator)}
+          />
+        </div>
+      ) : null}
+      {type === "array" && itemType === "object" ? (
+        <div className="schema-nested-object">
+          <div className="schema-nested-title">
+            <span>Items</span>
+            <strong>{nestedArrayLabel}</strong>
+          </div>
+          <SchemaObjectVisualEditor
+            schema={readSchemaArrayItemsObject(property)}
+            contextLabel={nestedArrayLabel}
+            depth={depth + 1}
+            emptyMessage={`Sem propriedades em ${nestedArrayLabel}.`}
+            addNameLabel={`Nome da propriedade em ${nestedArrayLabel}`}
+            addTypeLabel={`Tipo da nova propriedade em ${nestedArrayLabel}`}
+            addButtonAriaLabel={`Adicionar propriedade em ${nestedArrayLabel}`}
+            onUpdateObject={(mutator) =>
+              updateProperty(name, (nextProperty) => {
+                const nextItems: Record<string, unknown> = isRecord(nextProperty.items) ? nextProperty.items : {};
+                nextItems.type = "object";
+                mutator(nextItems);
+                nextProperty.items = nextItems;
+              })
+            }
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -4956,6 +5058,16 @@ function ensureSchemaProperties(schema: Record<string, unknown>): Record<string,
   return schema.properties as Record<string, unknown>;
 }
 
+function createDefaultSchemaProperty(type: string): Record<string, unknown> {
+  if (type === "object") {
+    return { type, properties: {} };
+  }
+  if (type === "array") {
+    return { type, items: { type: "string" } };
+  }
+  return { type };
+}
+
 function readSchemaRequired(schema: Record<string, unknown>): string[] {
   return Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : [];
 }
@@ -4978,6 +5090,53 @@ function readSchemaPropertyEnum(property: Record<string, unknown>): string[] {
 
 function readSchemaArrayItemType(property: Record<string, unknown>): string {
   return isRecord(property.items) && typeof property.items.type === "string" ? property.items.type : "";
+}
+
+function readSchemaArrayItemsObject(property: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(property.items) ? property.items : { type: "object", properties: {} };
+}
+
+function updateSchemaPropertyType(property: Record<string, unknown>, type: string): void {
+  if (type) {
+    property.type = type;
+  } else {
+    delete property.type;
+  }
+  if (type === "object") {
+    if (!isRecord(property.properties)) {
+      property.properties = {};
+    }
+    return;
+  }
+  delete property.properties;
+  delete property.required;
+  if (type === "array") {
+    if (!isRecord(property.items)) {
+      property.items = { type: "string" };
+    }
+    return;
+  }
+  delete property.items;
+}
+
+function updateSchemaArrayItemType(property: Record<string, unknown>, type: string): void {
+  if (!type) {
+    delete property.items;
+    return;
+  }
+  const nextItems: Record<string, unknown> = {
+    ...(isRecord(property.items) ? property.items : {}),
+    type,
+  };
+  if (type === "object") {
+    if (!isRecord(nextItems.properties)) {
+      nextItems.properties = {};
+    }
+  } else {
+    delete nextItems.properties;
+    delete nextItems.required;
+  }
+  property.items = nextItems;
 }
 
 function isValidSchemaPropertyName(value: string): boolean {
