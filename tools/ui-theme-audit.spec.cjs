@@ -94,6 +94,44 @@ for (const theme of themes) {
   });
 }
 
+test("Docker operations render loading, running, stopped and error states", async ({ page }) => {
+  const pageErrors = attachBrowserErrorCollector(page);
+
+  await openBuilder(page, "dark", viewports[0]);
+  await generateApprovedDockerRuntime(page);
+  await page.getByLabel("Runtime URL").fill("http://127.0.0.1:48999");
+
+  await page.getByRole("button", { name: /^Preparar \.env$/ }).click();
+  await expect(page.getByText(".env encontrado")).toBeVisible({ timeout: 10_000 });
+
+  await page.getByRole("button", { name: /^Build$/ }).click();
+  await expect(page.getByRole("button", { name: /^Cancelar$/ })).toBeEnabled({ timeout: 3_000 });
+  await expect(page.getByText("executando").first()).toBeVisible();
+  await expect(page.getByText("Progresso do build")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole("button", { name: /^Cancelar$/ })).toBeDisabled({ timeout: 15_000 });
+  await expect(page.getByText("Build Docker final concluido.").first()).toBeVisible();
+
+  await page.getByRole("button", { name: /^Up$/ }).click();
+  await expect(page.getByText("Container Docker final iniciado.").first()).toBeVisible({ timeout: 10_000 });
+
+  await page.getByRole("button", { name: /^Inspecionar$/ }).click();
+  await expect(page.locator(".docker-service-row", { hasText: "api" }).getByText("running")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Application startup complete.")).toBeVisible();
+
+  await page.getByRole("button", { name: /^Smoke$/ }).click();
+  await expect(page.getByText(/Smoke test falhou/).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("erro").first()).toBeVisible();
+
+  await page.getByRole("button", { name: /^Down$/ }).click();
+  await expect(page.getByText("Container Docker final parado.").first()).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: /^Inspecionar$/ }).click();
+  await expect(page.locator(".docker-service-row", { hasText: "api" }).getByText("exited")).toBeVisible({ timeout: 10_000 });
+
+  await expectNoDocumentHorizontalOverflow(page);
+  await expectTopbarControlsToFit(page);
+  expect(pageErrors, "Unexpected browser errors in Docker operation states").toEqual([]);
+});
+
 test("outdated approval blocks Docker generation", async ({ page, request }) => {
   const pageErrors = attachBrowserErrorCollector(page);
 

@@ -144,8 +144,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   );
   const app = fastify({ logger: options.logger ?? false });
   const sandboxManager = new SandboxManager(workspaceRoot);
+  const dockerRunner = options.dockerRunner ?? createEnvironmentDockerRunner();
   const dockerRuntimeManager = new DockerRuntimeManager(workspaceRoot, {
-    runner: options.dockerRunner,
+    runner: dockerRunner,
   });
 
   app.addHook("onRequest", async (request, reply) => {
@@ -725,6 +726,99 @@ function optionalPorts(value: DockerRuntimeBody["ports"] | undefined): NonNullab
     }
   }
   return value;
+}
+
+function createEnvironmentDockerRunner(): DockerCommandRunner | undefined {
+  if (process.env.AGENT_BUILDER_DOCKER_RUNNER !== "ui-audit-mock") {
+    return undefined;
+  }
+  let state: "stopped" | "running" = "stopped";
+  return async (invocation) => {
+    const args = invocation.args.join(" ");
+    if (args === "compose build api") {
+      const chunks = [
+        "#1 [internal] load build definition from Dockerfile\n",
+        "#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.1s\n",
+        "#3 [3/8] COPY . /app\n#3 DONE 0.1s\n",
+        "#4 [4/8] RUN pip install -r requirements.txt\n#4 DONE 0.2s\n",
+        "#5 exporting to image\n#5 DONE 0.1s\n",
+      ];
+      let stdout = "";
+      for (const chunk of chunks) {
+        if (invocation.signal?.aborted) {
+          return {
+            exitCode: 130,
+            stdout,
+            stderr: "Comando cancelado pelo usuário.",
+            aborted: true,
+          };
+        }
+        await delay(180);
+        stdout += chunk;
+        invocation.onOutput?.(chunk);
+      }
+      return { exitCode: 0, stdout, stderr: "" };
+    }
+    if (args === "compose up -d --build") {
+      state = "running";
+      return {
+        exitCode: 0,
+        stdout: "Container reference-api-1 Started\nContainer reference-postgres-1 Started\nContainer reference-redis-1 Started\n",
+        stderr: "",
+      };
+    }
+    if (args === "compose down") {
+      state = "stopped";
+      return {
+        exitCode: 0,
+        stdout: "Container reference-api-1 Stopped\nContainer reference-postgres-1 Stopped\nContainer reference-redis-1 Stopped\n",
+        stderr: "",
+      };
+    }
+    if (args === "compose ps --format json") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            Name: "reference-api-1",
+            Service: "api",
+            State: state === "running" ? "running" : "exited",
+            Status: state === "running" ? "Up 12 seconds" : "Exited (0) 3 seconds ago",
+            Publishers: [{ PublishedPort: 8080, TargetPort: 8080 }],
+          },
+          {
+            Name: "reference-postgres-1",
+            Service: "postgres",
+            State: state === "running" ? "running" : "exited",
+            Status: state === "running" ? "Up 12 seconds" : "Exited (0) 3 seconds ago",
+            Publishers: [{ PublishedPort: 5433, TargetPort: 5432 }],
+          },
+          {
+            Name: "reference-redis-1",
+            Service: "redis",
+            State: state === "running" ? "running" : "exited",
+            Status: state === "running" ? "Up 12 seconds" : "Exited (0) 3 seconds ago",
+            Publishers: [{ PublishedPort: 6380, TargetPort: 6379 }],
+          },
+        ]),
+        stderr: "",
+      };
+    }
+    if (args === "compose logs --tail 120 --no-color") {
+      return {
+        exitCode: 0,
+        stdout: state === "running"
+          ? "api-1  | Application startup complete.\npostgres-1  | database system is ready\nredis-1  | Ready to accept connections\n"
+          : "api-1  | Graceful shutdown complete.\n",
+        stderr: "",
+      };
+    }
+    return { exitCode: 0, stdout: `ok ${args}`, stderr: "" };
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

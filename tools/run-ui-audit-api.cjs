@@ -8,6 +8,7 @@ const child = spawn(process.execPath, [tsxCli, "apps/builder-api/src/server.ts"]
   env: {
     ...process.env,
     AGENT_BUILDER_WORKSPACE: path.join(repoRoot, ".tmp", "ui-theme-workspace"),
+    AGENT_BUILDER_DOCKER_RUNNER: "ui-audit-mock",
     HOST: "127.0.0.1",
     PORT: "3433",
   },
