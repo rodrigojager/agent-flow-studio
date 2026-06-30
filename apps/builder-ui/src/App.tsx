@@ -192,6 +192,33 @@ interface StudioScenarioCheckpoint {
   createdAt: string;
 }
 
+interface StudioNodePin {
+  id: string;
+  nodeId: string;
+  nodeType: string;
+  runId: string;
+  sessionId: string;
+  eventSeq: number;
+  eventType: string;
+  nodeHash: string;
+  input: unknown;
+  output: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface StudioNodePinDraft {
+  nodeId: string;
+  nodeType: string;
+  runId: string;
+  sessionId: string;
+  eventSeq: number;
+  eventType: string;
+  nodeHash: string;
+  input: unknown;
+  output: unknown;
+}
+
 interface StudioNodeDebugContext {
   nodeId: string;
   status: string;
@@ -275,6 +302,7 @@ const nodeTypeOptions = [
 const palette = nodeTypeOptions;
 const themeStorageKey = "agent-flow-builder.theme";
 const scenarioStorageKeyPrefix = "agent-flow-builder.studio-scenarios.";
+const nodePinStorageKeyPrefix = "agent-flow-builder.studio-node-pins.";
 const dockerHistoryOperationOptions: DockerRuntimeOperation[] = [
   "prepare_env",
   "configure_ports",
@@ -335,6 +363,7 @@ export default function App() {
   const [studioSelectedScenarioId, setStudioSelectedScenarioId] = useState("");
   const [studioScenarioLabel, setStudioScenarioLabel] = useState("");
   const [studioScenarioTags, setStudioScenarioTags] = useState("");
+  const [studioNodePins, setStudioNodePins] = useState<StudioNodePin[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
   const [flowValidation, setFlowValidation] = useState<ValidationResult | null>(null);
@@ -503,6 +532,7 @@ export default function App() {
       setStudioSelectedScenarioId("");
       setStudioScenarioLabel("");
       setStudioScenarioTags("");
+      setStudioNodePins([]);
       return;
     }
     let active = true;
@@ -524,7 +554,9 @@ export default function App() {
         setStudioRunCompareRunId("");
         setStudioRunComparison(null);
         const scenarios = loadStudioScenarios(loaded.flow.id);
+        const nodePins = loadStudioNodePins(loaded.flow.id);
         setStudioScenarios(scenarios);
+        setStudioNodePins(nodePins);
         const selectedScenario = scenarios.find((scenario) => scenario.isPinned) ?? scenarios[0] ?? null;
         setStudioSelectedScenarioId(selectedScenario?.id ?? "");
         if (selectedScenario) {
@@ -612,6 +644,7 @@ export default function App() {
         setStudioSelectedScenarioId("");
         setStudioScenarioLabel("");
         setStudioScenarioTags("");
+        setStudioNodePins([]);
         setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
         setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
         setUserMessage("");
@@ -2090,6 +2123,11 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setStudioScenarios(scenarios);
   }
 
+  function persistStudioNodePins(flowId: string, pins: StudioNodePin[]): void {
+    window.localStorage.setItem(nodePinStorageKey(flowId), JSON.stringify(pins));
+    setStudioNodePins(sortStudioNodePins(pins));
+  }
+
   function syncStudioScenarioSelection(scenarios: StudioScenario[], selectedId: string): StudioScenario | null {
     return scenarios.find((scenario) => scenario.id === selectedId) ?? scenarios[0] ?? null;
   }
@@ -2258,6 +2296,32 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setStudioScenarioTags(tags.join(", "));
     setUserMessage(input);
     setStatus({ kind: "ok", message: `Fork criado a partir do evento #${selectedStudioEvent.seq}.` });
+  }
+
+  function handlePinStudioNodeData(pinDraft: StudioNodePinDraft) {
+    if (!selectedFlowId) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const existing = studioNodePins.find((pin) => pin.nodeId === pinDraft.nodeId);
+    const nextPin: StudioNodePin = {
+      id: existing?.id ?? `node-pin-${pinDraft.nodeId}-${Date.now()}`,
+      ...pinDraft,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const nextPins = [nextPin, ...studioNodePins.filter((pin) => pin.nodeId !== pinDraft.nodeId)];
+    persistStudioNodePins(selectedFlowId, nextPins);
+    setStatus({ kind: "ok", message: `Dados do nó ${pinDraft.nodeId} fixados para replay local.` });
+  }
+
+  function handleDeleteStudioNodePin(pinId: string) {
+    if (!selectedFlowId) {
+      return;
+    }
+    const nextPins = studioNodePins.filter((pin) => pin.id !== pinId);
+    persistStudioNodePins(selectedFlowId, nextPins);
+    setStatus({ kind: "ok", message: "Pin de nó removido." });
   }
 
   async function handleRunStudioScenario() {
@@ -2833,6 +2897,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               studioSelectedScenarioId={studioSelectedScenarioId}
               studioScenarioLabel={studioScenarioLabel}
               studioScenarioTags={studioScenarioTags}
+              studioNodePins={studioNodePins}
               setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
               onStudioRunSearchChange={setStudioRunSearch}
@@ -2858,6 +2923,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onStudioPinnedScenarioRun={handleRunPinnedScenario}
               onStudioScenarioPin={toggleStudioScenarioPin}
               onStudioScenarioDelete={handleDeleteStudioScenario}
+              onStudioNodePin={handlePinStudioNodeData}
+              onStudioNodePinDelete={handleDeleteStudioNodePin}
               onForkCheckpoint={handleForkSelectedCheckpoint}
               onStudioScenarioLabelChange={setStudioScenarioLabel}
               onStudioScenarioTagsChange={setStudioScenarioTags}
@@ -4364,6 +4431,7 @@ function SandboxPanel({
   studioSelectedScenarioId,
   studioScenarioLabel,
   studioScenarioTags,
+  studioNodePins,
   userMessage,
   studioRunSearch,
   studioRunStatusFilter,
@@ -4389,6 +4457,8 @@ function SandboxPanel({
   onStudioPinnedScenarioRun,
   onStudioScenarioPin,
   onStudioScenarioDelete,
+  onStudioNodePin,
+  onStudioNodePinDelete,
   onForkCheckpoint,
   onStudioScenarioLabelChange,
   onStudioScenarioTagsChange,
@@ -4431,6 +4501,7 @@ function SandboxPanel({
   studioSelectedScenarioId: string;
   studioScenarioLabel: string;
   studioScenarioTags: string;
+  studioNodePins: StudioNodePin[];
   userMessage: string;
   studioRunSearch: string;
   studioRunNodeFilter: string;
@@ -4458,6 +4529,8 @@ function SandboxPanel({
   onStudioPinnedScenarioRun: () => void;
   onStudioScenarioPin: () => void;
   onStudioScenarioDelete: () => void;
+  onStudioNodePin: (pin: StudioNodePinDraft) => void;
+  onStudioNodePinDelete: (pinId: string) => void;
   onForkCheckpoint: () => void;
   onStudioScenarioLabelChange: (value: string) => void;
   onStudioScenarioTagsChange: (value: string) => void;
@@ -4503,6 +4576,11 @@ function SandboxPanel({
         ...(selectedFlowNode.llm ?? {}),
       }
     : null;
+  const selectedNodeHash = hashStudioNodeDefinition(selectedFlowNode);
+  const selectedNodePin = selectedNodeContext
+    ? studioNodePins.find((pin) => pin.nodeId === selectedNodeContext.nodeId) ?? null
+    : null;
+  const selectedNodePinIsStale = Boolean(selectedNodePin && selectedNodePin.nodeHash !== selectedNodeHash);
   const renderedPromptPreview = selectedPromptRef && selectedNodeContext
     ? buildRenderedPromptPreview(selectedPromptRef, selectedPromptText, selectedNodeContext, session, transcript)
     : null;
@@ -4653,6 +4731,38 @@ function SandboxPanel({
           <article className="runtime-item">
             <strong>Nenhum cenário selecionado</strong>
             <span>Digite a mensagem e salve para criar um novo cenário.</span>
+          </article>
+        )}
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Pins de nó</strong>
+          <span>{studioNodePins.length}</span>
+        </div>
+        {studioNodePins.length ? (
+          <div className="node-pin-list">
+            {studioNodePins.map((pin) => {
+              const currentNode = flow?.nodes.find((node) => node.id === pin.nodeId) ?? null;
+              const stale = hashStudioNodeDefinition(currentNode) !== pin.nodeHash;
+              return (
+                <article className={`node-pin-row ${stale ? "stale" : ""}`} key={pin.id}>
+                  <div>
+                    <strong>{pin.nodeId}</strong>
+                    <span>{pin.nodeType} · #{pin.eventSeq} · {pin.eventType}</span>
+                    <small>{stale ? "stale: definição do nó mudou" : "atual"} · {formatDateTime(pin.updatedAt)}</small>
+                  </div>
+                  <button type="button" className="icon-button" title="Remover pin de nó" onClick={() => onStudioNodePinDelete(pin.id)}>
+                    <Trash2 size={15} aria-hidden="true" />
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <article className="runtime-item">
+            <strong>Nenhum pin de nó</strong>
+            <span>Abra um nó executado e use Fixar IO para congelar input/output localmente.</span>
           </article>
         )}
       </section>
@@ -5132,6 +5242,41 @@ function SandboxPanel({
                 <span>{formatLlmContextValue(selectedNodeLlm, "model")}</span>
                 <small>{formatLlmContextValue(selectedNodeLlm, "adapter")}</small>
               </article>
+            </div>
+
+            <div className={`node-pin-panel ${selectedNodePinIsStale ? "stale" : selectedNodePin ? "active" : ""}`}>
+              <div>
+                <strong>Pin de dados do nó</strong>
+                <span>
+                  {selectedNodePin
+                    ? `${selectedNodePinIsStale ? "stale" : "atual"} · evento #${selectedNodePin.eventSeq} · ${formatDateTime(selectedNodePin.updatedAt)}`
+                    : "sem pin"}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="command-button"
+                disabled={!selectedNodeContext.latestEvent}
+                onClick={() => {
+                  if (!selectedNodeContext.latestEvent) {
+                    return;
+                  }
+                  onStudioNodePin({
+                    nodeId: selectedNodeContext.nodeId,
+                    nodeType: selectedFlowNode?.type ?? "runtime",
+                    runId: selectedRunId || "run-atual",
+                    sessionId: session?.session_id ?? readStringValue(selectedNodeContext.latestEvent.payload.session_id),
+                    eventSeq: selectedNodeContext.latestEvent.seq,
+                    eventType: selectedNodeContext.latestEvent.event_type,
+                    nodeHash: selectedNodeHash,
+                    input: selectedNodeContext.input,
+                    output: selectedNodeContext.output,
+                  });
+                }}
+              >
+                <Pin size={16} aria-hidden="true" />
+                Fixar IO
+              </button>
             </div>
 
             <div className={`node-context-diagnosis ${selectedNodeContext.diagnosis.severity}`}>
@@ -7035,6 +7180,58 @@ function loadStudioScenarios(flowId: string): StudioScenario[] {
   }
 }
 
+function loadStudioNodePins(flowId: string): StudioNodePin[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(nodePinStorageKey(flowId));
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return sortStudioNodePins(
+      parsed
+        .map((item) => normalizeStudioNodePin(item))
+        .filter((item): item is StudioNodePin => item !== null),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function normalizeStudioNodePin(value: unknown): StudioNodePin | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (typeof value.id !== "string" || !value.id.trim()) {
+    return null;
+  }
+  if (typeof value.nodeId !== "string" || !value.nodeId.trim()) {
+    return null;
+  }
+  const eventSeq = typeof value.eventSeq === "number" && Number.isFinite(value.eventSeq) ? value.eventSeq : 0;
+  const createdAt = typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString();
+  const updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : createdAt;
+  return {
+    id: value.id,
+    nodeId: value.nodeId,
+    nodeType: typeof value.nodeType === "string" && value.nodeType.trim() ? value.nodeType : "runtime",
+    runId: typeof value.runId === "string" && value.runId.trim() ? value.runId : "run-atual",
+    sessionId: typeof value.sessionId === "string" ? value.sessionId : "",
+    eventSeq,
+    eventType: typeof value.eventType === "string" && value.eventType.trim() ? value.eventType : "event",
+    nodeHash: typeof value.nodeHash === "string" && value.nodeHash.trim() ? value.nodeHash : "unknown",
+    input: "input" in value ? value.input : null,
+    output: "output" in value ? value.output : null,
+    createdAt,
+    updatedAt,
+  };
+}
+
 function normalizeStudioScenario(value: unknown): StudioScenario | null {
   if (!isRecord(value)) {
     return null;
@@ -7097,6 +7294,56 @@ function normalizeScenarioDefaults(scenario: StudioScenario): StudioScenario {
 
 function scenarioStorageKey(flowId: string): string {
   return `${scenarioStorageKeyPrefix}${flowId}`;
+}
+
+function nodePinStorageKey(flowId: string): string {
+  return `${nodePinStorageKeyPrefix}${flowId}`;
+}
+
+function sortStudioNodePins(pins: StudioNodePin[]): StudioNodePin[] {
+  return [...pins].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+}
+
+function hashStudioNodeDefinition(node: FlowNode | null): string {
+  return simpleHash(stableStringify(node ? normalizeNodeForPinHash(node) : { type: "runtime" }));
+}
+
+function normalizeNodeForPinHash(node: FlowNode): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...node };
+  delete rest.position;
+  return rest;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function simpleHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function readStringValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
 }
 
 function sortStudioScenarios(left: StudioScenario, right: StudioScenario): number {

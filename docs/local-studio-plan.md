@@ -375,6 +375,7 @@ Status 2026-06-30:
 - implementado: diagnóstico operacional por nó com causa provável, próximas ações e evidências derivadas de payload/safety/status/snapshot/cadeia causal, com regras específicas para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics;
 - implementado: fork de checkpoint/evento para cenário local reexecutável, preservando origem de run, evento, snapshot, input/output e metadata da nova execução;
 - implementado: status global acessível (`status`/`alert`) com cobertura visual automatizada de loading/erro fora do fluxo Docker em tema claro e escuro;
+- implementado: pin local de input/output por nó, com origem run/evento e indicador `atual/stale` quando a definição do nó muda;
 - pendente: filtros avançados de histórico operacional e restauração real de estado por checkpointer/runtime.
 
 ### Fase 7.5: Grafo Interativo de Execução
@@ -476,7 +477,7 @@ Mas a ferramenta não deve depender disso para operar.
 
 3. consolidar cenários:
    - pin/mocking de payload por cenário;
-   - pin por nó e marca de "dirty/stale";
+   - usar os pins de nó já salvos como mock/replay determinístico;
    - replay com comparação de métricas.
 4. auditoria completa de tema:
    - verificar fluxo em ambas paletas;

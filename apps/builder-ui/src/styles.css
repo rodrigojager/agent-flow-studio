@@ -1728,6 +1728,64 @@ button:disabled {
   background: var(--surface-bg);
 }
 
+.node-pin-list {
+  display: grid;
+  gap: 7px;
+}
+
+.node-pin-row,
+.node-pin-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-bg);
+}
+
+.node-pin-panel.active,
+.node-pin-row:not(.stale) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.node-pin-panel.stale,
+.node-pin-row.stale {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.node-pin-row > div,
+.node-pin-panel > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.node-pin-row strong,
+.node-pin-panel strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-pin-row span,
+.node-pin-row small,
+.node-pin-panel span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .studio-comparison-item {
   display: grid;
   gap: 8px;

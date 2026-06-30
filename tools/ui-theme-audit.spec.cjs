@@ -86,6 +86,12 @@ for (const theme of themes) {
     const llmDiagnosisSection = page.locator(".node-context-diagnosis", { hasText: "Diagnóstico" });
     await expect(llmDiagnosisSection.getByText("Sem falha associada")).toBeVisible();
     await expect(llmDiagnosisSection.getByText(/O nó LLM completou sem erro aparente/)).toBeVisible();
+    await page.getByRole("button", { name: /^Fixar IO$/ }).click();
+    await expect(page.getByText("Dados do nó llm_step fixados para replay local.")).toBeVisible();
+    const nodePinsSection = page.locator(".sandbox-section", { hasText: "Pins de nó" });
+    await expect(nodePinsSection.getByText("llm_step", { exact: true })).toBeVisible();
+    await expect(nodePinsSection.getByText(/llm_prompt.*#4.*llm_completed/)).toBeVisible();
+    await expect(nodePinsSection.getByText(/atual/).first()).toBeVisible();
     await page.getByRole("button", { name: /^Criar fork$/ }).click();
     await expect(page.getByText("Fork criado a partir do evento #4.")).toBeVisible();
     const scenarioSection = page.locator(".sandbox-section", { hasText: "Cenários de teste" });
