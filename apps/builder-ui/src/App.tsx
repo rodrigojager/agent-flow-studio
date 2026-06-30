@@ -16,6 +16,7 @@ import {
   type OnNodeDrag,
   type OnNodesDelete,
   type OnReconnect,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import {
   AlertCircle,
@@ -306,6 +307,8 @@ export default function App() {
     message: "Builder API aguardando ação.",
   });
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const firstPaletteButtonRef = useRef<HTMLButtonElement | null>(null);
+  const reactFlowRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem(themeStorageKey, theme);
@@ -2291,6 +2294,16 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           setSelectedNodeId("");
           setSelectedEdgeId("");
         }
+        return;
+      }
+      if (!hasPrimaryModifier && key === "a" && !isEditableShortcutTarget(event.target)) {
+        event.preventDefault();
+        firstPaletteButtonRef.current?.focus();
+        return;
+      }
+      if (!hasPrimaryModifier && key === "f" && !isEditableShortcutTarget(event.target)) {
+        event.preventDefault();
+        reactFlowRef.current?.fitView({ duration: 220, padding: 0.2 });
       }
     };
     window.addEventListener("keydown", handleShortcut);
@@ -2442,14 +2455,15 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           <section className="panel-section">
             <h2>Palette</h2>
             <div className="palette-grid">
-              {palette.map((item) => {
+              {palette.map((item, index) => {
                 const Icon = item.icon;
                 return (
                   <button
+                    ref={index === 0 ? firstPaletteButtonRef : undefined}
                     type="button"
                     className="palette-item"
                     key={item.type}
-                    title={item.type}
+                    title={index === 0 ? `${item.type} (A foca a paleta)` : item.type}
                     onClick={() => handleAddNode(item.type)}
                     disabled={!draftFlow}
                   >
@@ -2501,6 +2515,9 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
             onNodesDelete={handleNodesDelete}
             onEdgesDelete={handleEdgesDelete}
             onNodeDragStop={handleNodeDragStop}
+            onInit={(instance) => {
+              reactFlowRef.current = instance;
+            }}
             isValidConnection={isConnectionValid}
             nodesDraggable
             nodesConnectable

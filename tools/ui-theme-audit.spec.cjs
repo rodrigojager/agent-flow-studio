@@ -31,6 +31,9 @@ for (const theme of themes) {
 
       await expectNoDocumentHorizontalOverflow(page);
       await expectTopbarControlsToFit(page);
+      await page.keyboard.press("a");
+      await expect(page.locator(".palette-item").first()).toBeFocused();
+      await page.keyboard.press("f");
 
       for (const tabName of inspectorTabs) {
         const tab = page.locator(".tabs button", { hasText: tabName });
