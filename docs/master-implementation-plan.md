@@ -785,12 +785,13 @@ Objetivo:
 
 Entregaveis:
 
-- catalogo local inicial de prompts, schemas e tools reutilizaveis;
+- catalogo local inicial de prompts, schemas, tools e templates de agente reutilizaveis;
 - registry local em `.agent-flow/catalog/registry.json`;
-- seeds locais para prompts, schemas e tools comuns;
+- seeds locais para prompts, schemas, tools comuns e templates de agente;
 - salvar prompt/schema atual no registry local;
 - reutilizar prompt/schema/tool em flows sem copiar arquivos manualmente;
-- evoluir catalogo para agents/templates/tools compostas/skills;
+- criar novo flow a partir de template de agente;
+- evoluir catalogo para tools compostas/skills;
 - filtros local/shared quando existir compartilhamento real.
 
 Aceite:
@@ -800,13 +801,14 @@ Aceite:
 
 Status 2026-06-30:
 
-- implementada primeira camada do catalogo local na Builder API via `/catalog`, `/catalog/items` e `/flows/{flowId}/catalog/apply`;
+- implementada primeira camada do catalogo local na Builder API via `/catalog`, `/catalog/items`, `/catalog/agent-templates/create-flow` e `/flows/{flowId}/catalog/apply`;
 - implementado registry de workspace em `.agent-flow/catalog/registry.json`, combinado com itens built-in locais;
 - prompts e schemas aplicados pelo catalogo viram assets reais no flow e podem atualizar o no selecionado;
 - tools aplicadas pelo catalogo criam ou atualizam no `code` com contrato visual/runtime existente;
-- implementada aba `Catalogo` na Builder UI com filtro por tipo, refresh, cards de itens, salvar prompt/schema atual e aplicar item no flow/no selecionado;
+- templates de agente criam novos flows completos; os seeds atuais incluem conversa guiada e gerador de perguntas por conteúdo/RAG;
+- implementada aba `Catalogo` na Builder UI com filtro por tipo, refresh, cards de itens, salvar prompt/schema atual, criar flow por template e aplicar item no flow/no selecionado;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para templates completos de agentes, skills, curadoria/versionamento visual e compartilhamento real.
+- pendente evoluir para skills, tools compostas, curadoria/versionamento visual e compartilhamento real.
 
 ### Fase 11: Multiagente Local
 

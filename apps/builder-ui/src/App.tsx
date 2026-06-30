@@ -55,6 +55,7 @@ import "@xyflow/react/dist/style.css";
 import {
   approveLangGraphSandbox,
   builderApiUrl,
+  createFlowFromCatalogTemplate,
   createFlowWorkspace,
   createRuntimeSession,
   createPromptAsset,
@@ -121,6 +122,7 @@ import type {
   FlowWorkspaceExport,
   PromptRef,
   ApprovedGenerateResult,
+  CreatedFlowWorkspace,
   DockerRuntimeHistory,
   DockerRuntimeHistoryEntry,
   DockerRuntimeHistoryLevel,
@@ -571,6 +573,7 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => readStoredTheme());
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [selectedFlowId, setSelectedFlowId] = useState<string>("");
+  const preserveNextLoadedStatusRef = useRef<string>("");
   const [loadedFlow, setLoadedFlow] = useState<LoadedFlow | null>(null);
   const [draftFlow, setDraftFlow] = useState<AgentFlow | null>(null);
   const [isDirty, setIsDirty] = useState(false);
@@ -857,7 +860,10 @@ export default function App() {
     }
     let active = true;
     async function run() {
-      setStatus({ kind: "busy", message: `Carregando ${selectedFlowId}.` });
+      const preserveLoadedStatus = preserveNextLoadedStatusRef.current === selectedFlowId;
+      if (!preserveLoadedStatus) {
+        setStatus({ kind: "busy", message: `Carregando ${selectedFlowId}.` });
+      }
       try {
         const loaded = await loadFlow(selectedFlowId);
         if (!active) {
@@ -949,7 +955,11 @@ export default function App() {
         setSelectedStudioRunId(runList[0]?.id ?? "");
         setSandbox(nextSandbox);
         setActiveSandboxes(listResult.sandboxes);
-        setStatus({ kind: "ok", message: `${loaded.flow.name} carregado.` });
+        if (preserveLoadedStatus && preserveNextLoadedStatusRef.current === loaded.flow.id) {
+          preserveNextLoadedStatusRef.current = "";
+        } else {
+          setStatus({ kind: "ok", message: `${loaded.flow.name} carregado.` });
+        }
       } catch (error) {
         if (!active) {
           return;
@@ -1926,6 +1936,29 @@ export default function App() {
     fixtureInputRef.current?.click();
   }
 
+  function loadCreatedFlowWorkspace(created: CreatedFlowWorkspace, tab: InspectorTab = "properties") {
+    preserveNextLoadedStatusRef.current = created.flow.id;
+    setSelectedFlowId(created.flow.id);
+    setLoadedFlow({ path: created.path, flow: created.flow });
+    setDraftFlow(created.flow);
+    setIsDirty(false);
+    setSelectedNodeId(created.flow.nodes[0]?.id ?? "");
+    setSelectedEdgeId("");
+    setSelectedPromptId(created.flow.prompts[0]?.id ?? "");
+    setSelectedSchemaId(created.flow.schemas[0]?.id ?? "");
+    setPromptContent(created.prompts[0]?.content ?? "");
+    setSchemaContent(created.schemas[0]?.content ?? "");
+    setPromptDirty(false);
+    setSchemaDirty(false);
+    setFlowValidation(null);
+    setArtifactListing(null);
+    setArtifactContent(null);
+    setSelectedArtifactPath("");
+    setStudioScenarioBatchResults([]);
+    setStudioScenarioBatchApproval(null);
+    setInspectorTab(tab);
+  }
+
   async function handleCreateFlow() {
     const rawId = window.prompt("ID do novo flow", "novo-agente");
     const flowId = rawId?.trim();
@@ -1937,23 +1970,7 @@ export default function App() {
       await saveCurrentWorkspaceIfNeeded();
       const created = await createFlowWorkspace(flowId);
       await refreshFlows(true);
-      setSelectedFlowId(created.flow.id);
-      setLoadedFlow({ path: created.path, flow: created.flow });
-      setDraftFlow(created.flow);
-      setIsDirty(false);
-      setSelectedNodeId(created.flow.nodes[0]?.id ?? "");
-      setSelectedEdgeId("");
-      setSelectedPromptId(created.flow.prompts[0]?.id ?? "");
-      setSelectedSchemaId(created.flow.schemas[0]?.id ?? "");
-      setPromptContent(created.prompts[0]?.content ?? "");
-      setSchemaContent(created.schemas[0]?.content ?? "");
-      setPromptDirty(false);
-      setSchemaDirty(false);
-      setFlowValidation(null);
-      setArtifactListing(null);
-      setArtifactContent(null);
-      setSelectedArtifactPath("");
-      setInspectorTab("properties");
+      loadCreatedFlowWorkspace(created);
       setStatus({ kind: "ok", message: `Flow ${created.flow.id} criado em ${created.path}.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -2327,6 +2344,24 @@ export default function App() {
       }
       await refreshFlows(true);
       setStatus({ kind: "ok", message: `${item.name} aplicado ao flow.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleCreateFlowFromCatalogTemplate(item: LocalCatalogItem) {
+    const rawId = window.prompt("ID do novo flow", `${item.id}-flow`);
+    const flowId = rawId?.trim();
+    if (!flowId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Criando flow ${flowId} a partir de ${item.name}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const created = await createFlowFromCatalogTemplate(item.id, flowId);
+      await refreshFlows(true);
+      loadCreatedFlowWorkspace(created, "properties");
+      setStatus({ kind: "ok", message: `Flow ${created.flow.id} criado a partir de ${item.name}.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
@@ -4093,6 +4128,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               loadState={catalogLoadState}
               onRefresh={() => refreshLocalCatalog()}
               onApply={handleApplyCatalogItem}
+              onCreateAgentTemplate={handleCreateFlowFromCatalogTemplate}
               onSavePrompt={handleSaveSelectedPromptToCatalog}
               onSaveSchema={handleSaveSelectedSchemaToCatalog}
             />
@@ -5722,6 +5758,7 @@ function CatalogPanel({
   loadState,
   onRefresh,
   onApply,
+  onCreateAgentTemplate,
   onSavePrompt,
   onSaveSchema,
 }: {
@@ -5733,6 +5770,7 @@ function CatalogPanel({
   loadState: PanelLoadState;
   onRefresh: () => void;
   onApply: (item: LocalCatalogItem, targetNodeId?: string) => void;
+  onCreateAgentTemplate: (item: LocalCatalogItem) => void;
   onSavePrompt: () => void;
   onSaveSchema: () => void;
 }) {
@@ -5810,20 +5848,34 @@ function CatalogPanel({
                   ))}
                 </div>
                 <div className="catalog-card-actions">
-                  <button type="button" className="command-button" onClick={() => onApply(item)}>
-                    <Plus size={16} aria-hidden="true" />
-                    {item.kind === "tool" ? "Criar nó" : "Adicionar"}
-                  </button>
-                  <button
-                    type="button"
-                    className="command-button"
-                    onClick={() => onApply(item, selectedNodeId)}
-                    disabled={!selectedNodeId}
-                    title={selectedNodeId ? `Aplicar em ${selectedNodeId}` : "Selecione um nó para aplicar diretamente"}
-                  >
-                    <Sparkles size={16} aria-hidden="true" />
-                    Usar no nó
-                  </button>
+                  {item.kind === "agent_template" ? (
+                    <button type="button" className="command-button" onClick={() => onCreateAgentTemplate(item)}>
+                      <Plus size={16} aria-hidden="true" />
+                      Criar flow
+                    </button>
+                  ) : item.kind === "skill" ? (
+                    <button type="button" className="command-button" disabled title="Skills serão aplicadas em uma etapa posterior.">
+                      <Sparkles size={16} aria-hidden="true" />
+                      Em breve
+                    </button>
+                  ) : (
+                    <>
+                      <button type="button" className="command-button" onClick={() => onApply(item)}>
+                        <Plus size={16} aria-hidden="true" />
+                        {item.kind === "tool" ? "Criar nó" : "Adicionar"}
+                      </button>
+                      <button
+                        type="button"
+                        className="command-button"
+                        onClick={() => onApply(item, selectedNodeId)}
+                        disabled={!selectedNodeId}
+                        title={selectedNodeId ? `Aplicar em ${selectedNodeId}` : "Selecione um nó para aplicar diretamente"}
+                      >
+                        <Sparkles size={16} aria-hidden="true" />
+                        Usar no nó
+                      </button>
+                    </>
+                  )}
                 </div>
               </article>
             ))}
@@ -11397,7 +11449,7 @@ function catalogKindLabel(kind: LocalCatalogItemKind): string {
     return "Tool";
   }
   if (kind === "agent_template") {
-    return "Agent";
+    return "Template de agente";
   }
   return "Skill";
 }

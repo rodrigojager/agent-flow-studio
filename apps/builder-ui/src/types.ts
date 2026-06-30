@@ -493,6 +493,10 @@ export interface LocalCatalogItem {
   nodePatch?: Record<string, unknown>;
 }
 
+export interface LocalCatalogCreateFlowResult extends CreatedFlowWorkspace {
+  item: LocalCatalogItem;
+}
+
 export interface LocalCatalog {
   format: "agent-flow-builder.local-catalog.v1";
   path: string;

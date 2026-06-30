@@ -14,6 +14,7 @@ import { compareStudioRuns, exportStudioRun, listStudioRuns, loadStudioRun, save
 import {
   archiveGeneratedArtifact,
   approveLangGraphSandbox,
+  createFlowFromCatalogTemplate,
   createFlowWorkspace,
   createPrompt,
   createSchemaAsset,
@@ -206,6 +207,18 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.get("/catalog", async () => listLocalCatalog(workspaceRoot));
 
   app.post<{ Body: unknown }>("/catalog/items", async (request) => saveLocalCatalogItem(workspaceRoot, request.body));
+
+  app.post<{ Body: unknown }>("/catalog/agent-templates/create-flow", async (request) => {
+    const result = await createFlowFromCatalogTemplate(workspaceRoot, request.body);
+    return {
+      status: "ok",
+      item: result.item,
+      path: result.flowPath,
+      flow: result.flow,
+      prompts: result.prompts,
+      schemas: result.schemas,
+    };
+  });
 
   app.get("/runtime-manifest", async () => {
     const loaded = await loadRuntimeManifest(workspaceRoot);

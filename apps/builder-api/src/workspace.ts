@@ -168,6 +168,10 @@ export interface LocalCatalogItem {
   nodePatch?: Record<string, unknown>;
 }
 
+export interface CreateFlowFromCatalogTemplateResult extends CreateFlowWorkspaceResult {
+  item: LocalCatalogItem;
+}
+
 export interface LocalCatalog {
   format: typeof LOCAL_CATALOG_FORMAT;
   path: string;
@@ -238,6 +242,7 @@ export interface GeneratedArtifactArchive {
 
 const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
 const LOCAL_CATALOG_FORMAT = "agent-flow-builder.local-catalog.v1";
+const AGENT_TEMPLATE_FORMAT = "agent-flow-builder.agent-template.v1";
 const LOCAL_CATALOG_PATH = ".agent-flow/catalog/registry.json";
 const GENERATED_ARTIFACT_MAX_FILES = 1000;
 const GENERATED_ARTIFACT_MAX_PREVIEW_BYTES = 512 * 1024;
@@ -318,16 +323,7 @@ export async function listFlows(workspaceRoot: string): Promise<FlowSummary[]> {
 
 export async function createFlowWorkspace(workspaceRoot: string, value: unknown): Promise<CreateFlowWorkspaceResult> {
   const input = parseCreateFlowInput(value);
-  const root = normalizeWorkspaceRoot(workspaceRoot);
-  const flowsDir = safeResolve(root, "flows");
-  await mkdir(flowsDir, { recursive: true });
-  const flowRoot = safeResolve(root, `flows/${input.id}`);
-  if (await pathExists(flowRoot)) {
-    throw new WorkspaceError(`Flow já existe: ${input.id}`, 409);
-  }
-
   const flow = starterFlow(input);
-  const parsedFlow = parseAgentFlow(flow);
   const prompt: FlowAssetContent = {
     id: "system",
     path: "prompts/system.md",
@@ -338,15 +334,50 @@ export async function createFlowWorkspace(workspaceRoot: string, value: unknown)
     path: "schemas/session_state.schema.json",
     content: `${JSON.stringify(starterStateSchema(input.name), null, 2)}\n`,
   };
-  const tempDir = safeResolve(root, `flows/.create-${input.id}-${Date.now()}`);
+  return createFlowWorkspaceFromAssets(workspaceRoot, flow, [prompt], [stateSchema], "create");
+}
+
+async function createFlowWorkspaceFromAssets(
+  workspaceRoot: string,
+  flowValue: AgentFlow,
+  prompts: FlowAssetContent[],
+  schemas: FlowAssetContent[],
+  tempPrefix: string,
+): Promise<CreateFlowWorkspaceResult> {
+  const flow = parseAgentFlow(flowValue);
+  assertImportableFlowId(flow.id);
+  const promptAssets = assetsForRefs(flow.prompts, prompts, "prompt");
+  const schemaAssets = assetsForRefs(flow.schemas, schemas, "schema");
+  for (const schema of schemaAssets) {
+    try {
+      JSON.parse(schema.content);
+    } catch (error) {
+      throw new WorkspaceError(`Schema ${schema.id} do flow criado não é JSON válido.`, 422, error);
+    }
+  }
+  assertNoPathContentConflicts([...promptAssets, ...schemaAssets]);
+  assertNoReservedAssetPaths([...promptAssets, ...schemaAssets]);
+
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const flowsDir = safeResolve(root, "flows");
+  await mkdir(flowsDir, { recursive: true });
+  const flowRoot = safeResolve(root, `flows/${flow.id}`);
+  if (await pathExists(flowRoot)) {
+    throw new WorkspaceError(`Flow já existe: ${flow.id}`, 409);
+  }
+
+  const tempDir = safeResolve(root, `flows/.${tempPrefix}-${flow.id}-${Date.now()}`);
   await rm(tempDir, { recursive: true, force: true });
-  await mkdir(path.join(tempDir, "prompts"), { recursive: true });
-  await mkdir(path.join(tempDir, "schemas"), { recursive: true });
+  await mkdir(tempDir, { recursive: true });
 
   try {
-    await writeFile(path.join(tempDir, "agent.flow.json"), `${JSON.stringify(parsedFlow, null, 2)}\n`, "utf-8");
-    await writeFile(path.join(tempDir, prompt.path), prompt.content, "utf-8");
-    await writeFile(path.join(tempDir, stateSchema.path), stateSchema.content, "utf-8");
+    await writeFile(path.join(tempDir, "agent.flow.json"), `${JSON.stringify(flow, null, 2)}\n`, "utf-8");
+    for (const asset of promptAssets) {
+      await writeImportedAsset(tempDir, asset.path, asset.content);
+    }
+    for (const asset of schemaAssets) {
+      await writeImportedAsset(tempDir, asset.path, `${JSON.stringify(JSON.parse(asset.content), null, 2)}\n`);
+    }
     await rename(tempDir, flowRoot);
   } catch (error) {
     await rm(tempDir, { recursive: true, force: true });
@@ -354,10 +385,10 @@ export async function createFlowWorkspace(workspaceRoot: string, value: unknown)
   }
 
   return {
-    flow: parsedFlow,
+    flow,
     flowPath: `${toWorkspaceRelative(root, flowRoot)}/agent.flow.json`,
-    prompts: [prompt],
-    schemas: [stateSchema],
+    prompts: promptAssets,
+    schemas: schemaAssets,
   };
 }
 
@@ -972,6 +1003,31 @@ export async function saveLocalCatalogItem(workspaceRoot: string, value: unknown
   };
 }
 
+export async function createFlowFromCatalogTemplate(
+  workspaceRoot: string,
+  value: unknown,
+): Promise<CreateFlowFromCatalogTemplateResult> {
+  const input = parseCreateFlowFromCatalogTemplateInput(value);
+  const catalog = await listLocalCatalog(workspaceRoot);
+  const item = findCatalogItem(catalog.items, input.itemId, "agent_template");
+  if (!item) {
+    throw new WorkspaceError(`Template de agente não encontrado: ${input.itemId}`, 404);
+  }
+  const template = parseAgentTemplateCatalogContent(item);
+  const rendered = renderAgentTemplate(template, input);
+  const created = await createFlowWorkspaceFromAssets(
+    workspaceRoot,
+    rendered.flow,
+    rendered.prompts,
+    rendered.schemas,
+    "catalog-template",
+  );
+  return {
+    ...created,
+    item,
+  };
+}
+
 export async function applyCatalogItemToFlow(
   workspaceRoot: string,
   flowId: string,
@@ -1096,6 +1152,17 @@ interface ApplyCatalogItemInput {
   id?: string;
 }
 
+interface CreateFlowFromCatalogTemplateInput extends CreateFlowInput {
+  itemId: string;
+}
+
+interface AgentTemplateDefinition {
+  format: typeof AGENT_TEMPLATE_FORMAT;
+  flow: unknown;
+  prompts: unknown;
+  schemas: unknown;
+}
+
 function builtInCatalogItems(): LocalCatalogItem[] {
   const createdAt = "2026-06-30T00:00:00.000Z";
   return [
@@ -1146,6 +1213,67 @@ function builtInCatalogItems(): LocalCatalogItem[] {
         null,
         2,
       )}\n`,
+    },
+    {
+      id: "guided-conversation-agent",
+      kind: "agent_template",
+      name: "Agente de conversa guiada",
+      description: "Flow completo para sessão conversacional com safety, roteamento, LLM, pausa para input humano e gate determinístico.",
+      tags: ["agent", "starter", "conversation", "questions"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      content: agentTemplateContent(
+        starterFlow({ id: "{{flowId}}", name: "{{flowName}}", resourceName: "{{resourceName}}" }),
+        [
+          {
+            id: "system",
+            path: "prompts/system.md",
+            content: starterPrompt("{{flowName}}"),
+          },
+        ],
+        [
+          {
+            id: "session_state",
+            path: "schemas/session_state.schema.json",
+            content: `${JSON.stringify(starterStateSchema("{{flowName}}"), null, 2)}\n`,
+          },
+        ],
+      ),
+    },
+    {
+      id: "content-question-generator-agent",
+      kind: "agent_template",
+      name: "Agente gerador de perguntas por conteúdo",
+      description: "Flow completo para consultar conteúdo local/RAG e gerar uma lista estruturada de perguntas a partir do material.",
+      tags: ["agent", "questions", "rag", "content"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      content: agentTemplateContent(
+        contentQuestionGeneratorFlow({ id: "{{flowId}}", name: "{{flowName}}", resourceName: "{{resourceName}}" }),
+        [
+          {
+            id: "system",
+            path: "prompts/system.md",
+            content: contentQuestionGeneratorPrompt("{{flowName}}"),
+          },
+        ],
+        [
+          {
+            id: "session_state",
+            path: "schemas/session_state.schema.json",
+            content: `${JSON.stringify(contentQuestionGeneratorStateSchema("{{flowName}}"), null, 2)}\n`,
+          },
+          {
+            id: "question_list",
+            path: "schemas/question_list.schema.json",
+            content: questionListSchemaContent(),
+          },
+        ],
+      ),
     },
     {
       id: "http-json-tool",
@@ -1289,6 +1417,12 @@ function parseLocalCatalogItemInput(value: unknown): LocalCatalogItemInput {
       throw new WorkspaceError("Item tool precisa de nodePatch.", 422);
     }
     item.nodePatch = sanitizeCatalogNodePatch(value.nodePatch);
+  } else if (kind === "agent_template") {
+    const content = typeof value.content === "string" && value.content.trim() ? value.content : "";
+    if (!content) {
+      throw new WorkspaceError("Item agent_template precisa de content JSON.", 422);
+    }
+    item.content = normalizeAgentTemplateCatalogContent(content);
   } else if (typeof value.content === "string") {
     item.content = value.content;
   }
@@ -1304,6 +1438,15 @@ function parseApplyCatalogItemInput(value: unknown): ApplyCatalogItemInput {
   const targetNodeId = typeof value.targetNodeId === "string" && value.targetNodeId.trim() ? value.targetNodeId.trim() : undefined;
   const id = typeof value.id === "string" && value.id.trim() ? parseAssetId(value.id, "id") : undefined;
   return { itemId, kind, targetNodeId, id };
+}
+
+function parseCreateFlowFromCatalogTemplateInput(value: unknown): CreateFlowFromCatalogTemplateInput {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Criação por template deve ser um objeto JSON.", 400);
+  }
+  const base = parseCreateFlowInput(value);
+  const itemId = parseAssetId(value.itemId, "itemId");
+  return { ...base, itemId };
 }
 
 function parseCatalogKind(value: unknown): LocalCatalogItemKind {
@@ -1332,6 +1475,85 @@ function findCatalogItem(
   kind?: LocalCatalogItemKind,
 ): LocalCatalogItem | null {
   return items.find((item) => item.id === itemId && (!kind || item.kind === kind)) ?? null;
+}
+
+function normalizeAgentTemplateCatalogContent(content: string): string {
+  const parsed = parseAgentTemplateCatalogContent({ id: "local-template", content } as LocalCatalogItem);
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+function parseAgentTemplateCatalogContent(item: LocalCatalogItem): AgentTemplateDefinition {
+  if (!item.content) {
+    throw new WorkspaceError(`Template de agente ${item.id} não possui content JSON.`, 422);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(item.content);
+  } catch (error) {
+    throw new WorkspaceError(`Template de agente ${item.id} não é JSON válido.`, 422, error);
+  }
+  if (!isRecord(parsed) || parsed.format !== AGENT_TEMPLATE_FORMAT) {
+    throw new WorkspaceError(`Template de agente ${item.id} deve usar formato ${AGENT_TEMPLATE_FORMAT}.`, 422);
+  }
+  if (!isRecord(parsed.flow)) {
+    throw new WorkspaceError(`Template de agente ${item.id} precisa conter flow.`, 422);
+  }
+  if (!Array.isArray(parsed.prompts)) {
+    throw new WorkspaceError(`Template de agente ${item.id} precisa conter prompts.`, 422);
+  }
+  if (!Array.isArray(parsed.schemas)) {
+    throw new WorkspaceError(`Template de agente ${item.id} precisa conter schemas.`, 422);
+  }
+  return {
+    format: AGENT_TEMPLATE_FORMAT,
+    flow: parsed.flow,
+    prompts: parsed.prompts,
+    schemas: parsed.schemas,
+  };
+}
+
+function renderAgentTemplate(
+  template: AgentTemplateDefinition,
+  input: CreateFlowInput,
+): { flow: AgentFlow; prompts: FlowAssetContent[]; schemas: FlowAssetContent[] } {
+  const context = {
+    flowId: input.id,
+    flowName: input.name,
+    resourceName: input.resourceName,
+  };
+  const renderedFlow = substituteTemplateValue(template.flow, context);
+  if (!isRecord(renderedFlow)) {
+    throw new WorkspaceError("Template de agente renderizado não gerou um flow válido.", 422);
+  }
+  const renderedApi = isRecord(renderedFlow.api) ? renderedFlow.api : {};
+  const flow = parseAgentFlow({
+    ...renderedFlow,
+    id: input.id,
+    name: input.name,
+    api: {
+      ...renderedApi,
+      resourceName: input.resourceName,
+    },
+  });
+  const prompts = parseAssetList(substituteTemplateValue(template.prompts, context), "prompts");
+  const schemas = parseAssetList(substituteTemplateValue(template.schemas, context), "schemas");
+  return { flow, prompts, schemas };
+}
+
+function substituteTemplateValue(value: unknown, context: { flowId: string; flowName: string; resourceName: string }): unknown {
+  if (typeof value === "string") {
+    return value
+      .replaceAll("{{flowId}}", context.flowId)
+      .replaceAll("{{flowName}}", context.flowName)
+      .replaceAll("{{resourceName}}", context.resourceName);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => substituteTemplateValue(item, context));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, substituteTemplateValue(item, context)]));
+  }
+  return value;
 }
 
 async function applyPromptCatalogItem(
@@ -1749,6 +1971,10 @@ function titleFromId(id: string): string {
     .join(" ");
 }
 
+function agentTemplateContent(flow: AgentFlow, prompts: FlowAssetContent[], schemas: FlowAssetContent[]): string {
+  return `${JSON.stringify({ format: AGENT_TEMPLATE_FORMAT, flow, prompts, schemas }, null, 2)}\n`;
+}
+
 function starterFlow(input: CreateFlowInput): AgentFlow {
   return {
     id: input.id,
@@ -1861,6 +2087,136 @@ function starterFlow(input: CreateFlowInput): AgentFlow {
   };
 }
 
+function contentQuestionGeneratorFlow(input: CreateFlowInput): AgentFlow {
+  return {
+    id: input.id,
+    name: input.name,
+    version: "0.1.0",
+    runtime: "langgraph-python",
+    api: {
+      contract: "sessions-v1",
+      resourceName: input.resourceName,
+      autoStartOnCreate: false,
+    },
+    persistence: {
+      checkpointer: "postgres",
+      publicStore: "postgres",
+      cache: "redis",
+    },
+    llm: {
+      adapter: "openai",
+      model: "gpt-4.1-mini",
+      apiKeyEnv: "OPENAI_API_KEY",
+      baseUrlEnv: "OPENAI_BASE_URL",
+      mockEnv: "MOCK_LLM",
+    },
+    state: {
+      schemaRef: "session_state",
+    },
+    prompts: [
+      {
+        id: "system",
+        path: "prompts/system.md",
+        version: "v1",
+        description: "Prompt para consultar contexto e gerar perguntas.",
+        tags: ["questions", "rag", "content"],
+        variables: ["session_id", "turn", "user_message", "rag_context", "extracted_content"],
+      },
+    ],
+    schemas: [
+      {
+        id: "session_state",
+        path: "schemas/session_state.schema.json",
+      },
+      {
+        id: "question_list",
+        path: "schemas/question_list.schema.json",
+        version: "v1",
+        description: "Lista estruturada de perguntas geradas a partir de conteúdo.",
+        tags: ["questions", "structured-output"],
+      },
+    ],
+    nodes: [
+      {
+        id: "start_node",
+        type: "start",
+        description: "Emite a primeira mensagem do agente.",
+        position: { x: 230, y: 300 },
+      },
+      {
+        id: "input_safety_check",
+        type: "safety_gate",
+        stage: "input",
+        position: { x: 460, y: 140 },
+      },
+      {
+        id: "extract_content",
+        type: "file_extract",
+        description: "Extrai texto de um arquivo local opcional em files/.",
+        sourcePath: "knowledge.md",
+        contentPath: "extracted_content",
+        maxChars: 200000,
+        position: { x: 690, y: 300 },
+      },
+      {
+        id: "retrieve_context",
+        type: "rag_retrieval",
+        description: "Consulta conteúdo local para apoiar a geração de perguntas.",
+        collectionPath: ".",
+        queryPath: "user_message",
+        contextPath: "rag_context",
+        topK: 5,
+        chunkSize: 800,
+        position: { x: 920, y: 140 },
+      },
+      {
+        id: "generate_questions",
+        type: "llm_structured",
+        description: "Gera perguntas estruturadas a partir do conteúdo consultado.",
+        promptId: "system",
+        outputSchema: "question_list",
+        llm: {
+          adapter: "openai",
+          model: "gpt-4.1-mini",
+        },
+        position: { x: 1150, y: 300 },
+      },
+      {
+        id: "output_safety_check",
+        type: "safety_gate",
+        stage: "output",
+        position: { x: 1380, y: 140 },
+      },
+      {
+        id: "wait_user_input",
+        type: "human_input",
+        description: "Pausa lógica para o próximo turno do consumidor.",
+        position: { x: 1610, y: 300 },
+      },
+      {
+        id: "finish_node",
+        type: "end",
+        description: "Finaliza a sessão manualmente.",
+        position: { x: 1840, y: 140 },
+      },
+    ],
+    edges: [
+      { from: "start", to: "start_node", condition: "action == 'start'" },
+      { from: "start", to: "input_safety_check", condition: "action == 'turn'" },
+      { from: "start", to: "finish_node", condition: "action == 'finish'" },
+      { from: "start_node", to: "end" },
+      { from: "input_safety_check", to: "extract_content", condition: "safety.decision == 'allow'" },
+      { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
+      { from: "extract_content", to: "retrieve_context" },
+      { from: "retrieve_context", to: "generate_questions" },
+      { from: "generate_questions", to: "output_safety_check" },
+      { from: "output_safety_check", to: "wait_user_input" },
+      { from: "wait_user_input", to: "end" },
+      { from: "finish_node", to: "end" },
+    ],
+  };
+}
+
 function starterPrompt(name: string): string {
   return `# ${name}
 
@@ -1891,6 +2247,73 @@ function starterStateSchema(name: string) {
       },
     },
   };
+}
+
+function contentQuestionGeneratorPrompt(name: string): string {
+  return `# ${name}
+
+Você é um agente que transforma conteúdo em perguntas úteis.
+
+Use o contexto extraído do arquivo e o contexto recuperado por RAG para gerar perguntas claras, específicas e úteis para avaliação ou entrevista.
+
+Regras:
+
+- Gere perguntas em português brasileiro.
+- Evite perguntas genéricas quando houver conteúdo específico disponível.
+- Quando o conteúdo for insuficiente, gere perguntas de descoberta que ajudem a obter contexto.
+- Retorne a saída respeitando o schema estruturado de perguntas.
+`;
+}
+
+function contentQuestionGeneratorStateSchema(name: string) {
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    title: `${name} State`,
+    type: "object",
+    properties: {
+      session_id: { type: "string" },
+      turn: { type: "integer", minimum: 0 },
+      max_turns: { type: "integer", minimum: 1 },
+      user_message: { type: "string" },
+      extracted_content: { type: "string" },
+      rag_context: { type: "string" },
+      questions: { type: "array" },
+      safety: { type: "object" },
+      llm: { type: "object" },
+      executed_nodes: {
+        type: "array",
+        items: { type: "string" },
+      },
+    },
+  };
+}
+
+function questionListSchemaContent(): string {
+  return `${JSON.stringify(
+    {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      title: "Question List Output",
+      type: "object",
+      required: ["questions"],
+      properties: {
+        questions: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["question", "reason"],
+            properties: {
+              question: { type: "string" },
+              reason: { type: "string" },
+              source_hint: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 function parseFlowWorkspaceExport(value: unknown): FlowWorkspaceExport {

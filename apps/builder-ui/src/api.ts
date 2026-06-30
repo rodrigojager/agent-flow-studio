@@ -19,6 +19,7 @@ import type {
   GeneratedArtifactListing,
   AgentFlow,
   LocalCatalog,
+  LocalCatalogCreateFlowResult,
   LocalCatalogApplyResult,
   LocalCatalogItemKind,
   LocalCatalogSaveResult,
@@ -98,6 +99,19 @@ export async function applyLocalCatalogItem(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ itemId, kind, targetNodeId }),
+  });
+}
+
+export async function createFlowFromCatalogTemplate(
+  itemId: string,
+  id: string,
+  name?: string,
+  resourceName?: string,
+): Promise<LocalCatalogCreateFlowResult> {
+  return request<LocalCatalogCreateFlowResult>("/catalog/agent-templates/create-flow", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ itemId, id, name, resourceName }),
   });
 }
 

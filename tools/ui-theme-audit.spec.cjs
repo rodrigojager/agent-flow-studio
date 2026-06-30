@@ -165,6 +165,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page }) => 
   await expect(page.getByText("Catálogo local")).toBeVisible();
   await expect(page.getByText("HTTP JSON tool")).toBeVisible();
   await expect(page.getByText("Prompt de perguntas guiadas")).toBeVisible();
+  await expect(page.getByText("Agente gerador de perguntas por conteúdo")).toBeVisible();
 
   await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
@@ -176,6 +177,18 @@ test("catalog panel saves local assets and applies a tool", async ({ page }) => 
   await expect(page.locator(".tabs button", { hasText: "Editar" })).toHaveClass(/active/);
   await expect(page.getByLabel("Modo de execução")).toHaveValue("http");
   await expect(page.getByLabel("URL do executor")).toHaveValue("http://127.0.0.1:9001/run");
+
+  await openInspectorTab(page, "Catálogo");
+  const questionAgent = page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" });
+  page.once("dialog", (dialog) => dialog.accept("catalog-template-ui-agent"));
+  await questionAgent.getByRole("button", { name: /^Criar flow$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Flow catalog-template-ui-agent criado a partir", {
+    timeout: 10_000,
+  });
+  await expect(page.locator(".react-flow__node", { hasText: "generate_questions" })).toBeVisible();
+  await expect(page.locator(".react-flow__node", { hasText: "retrieve_context" })).toBeVisible();
+  await page.locator("label.flow-select select").selectOption("reference-interview");
+  await expect(page.locator(".react-flow__node", { hasText: "deterministic_gate" })).toBeVisible();
 
   await expectNoDocumentHorizontalOverflow(page);
   await expectTopbarControlsToFit(page);
@@ -603,6 +616,7 @@ async function openBuilder(page, theme, viewport) {
   await page.goto(appUrl);
 
   await expect(page.getByText("Agent Flow Builder")).toBeVisible();
+  await page.locator("label.flow-select select").selectOption("reference-interview");
   await expect(page.getByRole("button", { name: /Agente de Referência/ })).toBeVisible();
   await expect(page.locator(".app-shell")).toHaveAttribute("data-theme", theme);
 }

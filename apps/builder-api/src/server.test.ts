@@ -1483,7 +1483,38 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(catalog.statusCode, 200);
   assert.equal(catalog.json().format, "agent-flow-builder.local-catalog.v1");
   assert.ok(catalog.json().items.some((item: { kind: string; id: string }) => item.kind === "tool" && item.id === "http-json-tool"));
+  assert.ok(
+    catalog
+      .json()
+      .items.some((item: { kind: string; id: string }) => item.kind === "agent_template" && item.id === "content-question-generator-agent"),
+  );
   assert.ok(catalog.json().items.every((item: { scope: string }) => item.scope === "local"));
+
+  const createdFromTemplate = await app.inject({
+    method: "POST",
+    url: "/catalog/agent-templates/create-flow",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "content-question-generator-agent",
+      id: "catalog-question-agent",
+      name: "Agente de Perguntas",
+    },
+  });
+  assert.equal(createdFromTemplate.statusCode, 200);
+  assert.equal(createdFromTemplate.json().item.kind, "agent_template");
+  assert.equal(createdFromTemplate.json().flow.id, "catalog-question-agent");
+  assert.equal(createdFromTemplate.json().flow.name, "Agente de Perguntas");
+  assert.equal(createdFromTemplate.json().flow.nodes.some((node: { type: string }) => node.type === "file_extract"), true);
+  assert.equal(createdFromTemplate.json().flow.nodes.some((node: { type: string }) => node.type === "rag_retrieval"), true);
+  assert.equal(createdFromTemplate.json().flow.nodes.some((node: { type: string }) => node.type === "llm_structured"), true);
+  await access(path.join(workspaceRoot, "flows", "catalog-question-agent", "agent.flow.json"));
+  assert.match(
+    await readFile(path.join(workspaceRoot, "flows", "catalog-question-agent", "prompts", "system.md"), "utf-8"),
+    /transforma conteúdo em perguntas/,
+  );
+  const templateValidation = await app.inject({ method: "POST", url: "/flows/catalog-question-agent/validate" });
+  assert.equal(templateValidation.statusCode, 200);
+  assert.equal(templateValidation.json().summary.errors, 0);
 
   const savedPrompt = await app.inject({
     method: "POST",

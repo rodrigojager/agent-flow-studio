@@ -30,7 +30,7 @@ O fluxo principal foi desenhado para funcionar sem LangSmith Cloud, sem cobranç
 - Criação, listagem, leitura, salvamento e validação de flows.
 - Edição visual de propriedades de nós, adapters LLM, modelos e variáveis de ambiente.
 - Criação e edição de prompts Markdown e schemas JSON referenciados pelo flow.
-- Catálogo local inicial na aba `Catálogo`, com registry em `.agent-flow/catalog/registry.json`, seeds locais para prompt/schema/tools e ações para salvar o prompt/schema atual ou aplicar prompt/schema/tool no flow sem copiar arquivos manualmente.
+- Catálogo local inicial na aba `Catálogo`, com registry em `.agent-flow/catalog/registry.json`, seeds locais para prompt/schema/tools/templates de agente, ações para salvar o prompt/schema atual, aplicar prompt/schema/tool no flow e criar um novo flow a partir de template reutilizável.
 - Importação e exportação de workspace de flow.
 - Diagnósticos estruturados de validação com navegação para o ponto afetado.
 - Preview do JSON do flow.
@@ -157,7 +157,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 
 - Playground avançado com forms derivados de schema, output render/raw e secrets locais mascarados.
 - Alertas de regressão configuráveis por tipo de nó.
-- Evoluir o catálogo local inicial para templates de agentes, skills, tools compostas, filtros avançados e compartilhamento opcional.
+- Evoluir o catálogo local inicial para curadoria/versionamento visual de templates de agentes, skills, tools compostas, filtros avançados e compartilhamento opcional.
 - Ações operacionais por agente dentro do bundle multiagente, ampliando o mapa atual de rotas/endpoints.
 - Testes com PostgreSQL real compartilhado em bundles multiagente.
 
