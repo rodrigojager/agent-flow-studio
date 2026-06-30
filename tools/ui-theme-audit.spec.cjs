@@ -70,6 +70,77 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   expect(pageErrors, "Unexpected browser errors while editing asset metadata").toEqual([]);
 });
 
+test("inspector panels render internal loading and error states", async ({ page }) => {
+  const pageErrors = attachBrowserErrorCollector(page);
+  let releasePromptLoad;
+  const promptLoadGate = new Promise((resolve) => {
+    releasePromptLoad = resolve;
+  });
+
+  await page.route(`${apiUrl}/flows/reference-interview/prompts/system`, async (route) => {
+    await promptLoadGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "system",
+        path: "prompts/system.md",
+        content: "# Prompt auditado\n\nCarregado depois do estado interno de loading.\n",
+      }),
+    });
+  });
+  await page.route(`${apiUrl}/flows/reference-interview/schemas/session_state`, async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "workspace_error", message: "Falha visual de schema." }),
+    });
+  });
+  await page.route(`${apiUrl}/runtime-manifest`, async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "workspace_error", message: "Falha visual do manifesto." }),
+    });
+  });
+  await page.route(
+    (url) => url.href === `${apiUrl}/flows/reference-interview/studio-runs`,
+    async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "workspace_error", message: "Falha visual de runs." }),
+      });
+    },
+  );
+
+  await openBuilder(page, "dark", viewports[0]);
+
+  await openInspectorTab(page, "Arquivos");
+  const filesPanel = page.locator(".assets-body");
+  await expect(filesPanel.getByRole("status")).toContainText("Carregando prompt system.");
+  releasePromptLoad();
+  await expect(filesPanel.getByRole("alert")).toContainText("Erro ao carregar schema session_state: Falha visual de schema.");
+
+  await openInspectorTab(page, "Runtime");
+  await expect(page.locator(".runtime-manifest-body").getByRole("alert")).toContainText(
+    "Erro ao carregar runtime.manifest.json: Falha visual do manifesto.",
+  );
+
+  await openInspectorTab(page, "Studio");
+  const studioRunsSection = page.locator(".sandbox-section", { hasText: "Runs locais" });
+  await expect(studioRunsSection.getByRole("alert")).toContainText("Erro ao carregar runs locais: Falha visual de runs.");
+  await expect(page.locator(".app-shell")).toHaveAttribute("data-theme", "dark");
+
+  await expectNoDocumentHorizontalOverflow(page);
+  await expectTopbarControlsToFit(page);
+  const expectedErrors = [
+    "500 (Internal Server Error)",
+  ];
+  const unexpectedErrors = pageErrors.filter((message) => !expectedErrors.some((expected) => message.includes(expected)));
+  expect(unexpectedErrors, "Unexpected browser errors while rendering internal panel states").toEqual([]);
+});
+
 for (const theme of themes) {
   test(`studio runs with data render in ${theme} theme`, async ({ page, request }) => {
     const pageErrors = attachBrowserErrorCollector(page);

@@ -153,6 +153,12 @@ type StatusKind = "idle" | "ok" | "error" | "busy";
 type ThemeMode = "light" | "dark";
 type PromptMetadataPatch = Partial<Pick<PromptRef, "version" | "description" | "tags" | "variables">>;
 type SchemaMetadataPatch = Partial<Pick<SchemaRef, "version" | "description" | "tags">>;
+type PanelLoadKind = "idle" | "loading" | "ready" | "error";
+
+interface PanelLoadState {
+  kind: PanelLoadKind;
+  message: string;
+}
 
 interface DockerHistoryFilterForm {
   operation: DockerRuntimeOperation | "";
@@ -545,6 +551,14 @@ export default function App() {
   const [schemaContent, setSchemaContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
   const [schemaDirty, setSchemaDirty] = useState(false);
+  const [promptAssetLoadState, setPromptAssetLoadState] =
+    useState<PanelLoadState>({ kind: "idle", message: "Nenhum prompt selecionado." });
+  const [schemaAssetLoadState, setSchemaAssetLoadState] =
+    useState<PanelLoadState>({ kind: "idle", message: "Nenhum schema selecionado." });
+  const [runtimeManifestLoadState, setRuntimeManifestLoadState] =
+    useState<PanelLoadState>({ kind: "idle", message: "runtime.manifest.json ainda não carregado." });
+  const [studioRunsLoadState, setStudioRunsLoadState] =
+    useState<PanelLoadState>({ kind: "idle", message: "Runs locais ainda não carregados." });
   const [llmAdapters, setLlmAdapters] = useState<LlmAdapterCatalogItem[]>([]);
   const [status, setStatus] = useState<StatusState>({
     kind: "idle",
@@ -596,21 +610,25 @@ export default function App() {
     if (!silent) {
       setStatus({ kind: "busy", message: "Carregando manifesto de runtime." });
     }
+    setRuntimeManifestLoadState({ kind: "loading", message: "Carregando runtime.manifest.json." });
     try {
       const loaded = await loadRuntimeManifest();
       setRuntimeManifest(loaded);
       setManifestValidation(null);
       setManifestGeneration(null);
+      setRuntimeManifestLoadState({ kind: "ready", message: `${loaded.manifest.name} carregado.` });
       setManifestOutDir((current) => current || `generated/${loaded.manifest.id}-bundle`);
       if (!silent) {
         setStatus({ kind: "ok", message: `${loaded.manifest.name} carregado.` });
       }
     } catch (error) {
+      const message = errorMessage(error);
       setRuntimeManifest(null);
       setManifestValidation(null);
       setManifestGeneration(null);
+      setRuntimeManifestLoadState({ kind: "error", message: `Erro ao carregar runtime.manifest.json: ${message}` });
       if (!silent) {
-        setStatus({ kind: "error", message: errorMessage(error) });
+        setStatus({ kind: "error", message });
       }
     }
   }, []);
@@ -648,16 +666,27 @@ export default function App() {
     if (!flowId) {
       setStudioRuns([]);
       setSelectedStudioRunId("");
+      setStudioRunsLoadState({ kind: "idle", message: "Selecione um flow para carregar runs locais." });
       return [];
     }
-    const result = await listStudioRuns(flowId, query);
-    setStudioRuns(result.runs);
-    setSelectedStudioRunId((current) => (current && result.runs.some((run) => run.id === current) ? current : result.runs[0]?.id ?? ""));
-    if (studioRunCompareRunId && !result.runs.some((run) => run.id === studioRunCompareRunId)) {
-      setStudioRunCompareRunId("");
-      setStudioRunComparison(null);
+    setStudioRunsLoadState({ kind: "loading", message: `Carregando runs locais de ${flowId}.` });
+    try {
+      const result = await listStudioRuns(flowId, query);
+      setStudioRuns(result.runs);
+      setSelectedStudioRunId((current) => (current && result.runs.some((run) => run.id === current) ? current : result.runs[0]?.id ?? ""));
+      if (studioRunCompareRunId && !result.runs.some((run) => run.id === studioRunCompareRunId)) {
+        setStudioRunCompareRunId("");
+        setStudioRunComparison(null);
+      }
+      setStudioRunsLoadState({ kind: "ready", message: `${result.runs.length} run(s) locais carregados.` });
+      return result.runs;
+    } catch (error) {
+      const message = errorMessage(error);
+      setStudioRuns([]);
+      setSelectedStudioRunId("");
+      setStudioRunsLoadState({ kind: "error", message: `Erro ao carregar runs locais: ${message}` });
+      throw error;
     }
-    return result.runs;
   }, [selectedFlowId]);
 
   useEffect(() => {
@@ -678,6 +707,9 @@ export default function App() {
       setStudioRunCausalAnalysis(null);
       setStudioRuns([]);
       setSelectedStudioRunId("");
+      setStudioRunsLoadState({ kind: "idle", message: "Selecione um flow para carregar runs locais." });
+      setPromptAssetLoadState({ kind: "idle", message: "Nenhum prompt selecionado." });
+      setSchemaAssetLoadState({ kind: "idle", message: "Nenhum schema selecionado." });
       setStudioRunCompletionFilter("");
       setStudioTimelineNodeFilter("");
       setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
@@ -731,12 +763,25 @@ export default function App() {
           setStudioScenarioUseNodePins(false);
           setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
         }
-        const [nextSandbox, listResult, runList, approvalStatus] = await Promise.all([
+        setStudioRunsLoadState({ kind: "loading", message: `Carregando runs locais de ${loaded.flow.id}.` });
+        const [nextSandbox, listResult, approvalStatus] = await Promise.all([
           sandboxStatus(loaded.flow.id),
           listSandboxes(),
-          listStudioRuns(loaded.flow.id),
           readLangGraphSandboxApprovalStatus(loaded.flow.id),
         ]);
+        let runList: StudioRunSummary[] = [];
+        try {
+          const studioRunList = await listStudioRuns(loaded.flow.id);
+          runList = studioRunList.runs;
+          if (active) {
+            setStudioRunsLoadState({ kind: "ready", message: `${runList.length} run(s) locais carregados.` });
+          }
+        } catch (error) {
+          const message = errorMessage(error);
+          if (active) {
+            setStudioRunsLoadState({ kind: "error", message: `Erro ao carregar runs locais: ${message}` });
+          }
+        }
         if (!active) {
           return;
         }
@@ -767,8 +812,8 @@ export default function App() {
         setRuntimeEventsData([]);
         setStudioStateSnapshots([]);
         setStudioRunCausalAnalysis(null);
-        setStudioRuns(runList.runs);
-        setSelectedStudioRunId(runList.runs[0]?.id ?? "");
+        setStudioRuns(runList);
+        setSelectedStudioRunId(runList[0]?.id ?? "");
         setSandbox(nextSandbox);
         setActiveSandboxes(listResult.sandboxes);
         setStatus({ kind: "ok", message: `${loaded.flow.name} carregado.` });
@@ -793,6 +838,9 @@ export default function App() {
         setStudioRunCausalAnalysis(null);
         setStudioRuns([]);
         setSelectedStudioRunId("");
+        setStudioRunsLoadState({ kind: "idle", message: "Runs locais indisponíveis enquanto o flow não carrega." });
+        setPromptAssetLoadState({ kind: "idle", message: "Nenhum prompt selecionado." });
+        setSchemaAssetLoadState({ kind: "idle", message: "Nenhum schema selecionado." });
         setStudioRunSearch("");
         setStudioRunStatusFilter("");
         setStudioRunPhaseFilter("");
@@ -917,19 +965,24 @@ export default function App() {
     if (!selectedFlowId || !selectedPromptId) {
       setPromptContent("");
       setPromptDirty(false);
+      setPromptAssetLoadState({ kind: "idle", message: "Nenhum prompt selecionado." });
       return;
     }
     let active = true;
     async function run() {
+      setPromptAssetLoadState({ kind: "loading", message: `Carregando prompt ${selectedPromptId}.` });
       try {
         const asset = await loadPromptAsset(selectedFlowId, selectedPromptId);
         if (active) {
           setPromptContent(asset.content);
           setPromptDirty(false);
+          setPromptAssetLoadState({ kind: "ready", message: `Prompt ${selectedPromptId} carregado.` });
         }
       } catch (error) {
         if (active) {
-          setStatus({ kind: "error", message: errorMessage(error) });
+          const message = errorMessage(error);
+          setPromptAssetLoadState({ kind: "error", message: `Erro ao carregar prompt ${selectedPromptId}: ${message}` });
+          setStatus({ kind: "error", message });
         }
       }
     }
@@ -943,19 +996,24 @@ export default function App() {
     if (!selectedFlowId || !selectedSchemaId) {
       setSchemaContent("");
       setSchemaDirty(false);
+      setSchemaAssetLoadState({ kind: "idle", message: "Nenhum schema selecionado." });
       return;
     }
     let active = true;
     async function run() {
+      setSchemaAssetLoadState({ kind: "loading", message: `Carregando schema ${selectedSchemaId}.` });
       try {
         const asset = await loadSchemaAsset(selectedFlowId, selectedSchemaId);
         if (active) {
           setSchemaContent(asset.content);
           setSchemaDirty(false);
+          setSchemaAssetLoadState({ kind: "ready", message: `Schema ${selectedSchemaId} carregado.` });
         }
       } catch (error) {
         if (active) {
-          setStatus({ kind: "error", message: errorMessage(error) });
+          const message = errorMessage(error);
+          setSchemaAssetLoadState({ kind: "error", message: `Erro ao carregar schema ${selectedSchemaId}: ${message}` });
+          setStatus({ kind: "error", message });
         }
       }
     }
@@ -3374,6 +3432,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               promptDirty={promptDirty}
               schemaDirty={schemaDirty}
               metadataDirty={isDirty}
+              promptLoadState={promptAssetLoadState}
+              schemaLoadState={schemaAssetLoadState}
               onPromptSelect={setSelectedPromptId}
               onSchemaSelect={setSelectedSchemaId}
               onPromptChange={(value) => {
@@ -3448,6 +3508,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           ) : inspectorTab === "runtime" ? (
             <RuntimeManifestPanel
               loaded={runtimeManifest}
+              loadState={runtimeManifestLoadState}
               validation={manifestValidation}
               generation={manifestGeneration}
               outDir={manifestOutDir}
@@ -3475,6 +3536,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               stateSnapshots={studioStateSnapshots}
               studioRunCausalAnalysis={studioRunCausalContext}
               studioRuns={studioRuns}
+              studioRunsLoadState={studioRunsLoadState}
               selectedRunId={selectedStudioRunId}
               selectedCompareRunId={studioRunCompareRunId}
               userMessage={userMessage}
@@ -4155,6 +4217,8 @@ function AssetsPanel({
   promptDirty,
   schemaDirty,
   metadataDirty,
+  promptLoadState,
+  schemaLoadState,
   onPromptSelect,
   onSchemaSelect,
   onPromptChange,
@@ -4177,6 +4241,8 @@ function AssetsPanel({
   promptDirty: boolean;
   schemaDirty: boolean;
   metadataDirty: boolean;
+  promptLoadState: PanelLoadState;
+  schemaLoadState: PanelLoadState;
   onPromptSelect: (value: string) => void;
   onSchemaSelect: (value: string) => void;
   onPromptChange: (value: string) => void;
@@ -4244,6 +4310,7 @@ function AssetsPanel({
           ))}
         </select>
         {selectedPrompt ? <small className="asset-path">{selectedPrompt.path}</small> : null}
+        <PanelNotice state={promptLoadState} />
         {selectedPrompt ? (
           <div className="asset-metadata">
             <div className="asset-metadata-title">
@@ -4346,6 +4413,7 @@ function AssetsPanel({
           ))}
         </select>
         {selectedSchema ? <small className="asset-path">{selectedSchema.path}</small> : null}
+        <PanelNotice state={schemaLoadState} />
         {selectedSchema ? (
           <div className="asset-metadata">
             <div className="asset-metadata-title">
@@ -4401,6 +4469,24 @@ function AssetsPanel({
           Salvar schema
         </button>
       </section>
+    </div>
+  );
+}
+
+function PanelNotice({ state }: { state: PanelLoadState }) {
+  if (state.kind === "idle" || state.kind === "ready") {
+    return null;
+  }
+  const isError = state.kind === "error";
+  return (
+    <div
+      className={`panel-notice ${state.kind}`}
+      role={isError ? "alert" : "status"}
+      aria-busy={state.kind === "loading" ? "true" : undefined}
+      data-state={state.kind}
+    >
+      {isError ? <AlertCircle size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
+      <span>{state.message}</span>
     </div>
   );
 }
@@ -5046,6 +5132,7 @@ function GeneratedArtifactPanel({
 
 function RuntimeManifestPanel({
   loaded,
+  loadState,
   validation,
   generation,
   outDir,
@@ -5055,6 +5142,7 @@ function RuntimeManifestPanel({
   onGenerate,
 }: {
   loaded: LoadedRuntimeManifest | null;
+  loadState: PanelLoadState;
   validation: RuntimeManifestValidationResult | null;
   generation: RuntimeManifestGenerateResult | null;
   outDir: string;
@@ -5065,9 +5153,24 @@ function RuntimeManifestPanel({
 }) {
   if (!loaded) {
     return (
-      <div className="empty-state">
-        <AlertCircle size={18} aria-hidden="true" />
-        <span>Nenhum runtime.manifest.json carregado.</span>
+      <div className="runtime-manifest-body">
+        <section className="sandbox-section">
+          <div className="sandbox-header">
+            <strong>Runtime Manifest</strong>
+            <span className={loadState.kind === "error" ? "runtime-pill error" : "runtime-pill"}>{loadState.kind}</span>
+          </div>
+          <PanelNotice state={loadState} />
+          {loadState.kind !== "loading" && loadState.kind !== "error" ? (
+            <div className="empty-state">
+              <AlertCircle size={18} aria-hidden="true" />
+              <span>Nenhum runtime.manifest.json carregado.</span>
+            </div>
+          ) : null}
+          <button type="button" className="command-button full-width" onClick={onRefresh}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Atualizar
+          </button>
+        </section>
       </div>
     );
   }
@@ -5083,6 +5186,7 @@ function RuntimeManifestPanel({
             {manifest.packaging}
           </span>
         </div>
+        <PanelNotice state={loadState} />
         <dl className="kv-list inspector-list">
           <Field label="Arquivo" value={loaded.path} />
           <Field label="ID" value={manifest.id} />
@@ -5175,6 +5279,7 @@ function SandboxPanel({
   stateSnapshots,
   studioRunCausalAnalysis,
   studioRuns,
+  studioRunsLoadState,
   selectedRunId,
   selectedCompareRunId,
   studioRunCompletionFilter,
@@ -5257,6 +5362,7 @@ function SandboxPanel({
   stateSnapshots: StudioStateSnapshot[];
   studioRunCausalAnalysis: StudioRunCausalAnalysis;
   studioRuns: StudioRunSummary[];
+  studioRunsLoadState: PanelLoadState;
   selectedRunId: string;
   selectedCompareRunId: string;
   studioRunCompletionFilter: "" | "complete" | "incomplete";
@@ -5727,6 +5833,7 @@ function SandboxPanel({
           <strong>Runs locais</strong>
           <span>{studioRuns.length}</span>
         </div>
+        <PanelNotice state={studioRunsLoadState} />
         <div className="studio-run-controls">
           <label>
             <span className="visually-hidden">Comparar com run</span>
@@ -6006,31 +6113,33 @@ function SandboxPanel({
               ) : null}
             </article>
           ) : null}
-          {studioRuns.length ? (
-            studioRuns.slice(0, 12).map((run) => (
-              <button
-                type="button"
-                className={`studio-run-item ${run.id === selectedRunId ? "selected" : ""}`}
-                key={run.id}
-                onClick={() => onLoadRun(run.id)}
-              >
-                <span className="studio-run-main">
-                  <strong>{run.sessionId}</strong>
-                  <small>
-                    {run.phase} · {run.status} · {formatDateTime(run.updatedAt)}
-                  </small>
-                </span>
-                <span className="studio-run-metrics">
-                  {run.eventCount} ev · {run.nodeCount} nós
-                </span>
-              </button>
-            ))
-          ) : (
-            <article className="runtime-item">
-              <strong>Nenhum run persistido</strong>
-              <span>Execute uma sessão no sandbox para salvar o primeiro snapshot local.</span>
-            </article>
-          )}
+          {studioRuns.length
+            ? studioRuns.slice(0, 12).map((run) => (
+                <button
+                  type="button"
+                  className={`studio-run-item ${run.id === selectedRunId ? "selected" : ""}`}
+                  key={run.id}
+                  onClick={() => onLoadRun(run.id)}
+                >
+                  <span className="studio-run-main">
+                    <strong>{run.sessionId}</strong>
+                    <small>
+                      {run.phase} · {run.status} · {formatDateTime(run.updatedAt)}
+                    </small>
+                  </span>
+                  <span className="studio-run-metrics">
+                    {run.eventCount} ev · {run.nodeCount} nós
+                  </span>
+                </button>
+              ))
+            : studioRunsLoadState.kind === "loading" || studioRunsLoadState.kind === "error"
+              ? null
+              : (
+                  <article className="runtime-item">
+                    <strong>Nenhum run persistido</strong>
+                    <span>Execute uma sessão no sandbox para salvar o primeiro snapshot local.</span>
+                  </article>
+                )}
         </div>
       </section>
 
