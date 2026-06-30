@@ -34,6 +34,7 @@ O fluxo principal foi desenhado para funcionar sem LangSmith Cloud, sem cobranç
 - Diagnósticos estruturados de validação com navegação para o ponto afetado.
 - Preview do JSON do flow.
 - Tema claro e escuro persistente por `localStorage`.
+- Auditoria automatizada de tema/layout com Playwright para shell principal, abas do inspector, tema claro/escuro e viewports desktop/compacta.
 - Atalhos iniciais: `Ctrl/Cmd+S` para salvar workspace, `Ctrl/Cmd+Enter` para validar e `Esc` para limpar seleção do canvas.
 
 ### Tipos De Nó E Capacidades Do Flow
@@ -129,7 +130,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 
 ### Próximo Ciclo
 
-- Completar auditoria visual de tema claro/escuro em todas as telas e viewports.
+- Ampliar auditoria visual automatizada para estados de erro/loading, runs com dados, aprovação válida/desatualizada e Docker ativo/parado.
 - Melhorar ergonomia do canvas com grupos, atalhos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.
 - Consolidar cenários salvos, pin/mock data e reexecução determinística.
@@ -226,6 +227,7 @@ Executar verificações principais:
 ```bash
 npm run typecheck
 npm run test:builder-api
+npm run test:ui-theme
 npm run test:codegen
 npm run build:builder-ui
 ```
@@ -243,6 +245,7 @@ npm run test:generated
 npm run test:manifest
 npm run test:parity
 npm run test:builder-api
+npm run test:ui-theme
 npm run test:codegen
 npm run build:builder-ui
 ```

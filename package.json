@@ -18,12 +18,14 @@
     "test:manifest": "python -m pytest -q generated/reference-runtime-bundle/agents/reference-interview",
     "test:parity": "python tools/verify_runtime_parity.py",
     "test:builder-api": "tsx --test apps/builder-api/src/server.test.ts",
+    "test:ui-theme": "playwright install chromium && playwright test --config playwright.ui.config.cjs",
     "test:codegen": "tsx --test packages/codegen-langgraph/src/codegen.test.ts",
     "dev:builder-api": "tsx apps/builder-api/src/server.ts",
     "dev:builder-ui": "npm --workspace @agent-flow-builder/builder-ui run dev",
     "build:builder-ui": "npm --workspace @agent-flow-builder/builder-ui run build"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0"

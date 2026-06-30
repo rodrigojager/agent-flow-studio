@@ -13,3 +13,4 @@ build/
 .builder-api.log
 .playwright-mcp/
 Temp/
+test-results/
