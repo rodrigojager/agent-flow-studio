@@ -377,6 +377,7 @@ Status 2026-06-30:
 - implementado: status global acessível (`status`/`alert`) com cobertura visual automatizada de loading/erro fora do fluxo Docker em tema claro e escuro;
 - implementado: pin local de input/output por nó, com origem run/evento e indicador `atual/stale` quando a definição do nó muda;
 - implementado: cenário pode ativar mock por pins de nó; a UI envia apenas pins ativos na metadata da sessão e o runtime gerado aplica o payload pinado antes de executar LLM, safety, code, HTTP, transform, banco, arquivo/RAG, approval, scoring, analytics, start/human/finish/noop;
+- implementado: comparação de runs calcula modo `live/mock/pinned`, eventos pinados/mock, tokens, custo estimado e um resumo de regressão com severidade, motivos e indicação de pinado vs real;
 - pendente: filtros avançados de histórico operacional e restauração real de estado por checkpointer/runtime.
 
 ### Fase 7.5: Grafo Interativo de Execução
@@ -478,7 +479,8 @@ Mas a ferramenta não deve depender disso para operar.
 
 3. consolidar cenários:
    - replay por pins já salvo como mock determinístico por cenário;
-   - ampliar comparação de métricas e regressão entre replay pinado e run real;
+   - comparação básica de métricas/regressão entre replay pinado e run real já implementada;
+   - evoluir thresholds configuráveis e fixtures exportáveis por cenário;
    - evoluir restauração real de estado/checkpointer além do payload pinado.
 4. auditoria completa de tema:
    - verificar fluxo em ambas paletas;

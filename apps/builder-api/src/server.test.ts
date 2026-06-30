@@ -144,7 +144,11 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
         phase: "collecting",
         turn: 1,
         max_turns: 3,
-        metadata: { source: "test" },
+        metadata: {
+          source: "test",
+          scenario: { id: "scenario-pinned", label: "Replay pinado", useNodePins: true },
+          nodePins: { enabled: true, mode: "mock", items: [{ nodeId: "ask_question", output: { text: "pin" } }] },
+        },
         is_complete: false,
       },
       transcript: [
@@ -153,7 +157,19 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
       ],
       events: [
         { seq: 1, event_type: "session_started", node: "start", payload: { turn: 0, custom: { marker: "left" } } },
-        { seq: 2, event_type: "llm_completed", node: "ask_question", payload: { turn: 1, status: "ok" } },
+        {
+          seq: 2,
+          event_type: "llm_completed",
+          node: "ask_question",
+          payload: {
+            turn: 1,
+            status: "ok",
+            pinned: true,
+            mock: true,
+            usage: { total_tokens: 42 },
+            cost: { total_usd: 0.0012 },
+          },
+        },
       ],
       logs: ["runtime ready"],
     },
@@ -342,6 +358,17 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(studioRunsCompared.json().metrics.phaseChanged, true);
   assert.equal(studioRunsCompared.json().metrics.isCompleteChanged, true);
   assert.equal(studioRunsCompared.json().metrics.errorCountDelta, 1);
+  assert.equal(studioRunsCompared.json().metrics.pinnedEventCountLeft, 1);
+  assert.equal(studioRunsCompared.json().metrics.pinnedEventCountRight, 0);
+  assert.equal(studioRunsCompared.json().metrics.mockEventCountLeft, 1);
+  assert.equal(studioRunsCompared.json().metrics.totalTokensLeft, 42);
+  assert.equal(studioRunsCompared.json().metrics.totalTokensRight, null);
+  assert.equal(studioRunsCompared.json().metrics.totalCostUsdLeft, 0.0012);
+  assert.equal(studioRunsCompared.json().metrics.runKindLeft, "pinned");
+  assert.equal(studioRunsCompared.json().metrics.runKindRight, "live");
+  assert.equal(studioRunsCompared.json().regression.severity, "fail");
+  assert.equal(studioRunsCompared.json().regression.comparesPinnedToLive, true);
+  assert.ok(studioRunsCompared.json().regression.reasons.some((reason: string) => reason.includes("erros aumentaram")));
   assert.deepEqual(studioRunsCompared.json().nodeDiff.leftOnly, ["ask_question"]);
   assert.deepEqual(studioRunsCompared.json().nodeDiff.rightOnly, ["finish"]);
   assert.deepEqual(studioRunsCompared.json().nodeDiff.both, ["start"]);

@@ -4959,6 +4959,10 @@ function SandboxPanel({
               <span>
                 {studioRunComparison.leftRunId} vs {studioRunComparison.rightRunId}
               </span>
+              <div className={`studio-regression-banner ${studioRunComparison.regression.severity}`}>
+                <strong>{studioRunComparison.regression.severity === "fail" ? "falha" : studioRunComparison.regression.severity === "warn" ? "atenção" : "ok"}</strong>
+                <span>{studioRunComparison.regression.verdict}</span>
+              </div>
               <div className="studio-comparison-grid">
                 <div>
                   <strong>status</strong>
@@ -5011,12 +5015,52 @@ function SandboxPanel({
                     {formatRunDuration(studioRunComparison.metrics.durationMsRight)}
                   </span>
                 </div>
+                <div>
+                  <strong>modo</strong>
+                  <span>
+                    {studioRunComparison.metrics.runKindLeft} para {studioRunComparison.metrics.runKindRight}
+                  </span>
+                </div>
+                <div>
+                  <strong>pins</strong>
+                  <span>
+                    {studioRunComparison.metrics.pinnedEventCountLeft} para {studioRunComparison.metrics.pinnedEventCountRight} (
+                    {studioRunComparison.metrics.pinnedEventCountDelta >= 0 ? "+" : ""}
+                    {studioRunComparison.metrics.pinnedEventCountDelta})
+                  </span>
+                </div>
+                <div>
+                  <strong>mock</strong>
+                  <span>
+                    {studioRunComparison.metrics.mockEventCountLeft} para {studioRunComparison.metrics.mockEventCountRight} (
+                    {studioRunComparison.metrics.mockEventCountDelta >= 0 ? "+" : ""}
+                    {studioRunComparison.metrics.mockEventCountDelta})
+                  </span>
+                </div>
+                <div>
+                  <strong>tokens</strong>
+                  <span>
+                    {formatNullableNumber(studioRunComparison.metrics.totalTokensLeft)} para{" "}
+                    {formatNullableNumber(studioRunComparison.metrics.totalTokensRight)}
+                  </span>
+                </div>
+                <div>
+                  <strong>custo</strong>
+                  <span>
+                    {formatUsd(studioRunComparison.metrics.totalCostUsdLeft)} para{" "}
+                    {formatUsd(studioRunComparison.metrics.totalCostUsdRight)}
+                  </span>
+                </div>
               </div>
               <small>
                 Só no {studioRunComparison.leftRunId}: {studioRunComparison.leftOnlyNodes.join(", ") || "-"} <br />
                 Só no {studioRunComparison.rightRunId}: {studioRunComparison.rightOnlyNodes.join(", ") || "-"} <br />
-                Runtime URL: {studioRunComparison.metrics.runtimeUrlChanged ? "diferente" : "igual"}
+                Runtime URL: {studioRunComparison.metrics.runtimeUrlChanged ? "diferente" : "igual"} ·{" "}
+                Pinado vs real: {studioRunComparison.regression.comparesPinnedToLive ? "sim" : "não"}
               </small>
+              {studioRunComparison.regression.reasons.length ? (
+                <small>Motivos: {studioRunComparison.regression.reasons.join("; ")}</small>
+              ) : null}
               <small>
                 Em comum: {studioRunComparison.nodeDiff.both.length} nós · Mudanças:{" "}
                 {studioRunComparison.nodeComparisons.filter((item) => item.changed).length}
@@ -5660,6 +5704,20 @@ function formatRunDuration(valueMs: number | null): string {
     return `${seconds}.${String(ms).padStart(3, "0")}s`;
   }
   return `${safeMs}ms`;
+}
+
+function formatNullableNumber(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "-";
+  }
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function formatUsd(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `$${value.toFixed(6)}`;
 }
 
 function inferEventInput(event: EventView | null, transcript: MessageView[]): unknown {

@@ -571,6 +571,28 @@ export interface StudioRunComparison {
     durationMsLeft: number | null;
     durationMsRight: number | null;
     durationMsDelta: number | null;
+    pinnedEventCountLeft: number;
+    pinnedEventCountRight: number;
+    pinnedEventCountDelta: number;
+    mockEventCountLeft: number;
+    mockEventCountRight: number;
+    mockEventCountDelta: number;
+    totalTokensLeft: number | null;
+    totalTokensRight: number | null;
+    totalTokensDelta: number | null;
+    totalCostUsdLeft: number | null;
+    totalCostUsdRight: number | null;
+    totalCostUsdDelta: number | null;
+    runKindLeft: "live" | "mock" | "pinned" | "mixed";
+    runKindRight: "live" | "mock" | "pinned" | "mixed";
+  };
+  regression: {
+    severity: "pass" | "warn" | "fail";
+    comparesPinnedToLive: boolean;
+    baselineRunId: string;
+    candidateRunId: string;
+    verdict: string;
+    reasons: string[];
   };
   nodeDiff: {
     leftOnly: string[];

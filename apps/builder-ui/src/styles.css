@@ -1841,6 +1841,44 @@ button:disabled {
   gap: 7px 12px;
 }
 
+.studio-regression-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent-soft);
+}
+
+.studio-regression-banner.fail {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.studio-regression-banner.warn {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.studio-regression-banner strong {
+  color: var(--text-strong);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.studio-regression-banner span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .studio-comparison-grid > div {
   display: grid;
   gap: 3px;

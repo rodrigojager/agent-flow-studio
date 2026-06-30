@@ -72,6 +72,7 @@
 - Builder API persiste snapshots iniciais de runs locais do Studio em `flows/{flowId}/.agent-flow/studio-runs/`, expõe `/flows/{flowId}/studio-runs` e `/flows/{flowId}/studio-runs/{runId}`, salvando sessão, transcript, events, logs, métricas, snapshots derivados de state por evento e diffs incrementais.
 - Builder UI lista runs locais no painel `Studio`, salva snapshots após avanço de sessão/turno/finalização e permite recarregar um run persistido para replay básico da timeline, Node IO, transcript, state inspector e diff do evento selecionado.
 - Comparação de runs do Studio ganhou diffs semânticos por nó (state/output), filtro por nó e metadados de cenário para comparação (esquerda/direita/alterado).
+- Comparação de runs do Studio agora agrega modo `live/mock/pinned`, eventos pinados/mock, tokens, custo estimado e resumo de regressão (`pass/warn/fail`) com motivos e indicação de comparação pinado vs real.
 - Causality do Studio foi incorporada ao fluxo persistido e ao grafo da UI (`upstream`, `impact`, `cascata`) com destaque de eventos/nós no replay, incluindo trilha visual no painel de grafo.
 - Build Docker pela UI passa a expor progresso incremental por etapa em `docker compose build` e mantém log de progresso persistido no histórico operacional.
 - Studio Local ganhou painel `Contexto do nó`, acionado pelo clique/filtro de nó, reunindo status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output inferidos, estado do nó, métricas de usage/custo/duração, spans estruturados, diffs e logs correlacionados.
@@ -138,7 +139,7 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 - Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
 - `npm run typecheck` e `npm run build:builder-ui` passaram após a inclusão dos atalhos globais iniciais.
-- `npm run test:ui-theme` passou com 12 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, pin local de input/output por nó, toggle de mock por pins em cenário, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, e estados operacionais Docker de loading/progresso, container running, smoke com erro e container stopped.
+- `npm run test:ui-theme` passou com 12 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, pin local de input/output por nó, toggle de mock por pins em cenário, comparação de runs com veredito de regressão, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, e estados operacionais Docker de loading/progresso, container running, smoke com erro e container stopped.
 
 ## Ainda não implementado
 
@@ -169,7 +170,7 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
 
 3. **Cenários + pinning avançado (Média prioridade)**
    - consolidar cenários nomeados por agente/run;
-   - ampliar replay por pins com comparação de métricas, regressão e fixtures exportáveis;
+   - ampliar replay por pins com thresholds configuráveis e fixtures exportáveis;
    - reexecução determinística com histórico de comparação.
 
 4. **Adapters de código não nativos (Média/Longo prazo)**

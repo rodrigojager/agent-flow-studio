@@ -108,7 +108,22 @@ export interface StudioRunComparison {
     durationMsLeft: number | null;
     durationMsRight: number | null;
     durationMsDelta: number | null;
+    pinnedEventCountLeft: number;
+    pinnedEventCountRight: number;
+    pinnedEventCountDelta: number;
+    mockEventCountLeft: number;
+    mockEventCountRight: number;
+    mockEventCountDelta: number;
+    totalTokensLeft: number | null;
+    totalTokensRight: number | null;
+    totalTokensDelta: number | null;
+    totalCostUsdLeft: number | null;
+    totalCostUsdRight: number | null;
+    totalCostUsdDelta: number | null;
+    runKindLeft: "live" | "mock" | "pinned" | "mixed";
+    runKindRight: "live" | "mock" | "pinned" | "mixed";
   };
+  regression: StudioRunRegressionSummary;
   nodeDiff: {
     leftOnly: string[];
     rightOnly: string[];
@@ -117,6 +132,15 @@ export interface StudioRunComparison {
   nodeComparisons: StudioNodeComparison[];
   leftOnlyNodes: string[];
   rightOnlyNodes: string[];
+}
+
+export interface StudioRunRegressionSummary {
+  severity: "pass" | "warn" | "fail";
+  comparesPinnedToLive: boolean;
+  baselineRunId: string;
+  candidateRunId: string;
+  verdict: string;
+  reasons: string[];
 }
 
 export interface StudioNodeComparison {
@@ -247,9 +271,12 @@ export async function compareStudioRuns(
   const rightNodes = collectNodeIds(right.events);
   const leftDuration = calcDurationMs(left);
   const rightDuration = calcDurationMs(right);
+  const leftMetrics = collectRunSignalMetrics(left);
+  const rightMetrics = collectRunSignalMetrics(right);
   const leftOnlyNodes = leftNodes.filter((node) => !rightNodes.includes(node));
   const rightOnlyNodes = rightNodes.filter((node) => !leftNodes.includes(node));
   const nodeComparisons = buildNodeComparisons(left, right);
+  const regression = buildRegressionSummary(left, right, leftMetrics, rightMetrics, nodeComparisons);
 
   return {
     format: "agent-flow-builder.studio-run-comparison.v1",
@@ -273,7 +300,22 @@ export async function compareStudioRuns(
       durationMsRight: rightDuration,
       durationMsDelta:
         leftDuration === null || rightDuration === null ? null : rightDuration - leftDuration,
+      pinnedEventCountLeft: leftMetrics.pinnedEventCount,
+      pinnedEventCountRight: rightMetrics.pinnedEventCount,
+      pinnedEventCountDelta: rightMetrics.pinnedEventCount - leftMetrics.pinnedEventCount,
+      mockEventCountLeft: leftMetrics.mockEventCount,
+      mockEventCountRight: rightMetrics.mockEventCount,
+      mockEventCountDelta: rightMetrics.mockEventCount - leftMetrics.mockEventCount,
+      totalTokensLeft: leftMetrics.totalTokens,
+      totalTokensRight: rightMetrics.totalTokens,
+      totalTokensDelta: nullableDelta(leftMetrics.totalTokens, rightMetrics.totalTokens),
+      totalCostUsdLeft: leftMetrics.totalCostUsd,
+      totalCostUsdRight: rightMetrics.totalCostUsd,
+      totalCostUsdDelta: nullableDelta(leftMetrics.totalCostUsd, rightMetrics.totalCostUsd),
+      runKindLeft: leftMetrics.runKind,
+      runKindRight: rightMetrics.runKind,
     },
+    regression,
     nodeDiff: {
       leftOnly: leftOnlyNodes,
       rightOnly: rightOnlyNodes,
@@ -693,6 +735,203 @@ function deriveImpactedNodeOrder(
     }
   }
   return ordered;
+}
+
+interface StudioRunSignalMetrics {
+  pinnedEventCount: number;
+  mockEventCount: number;
+  totalTokens: number | null;
+  totalCostUsd: number | null;
+  runKind: "live" | "mock" | "pinned" | "mixed";
+}
+
+function collectRunSignalMetrics(run: StudioRunRecord): StudioRunSignalMetrics {
+  const events = run.events ?? [];
+  const sessionMetadata = run.session.metadata ?? {};
+  let pinnedEventCount = 0;
+  let mockEventCount = 0;
+  let tokenTotal = 0;
+  let tokenSeen = false;
+  let costTotal = 0;
+  let costSeen = false;
+
+  for (const event of events) {
+    if (payloadHasFlag(event.payload, "pinned")) {
+      pinnedEventCount += 1;
+    }
+    if (payloadHasFlag(event.payload, "mock")) {
+      mockEventCount += 1;
+    }
+    const tokens = collectNumericSignals(event.payload, [
+      "total_tokens",
+      "totalTokens",
+      "tokens",
+      "inputTokens",
+      "outputTokens",
+    ]);
+    if (tokens.length > 0) {
+      tokenSeen = true;
+      tokenTotal += Math.max(...tokens);
+    }
+    const costs = collectNumericSignals(event.payload, [
+      "total_usd",
+      "totalUsd",
+      "cost_usd",
+      "costUsd",
+      "input_usd",
+      "output_usd",
+    ]);
+    if (costs.length > 0) {
+      costSeen = true;
+      costTotal += Math.max(...costs);
+    }
+  }
+
+  const metadataNodePins = isRecord(sessionMetadata.nodePins) || isRecord(sessionMetadata.node_pins);
+  const metadataMock = metadataNodePins || readNestedBoolean(sessionMetadata, ["scenario", "useNodePins"]) === true;
+  const hasPinned = pinnedEventCount > 0 || metadataNodePins;
+  const hasMock = mockEventCount > 0 || metadataMock;
+  const runKind = hasPinned && mockEventCount > pinnedEventCount
+    ? "mixed"
+    : hasPinned
+      ? "pinned"
+      : hasMock
+        ? "mock"
+        : "live";
+
+  return {
+    pinnedEventCount,
+    mockEventCount,
+    totalTokens: tokenSeen ? tokenTotal : null,
+    totalCostUsd: costSeen ? Number(costTotal.toFixed(8)) : null,
+    runKind,
+  };
+}
+
+function buildRegressionSummary(
+  left: StudioRunRecord,
+  right: StudioRunRecord,
+  leftMetrics: StudioRunSignalMetrics,
+  rightMetrics: StudioRunSignalMetrics,
+  nodeComparisons: StudioNodeComparison[],
+): StudioRunRegressionSummary {
+  const reasons: string[] = [];
+  let severity: StudioRunRegressionSummary["severity"] = "pass";
+
+  if (right.errorCount > left.errorCount) {
+    severity = "fail";
+    reasons.push(`erros aumentaram de ${left.errorCount} para ${right.errorCount}`);
+  }
+  if (left.isComplete && !right.isComplete) {
+    severity = "fail";
+    reasons.push("candidate deixou de finalizar uma run que antes finalizava");
+  }
+  if (left.status !== "error" && right.status === "error") {
+    severity = "fail";
+    reasons.push(`status regrediu de ${left.status} para error`);
+  }
+
+  const changedSharedNodes = nodeComparisons.filter((node) => node.inLeft && node.inRight && node.changed).length;
+  if (changedSharedNodes > 0) {
+    if (severity === "pass") {
+      severity = "warn";
+    }
+    reasons.push(`${changedSharedNodes} nó(s) em comum mudaram state/output`);
+  }
+
+  addGrowthReason(reasons, leftMetrics.totalTokens, rightMetrics.totalTokens, "tokens totais", 0.2);
+  addGrowthReason(reasons, leftMetrics.totalCostUsd, rightMetrics.totalCostUsd, "custo estimado", 0.2);
+  addGrowthReason(reasons, calcDurationMs(left), calcDurationMs(right), "duração", 0.3);
+  if (severity === "pass" && reasons.length > 0) {
+    severity = "warn";
+  }
+
+  const comparesPinnedToLive =
+    (leftMetrics.runKind === "pinned" && rightMetrics.runKind === "live") ||
+    (leftMetrics.runKind === "live" && rightMetrics.runKind === "pinned");
+  const verdict = severity === "fail"
+    ? "Regressão funcional detectada."
+    : severity === "warn"
+      ? "Mudanças detectadas; revisar antes de aprovar."
+      : "Sem regressão detectada.";
+
+  return {
+    severity,
+    comparesPinnedToLive,
+    baselineRunId: left.id,
+    candidateRunId: right.id,
+    verdict,
+    reasons,
+  };
+}
+
+function addGrowthReason(
+  reasons: string[],
+  left: number | null,
+  right: number | null,
+  label: string,
+  threshold: number,
+): void {
+  if (left === null || right === null || left <= 0) {
+    return;
+  }
+  const growth = (right - left) / left;
+  if (growth > threshold) {
+    reasons.push(`${label} aumentou ${Math.round(growth * 100)}%`);
+  }
+}
+
+function nullableDelta(left: number | null, right: number | null): number | null {
+  return left === null || right === null ? null : Number((right - left).toFixed(8));
+}
+
+function payloadHasFlag(value: unknown, flag: "mock" | "pinned"): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value[flag] === true) {
+    return true;
+  }
+  for (const nestedKey of ["llm", "custom", "http", "transform", "database", "file", "rag", "approval", "score", "analytics", "safety"]) {
+    const nested = value[nestedKey];
+    if (isRecord(nested) && nested[flag] === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectNumericSignals(value: unknown, keys: string[], depth = 0): number[] {
+  if (depth > 4) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectNumericSignals(item, keys, depth + 1));
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const found: number[] = [];
+  for (const [key, item] of Object.entries(value)) {
+    if (keys.includes(key) && typeof item === "number" && Number.isFinite(item)) {
+      found.push(item);
+    }
+    if (isRecord(item) || Array.isArray(item)) {
+      found.push(...collectNumericSignals(item, keys, depth + 1));
+    }
+  }
+  return found;
+}
+
+function readNestedBoolean(value: unknown, pathParts: string[]): boolean | null {
+  let current: unknown = value;
+  for (const part of pathParts) {
+    if (!isRecord(current)) {
+      return null;
+    }
+    current = current[part];
+  }
+  return typeof current === "boolean" ? current : null;
 }
 
 function buildNodeComparisons(left: StudioRunRecord, right: StudioRunRecord): StudioNodeComparison[] {

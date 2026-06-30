@@ -77,6 +77,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
 - Node IO inferido.
 - Logs recentes.
 - Comparação entre runs.
+- Comparação de regressão entre runs com modo live/mock/pinned, eventos pinados/mock, tokens, custo estimado e veredito de revisão.
 - Destaque causal no grafo: upstream, nó de falha, impacto e cascata.
 - Painel "Contexto do nó" com status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output, estado, métricas, spans estruturados, diffs e logs correlacionados.
 - Diagnóstico automático por nó com causa provável, próximas ações e evidências do evento/snapshot.
@@ -138,12 +139,13 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 - Ampliar auditoria visual automatizada para estados gerais de erro/loading em painéis específicos além do status global e do fluxo Docker.
 - Melhorar ergonomia do canvas com grupos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.
-- Evoluir replay por pins com comparação de métricas, restauração real de estado e fixtures exportáveis.
+- Evoluir replay por pins com thresholds configuráveis, fixtures exportáveis e restauração real de estado.
 
 ### Médio Prazo
 
 - Playground avançado com forms derivados de schema, output render/raw e secrets locais mascarados.
-- Reexecução comparável com métricas agregadas, tokens/custo por run e alertas de regressão.
+- Alertas de regressão configuráveis por cenário e por tipo de nó.
+- Exportação de fixtures de replay.
 - Restauração real de estado a partir de checkpointer/runtime, além do fork local já disponível como cenário.
 - Catálogo local de templates, tools, skills e agents reutilizáveis.
 - Editor visual de manifesto multiagente.

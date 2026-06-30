@@ -83,6 +83,15 @@ for (const theme of themes) {
     await expect(spansSection).toBeVisible();
     await expect(spansSection.getByText("llm_call", { exact: true })).toBeVisible();
     await expect(spansSection.getByText("168 tokens")).toBeVisible();
+    await page.getByRole("button", { name: /ui-audit-error/ }).click();
+    await page.getByRole("combobox", { name: /Comparar com/ }).selectOption("run-ui-audit-ok");
+    await page.getByRole("button", { name: /^Comparar$/ }).click();
+    const comparisonSection = page.locator(".studio-comparison-item", { hasText: "Comparação" });
+    await expect(comparisonSection.getByText("Regressão funcional detectada.")).toBeVisible();
+    await expect(comparisonSection.getByText(/tokens/)).toBeVisible();
+    await expect(comparisonSection.getByText(/168 para -/)).toBeVisible();
+    await page.getByRole("button", { name: /ui-audit-ok/ }).click();
+    await page.getByRole("button", { name: /#4\s+llm_completed/ }).click();
     const llmDiagnosisSection = page.locator(".node-context-diagnosis", { hasText: "Diagnóstico" });
     await expect(llmDiagnosisSection.getByText("Sem falha associada")).toBeVisible();
     await expect(llmDiagnosisSection.getByText(/O nó LLM completou sem erro aparente/)).toBeVisible();
