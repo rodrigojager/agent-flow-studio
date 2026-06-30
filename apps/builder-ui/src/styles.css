@@ -516,6 +516,12 @@ button:disabled {
   opacity: 0.32;
 }
 
+.react-flow__node.flow-node.dirty-node {
+  border-style: dashed;
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent);
+}
+
 .react-flow__node.flow-node.status-queued {
   border-style: dashed;
   border-color: #7a817f;
@@ -605,6 +611,12 @@ button:disabled {
 .react-flow__edge.search-dimmed-edge .react-flow__edge-path,
 .react-flow__edge.search-dimmed-edge .react-flow__edge-text {
   opacity: 0.28;
+}
+
+.react-flow__edge.dirty-edge .react-flow__edge-path {
+  stroke: var(--warning);
+  stroke-width: 2.1;
+  stroke-dasharray: 6 4;
 }
 
 .react-flow__edge.status-queued-edge .react-flow__edge-path {
@@ -2176,6 +2188,12 @@ button:disabled {
   opacity: 0.32;
 }
 
+[data-theme] .react-flow__node.flow-node.dirty-node {
+  border-style: dashed;
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent);
+}
+
 [data-theme] .react-flow__edge-path {
   stroke: var(--text-muted);
 }
@@ -2231,6 +2249,12 @@ button:disabled {
 [data-theme] .react-flow__edge.search-dimmed-edge .react-flow__edge-path,
 [data-theme] .react-flow__edge.search-dimmed-edge .react-flow__edge-text {
   opacity: 0.28;
+}
+
+[data-theme] .react-flow__edge.dirty-edge .react-flow__edge-path {
+  stroke: var(--warning);
+  stroke-width: 2.1;
+  stroke-dasharray: 6 4;
 }
 
 [data-theme] .timeline-item-causal-origin {

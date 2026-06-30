@@ -167,6 +167,11 @@ interface NodeFinderEntry {
   description: string;
 }
 
+interface DirtyTopology {
+  nodeIds: Set<string>;
+  edgeIds: Set<string>;
+}
+
 interface DockerHistoryFilterForm {
   operation: DockerRuntimeOperation | "";
   status: DockerRuntimeOperationStatus | "";
@@ -1088,6 +1093,10 @@ export default function App() {
     () => new Set(nodeFinderEntries.map((entry) => entry.id)),
     [nodeFinderEntries],
   );
+  const dirtyTopology = useMemo(
+    () => buildDirtyTopology(loadedFlow?.flow ?? null, draftFlow),
+    [draftFlow, loadedFlow],
+  );
 
   useEffect(() => {
     if (nodeTypeFilter && !nodeTypeFilters.some((option) => option.type === nodeTypeFilter)) {
@@ -1105,12 +1114,14 @@ export default function App() {
       studioRunCausalContext,
       nodeSearchActive,
       nodeSearchMatchedNodeIds,
+      dirtyTopology,
     ),
     [
       activeStudioNodeId,
       draftFlow,
       nodeSearchActive,
       nodeSearchMatchedNodeIds,
+      dirtyTopology,
       runtimeEventsData,
       selectedEdgeId,
       selectedNodeId,
@@ -8366,6 +8377,29 @@ function nodeTypeLabel(type: string): string {
   return nodeTypeOptions.find((option) => option.type === type)?.label ?? type;
 }
 
+function buildDirtyTopology(saved: AgentFlow | null, draft: AgentFlow | null): DirtyTopology {
+  const dirty: DirtyTopology = { nodeIds: new Set(), edgeIds: new Set() };
+  if (!saved || !draft) {
+    return dirty;
+  }
+  const savedNodes = new Map(saved.nodes.map((node) => [node.id, stableFlowValue(node)]));
+  for (const node of draft.nodes) {
+    if (savedNodes.get(node.id) !== stableFlowValue(node)) {
+      dirty.nodeIds.add(node.id);
+    }
+  }
+  draft.edges.forEach((edge, index) => {
+    if (stableFlowValue(saved.edges[index]) !== stableFlowValue(edge)) {
+      dirty.edgeIds.add(edgeId(edge, index));
+    }
+  });
+  return dirty;
+}
+
+function stableFlowValue(value: unknown): string {
+  return value === undefined ? "" : JSON.stringify(value);
+}
+
 function toReactFlowGraph(
   flow: AgentFlow | undefined,
   selectedNodeId: string,
@@ -8375,6 +8409,7 @@ function toReactFlowGraph(
   causalAnalysis: StudioRunCausalAnalysis,
   nodeSearchActive: boolean,
   nodeSearchMatchedNodeIds: Set<string>,
+  dirtyTopology: DirtyTopology,
 ): { nodes: Node[]; edges: Edge[] } {
   if (!flow) {
     return { nodes: [], edges: [] };
@@ -8403,6 +8438,7 @@ function toReactFlowGraph(
         ? "search-match"
         : "search-dimmed"
       : "";
+    const dirtyClass = dirtyTopology.nodeIds.has(id) ? "dirty-node" : "";
     return {
       id,
       position: flowNode?.position ?? defaultNodePosition(index),
@@ -8413,7 +8449,7 @@ function toReactFlowGraph(
       selected: selectedNodeId === id,
       className: `flow-node ${isVirtual ? "virtual" : flowNode?.type ?? ""} ${
         nodeState?.status ? `status-${nodeState.status}` : ""
-      } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""} ${nodeSearchClass}`.trim(),
+      } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""} ${nodeSearchClass} ${dirtyClass}`.trim(),
       draggable: !isVirtual,
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
@@ -8444,15 +8480,17 @@ function toReactFlowGraph(
         ? "search-match-edge"
         : "search-dimmed-edge"
       : "";
+    const currentEdgeId = edgeId(edge, index);
+    const dirtyEdgeClass = dirtyTopology.edgeIds.has(currentEdgeId) ? "dirty-edge" : "";
 
     return {
-      id: edgeId(edge, index),
+      id: currentEdgeId,
       source: edge.from,
       target: edge.to,
       label: edge.condition,
-      selected: selectedEdgeId === edgeId(edge, index),
+      selected: selectedEdgeId === currentEdgeId,
       markerEnd: { type: MarkerType.ArrowClosed },
-      className: `${edgeClass} ${edgeExecutionClass} ${causalClass} ${edgeSearchClass}`.trim(),
+      className: `${edgeClass} ${edgeExecutionClass} ${causalClass} ${edgeSearchClass} ${dirtyEdgeClass}`.trim(),
     };
   });
   return { nodes, edges };

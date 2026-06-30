@@ -55,6 +55,8 @@ test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
   await inputSafetyChip.click();
   await expect(inputSafetyChip).toHaveClass(/selected/);
   await expect(page.locator(".react-flow__node.selected")).toContainText("input_safety_check");
+  await page.locator(".right-panel").getByLabel("Descrição").fill("Checagem visual de entrada.");
+  await expect(page.locator(".react-flow__node.dirty-node.selected")).toContainText("input_safety_check");
 
   await searchInput.fill("");
   await typeFilter.selectOption("llm_prompt");
