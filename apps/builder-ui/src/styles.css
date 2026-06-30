@@ -969,6 +969,18 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.schema-property-enum {
+  grid-column: 1 / span 2;
+}
+
+.schema-property-items {
+  grid-column: 3 / span 1;
+}
+
+.schema-property-row > .icon-button {
+  justify-self: end;
+}
+
 .schema-property-empty {
   padding: 8px 10px;
   border: 1px dashed var(--border);

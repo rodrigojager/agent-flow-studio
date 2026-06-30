@@ -4699,8 +4699,14 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
                     updateProperty(name, (nextProperty) => {
                       if (event.target.value) {
                         nextProperty.type = event.target.value;
+                        if (event.target.value === "array" && !isRecord(nextProperty.items)) {
+                          nextProperty.items = { type: "string" };
+                        }
                       } else {
                         delete nextProperty.type;
+                      }
+                      if (event.target.value !== "array") {
+                        delete nextProperty.items;
                       }
                     })
                   }
@@ -4738,6 +4744,57 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
                   }
                 />
               </label>
+              <label className="schema-property-enum">
+                <span>Enum</span>
+                <input
+                  aria-label={`Enum de ${name}`}
+                  value={readSchemaPropertyEnum(property).join(", ")}
+                  placeholder="valor_a, valor_b"
+                  onChange={(event) =>
+                    updateProperty(name, (nextProperty) => {
+                      const values = splitTags(event.target.value);
+                      if (values.length) {
+                        nextProperty.enum = values;
+                      } else {
+                        delete nextProperty.enum;
+                      }
+                    })
+                  }
+                />
+              </label>
+              {readSchemaPropertyType(property) === "array" ? (
+                <label className="schema-property-items">
+                  <span>Items</span>
+                  <select
+                    aria-label={`Tipo dos itens de ${name}`}
+                    value={readSchemaArrayItemType(property)}
+                    onChange={(event) =>
+                      updateProperty(name, (nextProperty) => {
+                        if (event.target.value) {
+                          const nextItems: Record<string, unknown> = {
+                            ...(isRecord(nextProperty.items) ? nextProperty.items : {}),
+                            type: event.target.value,
+                          };
+                          if (event.target.value !== "object") {
+                            delete nextItems.properties;
+                            delete nextItems.required;
+                          }
+                          nextProperty.items = nextItems;
+                        } else {
+                          delete nextProperty.items;
+                        }
+                      })
+                    }
+                  >
+                    <option value="">-</option>
+                    {schemaPropertyTypeOptions.map((type) => (
+                      <option value={type} key={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <button
                 type="button"
                 className="icon-button"
@@ -4824,6 +4881,18 @@ function readSchemaPropertyType(property: Record<string, unknown>): string {
 
 function readSchemaPropertyDescription(property: Record<string, unknown>): string {
   return typeof property.description === "string" ? property.description : "";
+}
+
+function readSchemaPropertyEnum(property: Record<string, unknown>): string[] {
+  return Array.isArray(property.enum)
+    ? property.enum
+        .map((item) => (typeof item === "string" || typeof item === "number" || typeof item === "boolean" ? String(item) : ""))
+        .filter(Boolean)
+    : [];
+}
+
+function readSchemaArrayItemType(property: Record<string, unknown>): string {
+  return isRecord(property.items) && typeof property.items.type === "string" ? property.items.type : "";
 }
 
 function isValidSchemaPropertyName(value: string): boolean {
