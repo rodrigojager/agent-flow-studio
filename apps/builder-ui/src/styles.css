@@ -2126,6 +2126,83 @@ button:disabled {
   white-space: nowrap;
 }
 
+.node-context-diagnosis {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-bg);
+}
+
+.node-context-diagnosis.error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.node-context-diagnosis.warning {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.node-context-diagnosis.ok {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.node-context-diagnosis-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.node-context-diagnosis-body > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.node-context-diagnosis-body strong {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.node-context-diagnosis-body p,
+.node-context-diagnosis-body ul {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.node-context-diagnosis-body ul {
+  display: grid;
+  gap: 3px;
+  padding-left: 18px;
+}
+
+.node-context-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.node-context-evidence span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--surface-bg) 82%, transparent);
+}
+
 .node-context-logs {
   display: grid;
   gap: 4px;

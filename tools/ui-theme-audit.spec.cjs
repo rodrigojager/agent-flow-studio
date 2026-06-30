@@ -52,6 +52,7 @@ for (const theme of themes) {
 
     await page.getByRole("button", { name: /ui-audit-error/ }).click();
     await expect(page.getByRole("button", { name: /#3\s+node_failed/ })).toBeVisible();
+    await page.getByRole("button", { name: /#3\s+node_failed/ }).click();
     await expect(page.getByText("input_safety_check").first()).toBeVisible();
     await expect(page.getByText("Cadeia causal")).toBeVisible();
     await expect(page.getByText("com falha")).toBeVisible();
@@ -60,6 +61,10 @@ for (const theme of themes) {
     await expect(page.getByText("State inspector")).toBeVisible();
     await expect(page.getByText("Conteúdo inválido para este fluxo.", { exact: true })).toBeVisible();
     await expect(page.getByText("blocked by safety gate").first()).toBeVisible();
+    const diagnosisSection = page.locator(".node-context-diagnosis", { hasText: "Diagnóstico" });
+    await expect(diagnosisSection.getByText("Falha no nó")).toBeVisible();
+    await expect(diagnosisSection.getByText(/O gate de safety bloqueou a execução: blocked by safety gate/)).toBeVisible();
+    await expect(diagnosisSection.getByText(/Crie um fork do checkpoint para reexecutar a mesma entrada/)).toBeVisible();
     await expect(page.locator(".app-shell")).toHaveAttribute("data-theme", theme);
 
     await page.getByRole("button", { name: /ui-audit-ok/ }).click();

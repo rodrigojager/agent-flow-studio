@@ -75,6 +75,7 @@
 - Causality do Studio foi incorporada ao fluxo persistido e ao grafo da UI (`upstream`, `impact`, `cascata`) com destaque de eventos/nós no replay, incluindo trilha visual no painel de grafo.
 - Build Docker pela UI passa a expor progresso incremental por etapa em `docker compose build` e mantém log de progresso persistido no histórico operacional.
 - Studio Local ganhou painel `Contexto do nó`, acionado pelo clique/filtro de nó, reunindo status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output inferidos, estado do nó, métricas de usage/custo/duração, spans estruturados, diffs e logs correlacionados.
+- Studio Local infere diagnóstico operacional por nó, com causa provável, próximas ações e evidências derivadas de payload, safety, status, fase, snapshot e cadeia causal.
 - Studio Local permite criar fork de checkpoint/evento a partir do `State inspector`, salvando um cenário local reexecutável com origem do run, sessão, evento, snapshot, input/output e metadata de execução para rastrear a nova sessão.
 - Causalidade ao vivo da UI foi alinhada ao backend: usa a falha mais recente, o parent executado mais próximo antes da falha e descendentes realmente observados depois da falha.
 - Ordenação de `impactedNodes` passou a seguir ordem causal/de execução, com o nó da falha primeiro e descendentes ordenados pelo primeiro evento impactado, em vez de lista alfabética.
@@ -87,7 +88,7 @@
 - Parser de progresso Docker estima percentuais mesmo quando o output do BuildKit não traz contagem explícita, usando etapa inferida, contexto de linhas `#N DONE` e evento final em 100% para builds concluídos.
 - Shell principal da Builder UI ganhou breakpoint responsivo abaixo de 760px: topbar passa a quebrar em duas linhas com toolbar rolável, workspace vira fluxo vertical sem largura mínima desktop, canvas mantém altura útil e inspector fica abaixo do canvas.
 - Builder UI possui atalhos globais iniciais: `Ctrl/Cmd+S` salva flow/prompts/schemas sujos, `Ctrl/Cmd+Enter` valida o flow atual, `Esc` limpa a seleção do canvas, `A` foca a paleta e `F` reenquadra o canvas quando o foco não está em campo editável.
-- Auditoria visual automatizada em Playwright (`npm run test:ui-theme`) prepara workspace isolado em `.tmp/ui-theme-workspace`, sobe API/UI em portas dedicadas, usa runner Docker mockado apenas por `AGENT_BUILDER_DOCKER_RUNNER=ui-audit-mock`, percorre tema claro/escuro em viewport desktop e compacta, abre as abas principais do inspector, valida atalhos iniciais, renderiza runs locais persistidos com timeline/cadeia causal/state/transcript, cobre prompt renderizado, usage, custo, spans e fork de checkpoint no drill-down de nó LLM, cobre aprovação desatualizada bloqueando `API Docker`, cobre o fluxo `LangGraph` -> `Aprovar` -> `API Docker` até o painel de artefato Docker final e exercita build/loading, inspect running, smoke com erro e inspect stopped.
+- Auditoria visual automatizada em Playwright (`npm run test:ui-theme`) prepara workspace isolado em `.tmp/ui-theme-workspace`, sobe API/UI em portas dedicadas, usa runner Docker mockado apenas por `AGENT_BUILDER_DOCKER_RUNNER=ui-audit-mock`, percorre tema claro/escuro em viewport desktop e compacta, abre as abas principais do inspector, valida atalhos iniciais, renderiza runs locais persistidos com timeline/cadeia causal/state/transcript, cobre diagnóstico automático de safety, prompt renderizado, usage, custo, spans e fork de checkpoint no drill-down de nó LLM, cobre aprovação desatualizada bloqueando `API Docker`, cobre o fluxo `LangGraph` -> `Aprovar` -> `API Docker` até o painel de artefato Docker final e exercita build/loading, inspect running, smoke com erro e inspect stopped.
 
 ## Verificado
 
@@ -139,7 +140,7 @@ Também foi validado localmente:
 
 ## Ainda não implementado
 
-- Studio Local: evoluir de fork local reexecutável para restauração real de estado por checkpointer/runtime e adicionar explicação automática de causa provável/próximas ações no inspector.
+- Studio Local: evoluir de fork local reexecutável para restauração real de estado por checkpointer/runtime.
 - Tema claro e escuro ainda precisa ampliar a auditoria visual para estados gerais de erro/loading fora do fluxo Docker; o shell principal, abas base, runs locais com dados, aprovação desatualizada, fluxo aprovado até o artefato Docker final e estados Docker build/running/stopped/erro já têm gate automatizado.
 - Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.

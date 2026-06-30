@@ -207,6 +207,7 @@ interface StudioNodeDebugContext {
   logs: string[];
   metrics: StudioNodeMetric[];
   spans: StudioNodeSpan[];
+  diagnosis: StudioNodeDiagnosis;
 }
 
 interface StudioNodeMetric {
@@ -222,6 +223,14 @@ interface StudioNodeSpan {
   tokens: number | null;
   cost: string | null;
   eventSeq: number;
+}
+
+interface StudioNodeDiagnosis {
+  severity: "ok" | "warning" | "error";
+  title: string;
+  probableCause: string;
+  nextActions: string[];
+  evidence: string[];
 }
 
 interface RenderedPromptPreview {
@@ -5107,6 +5116,37 @@ function SandboxPanel({
               </article>
             </div>
 
+            <div className={`node-context-diagnosis ${selectedNodeContext.diagnosis.severity}`}>
+              <div className="node-context-section-header">
+                <strong>Diagnóstico</strong>
+                <span>{selectedNodeContext.diagnosis.title}</span>
+              </div>
+              <div className="node-context-diagnosis-body">
+                <div>
+                  <strong>Causa provável</strong>
+                  <p>{selectedNodeContext.diagnosis.probableCause}</p>
+                </div>
+                <div>
+                  <strong>Próximas ações</strong>
+                  <ul>
+                    {selectedNodeContext.diagnosis.nextActions.map((action) => (
+                      <li key={action}>{action}</li>
+                    ))}
+                  </ul>
+                </div>
+                {selectedNodeContext.diagnosis.evidence.length ? (
+                  <div>
+                    <strong>Evidências</strong>
+                    <div className="node-context-evidence">
+                      {selectedNodeContext.diagnosis.evidence.map((item) => (
+                        <span key={item}>{item}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
             <div className="node-context-events">
               {selectedNodeContext.events.slice(-6).map((event) => (
                 <button
@@ -5496,7 +5536,157 @@ function buildStudioNodeContext(
     logs: filterNodeLogs(selectedNodeId, latestEvent, logs),
     metrics: collectStudioNodeMetrics(nodeEvents),
     spans: collectStudioNodeSpans(nodeEvents),
+    diagnosis: diagnoseStudioNode(selectedNodeId, nodeEvents, latestEvent, errorEvent, latestSnapshot, causalAnalysis),
   };
+}
+
+function diagnoseStudioNode(
+  nodeId: string,
+  nodeEvents: EventView[],
+  latestEvent: EventView | null,
+  errorEvent: EventView | null,
+  latestSnapshot: StudioStateSnapshot | null,
+  causalAnalysis: StudioRunCausalAnalysis,
+): StudioNodeDiagnosis {
+  if (!latestEvent) {
+    return {
+      severity: "warning",
+      title: "Sem execução observada",
+      probableCause: "Este nó ainda não apareceu na timeline carregada, então o Studio não tem payload, estado ou diffs para explicar.",
+      nextActions: [
+        "Execute um cenário que passe por este nó.",
+        "Confira as condições das arestas de entrada no canvas.",
+        "Remova filtros da timeline se a execução já deveria estar visível.",
+      ],
+      evidence: [],
+    };
+  }
+
+  const eventForDiagnosis = errorEvent ?? latestEvent;
+  const payload = eventForDiagnosis.payload;
+  const reason = readStudioFailureReason(payload);
+  const evidence = buildStudioDiagnosisEvidence(nodeEvents, eventForDiagnosis, latestSnapshot, causalAnalysis);
+  const safety = isRecord(payload.safety) ? payload.safety : null;
+  const isSafetyBlock = safety?.blocked === true || reason.toLowerCase().includes("safety");
+
+  if (errorEvent || isStudioErrorEvent(eventForDiagnosis)) {
+    return {
+      severity: "error",
+      title: "Falha no nó",
+      probableCause: isSafetyBlock
+        ? `O gate de safety bloqueou a execução${reason ? `: ${reason}` : "."}`
+        : `O evento ${eventForDiagnosis.event_type} marcou o nó como erro${reason ? `: ${reason}` : "."}`,
+      nextActions: isSafetyBlock
+        ? [
+            "Revise a mensagem de entrada ou o cenário que acionou o bloqueio.",
+            "Abra o payload bruto para conferir safety.blocked, reason e fase.",
+            "Crie um fork do checkpoint para reexecutar a mesma entrada após ajustar o flow.",
+          ]
+        : [
+            "Abra o payload bruto e os logs correlacionados para ver a mensagem de erro.",
+            "Confira configuração, prompt, schema, handler ou dependências do nó.",
+            "Crie um fork do checkpoint para reproduzir a falha em uma nova sessão.",
+          ],
+      evidence,
+    };
+  }
+
+  if (causalAnalysis.failedNode === nodeId) {
+    return {
+      severity: "error",
+      title: "Origem da falha",
+      probableCause: "Este nó foi identificado como o primeiro ponto da cadeia causal com falha.",
+      nextActions: [
+        "Abra o evento marcado como falha na timeline.",
+        "Compare input/output deste nó com um run saudável.",
+        "Crie um fork do checkpoint para validar a correção com o mesmo input.",
+      ],
+      evidence,
+    };
+  }
+
+  if (causalAnalysis.impactedNodes.includes(nodeId)) {
+    return {
+      severity: "warning",
+      title: "Impactado por falha upstream",
+      probableCause: `Este nó aparece depois de ${causalAnalysis.failedNode ?? "um nó upstream"} na cadeia de impacto; o comportamento atual pode ser consequência da falha anterior.`,
+      nextActions: [
+        "Abra o nó de origem da falha antes de alterar este nó.",
+        "Confira se este nó deveria ter sido pulado, bloqueado ou compensado.",
+        "Use a comparação de runs para confirmar se o impacto se repete.",
+      ],
+      evidence,
+    };
+  }
+
+  if (causalAnalysis.upstreamPath.includes(nodeId)) {
+    return {
+      severity: "warning",
+      title: "Upstream da falha",
+      probableCause: "Este nó executou antes da falha e pode ter produzido estado ou output usado pelo nó que falhou.",
+      nextActions: [
+        "Verifique se o output deste nó mudou antes da falha.",
+        "Compare os diffs de estado com um run sem erro.",
+        "Se o output estiver correto, siga para o próximo nó da cadeia causal.",
+      ],
+      evidence,
+    };
+  }
+
+  return {
+    severity: "ok",
+    title: "Sem falha associada",
+    probableCause: "O último evento deste nó não indica erro e ele não está na cadeia causal de falha atual.",
+    nextActions: [
+      "Use input/output e diffs para validar se o comportamento esperado foi produzido.",
+      "Compare com outro run se houver suspeita de regressão.",
+      "Crie um fork se quiser transformar este estado em cenário reexecutável.",
+    ],
+    evidence,
+  };
+}
+
+function readStudioFailureReason(payload: Record<string, unknown>): string {
+  const safety = isRecord(payload.safety) ? payload.safety : null;
+  const custom = isRecord(payload.custom) ? payload.custom : null;
+  for (const source of [payload, safety, custom]) {
+    if (!source) {
+      continue;
+    }
+    for (const key of ["reason", "error", "message", "detail", "blocked_reason", "failure", "exception"]) {
+      const value = source[key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  }
+  return "";
+}
+
+function buildStudioDiagnosisEvidence(
+  nodeEvents: EventView[],
+  event: EventView,
+  latestSnapshot: StudioStateSnapshot | null,
+  causalAnalysis: StudioRunCausalAnalysis,
+): string[] {
+  const evidence = [
+    `evento #${event.seq}`,
+    event.event_type,
+  ];
+  if (typeof event.payload.status === "string") {
+    evidence.push(`status: ${event.payload.status}`);
+  }
+  if (typeof event.payload.phase === "string") {
+    evidence.push(`fase: ${event.payload.phase}`);
+  }
+  if (latestSnapshot) {
+    evidence.push(`snapshot #${latestSnapshot.seq}`);
+  }
+  if (causalAnalysis.failedEventSeq !== null) {
+    evidence.push(`falha #${causalAnalysis.failedEventSeq}`);
+  }
+  evidence.push(`${nodeEvents.length} evento(s) do nó`);
+  return Array.from(new Set(evidence));
 }
 
 function isLlmLikeNode(node: FlowNode): boolean {

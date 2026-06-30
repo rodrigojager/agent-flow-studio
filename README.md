@@ -79,6 +79,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
 - Comparação entre runs.
 - Destaque causal no grafo: upstream, nó de falha, impacto e cascata.
 - Painel "Contexto do nó" com status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output, estado, métricas, spans estruturados, diffs e logs correlacionados.
+- Diagnóstico automático por nó com causa provável, próximas ações e evidências do evento/snapshot.
 - Fork de checkpoint/evento para cenário local reexecutável, preservando origem do run, evento, snapshot e metadata da reexecução.
 
 ### Aprovação E Runtime Docker
