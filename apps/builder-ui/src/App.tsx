@@ -22,6 +22,8 @@ import {
   AlertCircle,
   BarChart3,
   Boxes,
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
   CircleDot,
   Code2,
@@ -174,6 +176,13 @@ interface DirtyTopology {
 
 interface StaleTopology {
   nodeIds: Set<string>;
+}
+
+interface CanvasNodeGroup {
+  id: string;
+  label: string;
+  description: string;
+  nodeIds: string[];
 }
 
 interface DockerHistoryFilterForm {
@@ -509,6 +518,7 @@ export default function App() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [nodeSearchQuery, setNodeSearchQuery] = useState("");
   const [nodeTypeFilter, setNodeTypeFilter] = useState("");
+  const [collapsedCanvasGroupIds, setCollapsedCanvasGroupIds] = useState<Set<string>>(() => new Set());
   const [sandbox, setSandbox] = useState<SandboxStatus | null>(null);
   const [activeSandboxes, setActiveSandboxes] = useState<SandboxStatus[]>([]);
   const [sandboxPort, setSandboxPort] = useState("8090");
@@ -685,6 +695,7 @@ export default function App() {
     if (!flowId) {
       setStudioRuns([]);
       setSelectedStudioRunId("");
+      setCollapsedCanvasGroupIds(new Set());
       setStudioRunsLoadState({ kind: "idle", message: "Selecione um flow para carregar runs locais." });
       return [];
     }
@@ -808,6 +819,7 @@ export default function App() {
         setLoadedFlow(loaded);
         setDraftFlow(loaded.flow);
         setIsDirty(false);
+        setCollapsedCanvasGroupIds(new Set());
         setSelectedNodeId("start");
         setSelectedEdgeId("");
         setSelectedPromptId(loaded.flow.prompts[0]?.id ?? "");
@@ -843,6 +855,7 @@ export default function App() {
         setLoadedFlow(null);
         setDraftFlow(null);
         setIsDirty(false);
+        setCollapsedCanvasGroupIds(new Set());
         setSelectedNodeId("");
         setSelectedEdgeId("");
         setFlowValidation(null);
@@ -1088,6 +1101,12 @@ export default function App() {
   const langGraphApprovalClass = langGraphApprovalStatusClass(langGraphApprovalStatus);
   const nodeFinderAllEntries = useMemo(() => buildNodeFinderEntries(draftFlow), [draftFlow]);
   const nodeTypeFilters = useMemo(() => buildNodeTypeFilterOptions(nodeFinderAllEntries), [nodeFinderAllEntries]);
+  const canvasNodeGroups = useMemo(() => buildCanvasNodeGroups(draftFlow), [draftFlow]);
+  const canvasGroupByNodeId = useMemo(() => buildCanvasGroupByNodeId(canvasNodeGroups), [canvasNodeGroups]);
+  const collapsedCanvasNodeIds = useMemo(
+    () => buildCollapsedCanvasNodeIds(canvasNodeGroups, collapsedCanvasGroupIds),
+    [canvasNodeGroups, collapsedCanvasGroupIds],
+  );
   const nodeFinderEntries = useMemo(
     () => filterNodeFinderEntries(nodeFinderAllEntries, nodeSearchQuery, nodeTypeFilter),
     [nodeFinderAllEntries, nodeSearchQuery, nodeTypeFilter],
@@ -1116,6 +1135,14 @@ export default function App() {
     }
   }, [nodeTypeFilter, nodeTypeFilters]);
 
+  useEffect(() => {
+    const availableGroupIds = new Set(canvasNodeGroups.map((group) => group.id));
+    setCollapsedCanvasGroupIds((current) => {
+      const next = new Set([...current].filter((groupId) => availableGroupIds.has(groupId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [canvasNodeGroups]);
+
   const graph = useMemo(
     () => toReactFlowGraph(
       draftFlow ?? undefined,
@@ -1126,6 +1153,7 @@ export default function App() {
       studioRunCausalContext,
       nodeSearchActive,
       nodeSearchMatchedNodeIds,
+      collapsedCanvasNodeIds,
       dirtyTopology,
       staleTopology,
     ),
@@ -1134,6 +1162,7 @@ export default function App() {
       draftFlow,
       nodeSearchActive,
       nodeSearchMatchedNodeIds,
+      collapsedCanvasNodeIds,
       dirtyTopology,
       staleTopology,
       runtimeEventsData,
@@ -1166,8 +1195,41 @@ export default function App() {
     return draftFlow.edges[selectedEdgeIndex] ?? null;
   }, [draftFlow, selectedEdgeIndex]);
 
+  const toggleCanvasGroup = useCallback(
+    (groupId: string) => {
+      const group = canvasNodeGroups.find((item) => item.id === groupId);
+      const willCollapse = !collapsedCanvasGroupIds.has(groupId);
+      if (willCollapse && group) {
+        if (selectedNodeId && group.nodeIds.includes(selectedNodeId)) {
+          setSelectedNodeId("");
+        }
+        if (selectedEdge && (group.nodeIds.includes(selectedEdge.from) || group.nodeIds.includes(selectedEdge.to))) {
+          setSelectedEdgeId("");
+        }
+      }
+      setCollapsedCanvasGroupIds((current) => {
+        const next = new Set(current);
+        if (next.has(groupId)) {
+          next.delete(groupId);
+        } else {
+          next.add(groupId);
+        }
+        return next;
+      });
+    },
+    [canvasNodeGroups, collapsedCanvasGroupIds, selectedEdge, selectedNodeId],
+  );
+
   const selectCanvasNode = useCallback(
     (nodeId: string, focusViewport = false) => {
+      const groupId = canvasGroupByNodeId.get(nodeId);
+      if (groupId && collapsedCanvasGroupIds.has(groupId)) {
+        setCollapsedCanvasGroupIds((current) => {
+          const next = new Set(current);
+          next.delete(groupId);
+          return next;
+        });
+      }
       setSelectedNodeId(nodeId);
       setSelectedEdgeId("");
       if (inspectorTab === "sandbox") {
@@ -1180,10 +1242,12 @@ export default function App() {
         setInspectorTab("properties");
       }
       if (focusViewport) {
-        void reactFlowRef.current?.fitView({ nodes: [{ id: nodeId }], duration: 220, padding: 1.2, maxZoom: 1.05 });
+        window.requestAnimationFrame(() => {
+          void reactFlowRef.current?.fitView({ nodes: [{ id: nodeId }], duration: 220, padding: 1.2, maxZoom: 1.05 });
+        });
       }
     },
-    [inspectorTab, runtimeEventsData],
+    [canvasGroupByNodeId, collapsedCanvasGroupIds, inspectorTab, runtimeEventsData],
   );
 
   const onNodeClick: NodeMouseHandler = useCallback(
@@ -3424,6 +3488,27 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
             >
               Limpar
             </button>
+            <div className="canvas-group-controls" aria-label="Grupos do canvas">
+              {canvasNodeGroups.map((group) => {
+                const collapsed = collapsedCanvasGroupIds.has(group.id);
+                const Icon = collapsed ? ChevronRight : ChevronDown;
+                return (
+                  <button
+                    type="button"
+                    className={`canvas-group-chip ${collapsed ? "collapsed" : ""}`}
+                    aria-label={`${collapsed ? "Expandir" : "Recolher"} grupo ${group.label}`}
+                    aria-pressed={collapsed}
+                    title={group.description}
+                    key={group.id}
+                    onClick={() => toggleCanvasGroup(group.id)}
+                  >
+                    <Icon size={14} aria-hidden="true" />
+                    <span>{group.label}</span>
+                    <strong>{group.nodeIds.length}</strong>
+                  </button>
+                );
+              })}
+            </div>
             <div className="canvas-node-results" aria-label="Nós encontrados">
               {nodeFinderEntries.length ? (
                 nodeFinderEntries.map((entry) => (
@@ -8426,6 +8511,95 @@ function buildNodeFinderEntries(flow: AgentFlow | null): NodeFinderEntry[] {
   return [...virtualEntries, ...flowEntries];
 }
 
+function buildCanvasNodeGroups(flow: AgentFlow | null): CanvasNodeGroup[] {
+  if (!flow) {
+    return [];
+  }
+  const groups = new Map<string, CanvasNodeGroup>();
+  for (const nodeId of ["start", "end"]) {
+    appendCanvasGroupNode(groups, canvasNodeGroupFor({ id: nodeId, type: "graph" }), nodeId);
+  }
+  for (const node of flow.nodes) {
+    appendCanvasGroupNode(groups, canvasNodeGroupFor(node), node.id);
+  }
+  return [...groups.values()];
+}
+
+function appendCanvasGroupNode(groups: Map<string, CanvasNodeGroup>, group: Omit<CanvasNodeGroup, "nodeIds">, nodeId: string): void {
+  const existing = groups.get(group.id);
+  if (existing) {
+    existing.nodeIds.push(nodeId);
+    return;
+  }
+  groups.set(group.id, { ...group, nodeIds: [nodeId] });
+}
+
+function canvasNodeGroupFor(node: Pick<FlowNode, "id" | "type" | "stage">): Omit<CanvasNodeGroup, "nodeIds"> {
+  if (node.type === "graph" || node.type === "start" || node.type === "end") {
+    return {
+      id: "control",
+      label: "Controle",
+      description: "Entrada, saída e nós de controle do fluxo.",
+    };
+  }
+  if (node.type === "safety_gate") {
+    return {
+      id: "safety",
+      label: "Safety",
+      description: "Guardrails de entrada, saída e contexto.",
+    };
+  }
+  if (["llm_prompt", "llm_structured", "rag_retrieval"].includes(node.type)) {
+    return {
+      id: "ai",
+      label: "IA/RAG",
+      description: "Chamadas de modelo, prompts estruturados e recuperação de contexto.",
+    };
+  }
+  if (["http_request", "database_query", "database_save", "file_extract"].includes(node.type)) {
+    return {
+      id: "integration",
+      label: "Integrações",
+      description: "HTTP, banco, arquivos e fontes externas.",
+    };
+  }
+  if (["code", "switch", "human_input", "transform_json", "evaluation"].includes(node.type)) {
+    return {
+      id: "logic",
+      label: "Lógica",
+      description: "Transformações, decisões, código e interação humana.",
+    };
+  }
+  return {
+    id: "other",
+    label: "Outros",
+    description: "Nós ainda sem grupo semântico específico.",
+  };
+}
+
+function buildCanvasGroupByNodeId(groups: CanvasNodeGroup[]): Map<string, string> {
+  const groupByNodeId = new Map<string, string>();
+  for (const group of groups) {
+    for (const nodeId of group.nodeIds) {
+      groupByNodeId.set(nodeId, group.id);
+    }
+  }
+  return groupByNodeId;
+}
+
+function buildCollapsedCanvasNodeIds(groups: CanvasNodeGroup[], collapsedGroupIds: Set<string>): Set<string> {
+  const nodeIds = new Set<string>();
+  for (const group of groups) {
+    if (!collapsedGroupIds.has(group.id)) {
+      continue;
+    }
+    for (const nodeId of group.nodeIds) {
+      nodeIds.add(nodeId);
+    }
+  }
+  return nodeIds;
+}
+
 function buildNodeTypeFilterOptions(entries: NodeFinderEntry[]): { type: string; label: string }[] {
   const options = new Map<string, string>();
   for (const entry of entries) {
@@ -8513,6 +8687,7 @@ function toReactFlowGraph(
   causalAnalysis: StudioRunCausalAnalysis,
   nodeSearchActive: boolean,
   nodeSearchMatchedNodeIds: Set<string>,
+  collapsedCanvasNodeIds: Set<string>,
   dirtyTopology: DirtyTopology,
   staleTopology: StaleTopology,
 ): { nodes: Node[]; edges: Edge[] } {
@@ -8547,6 +8722,7 @@ function toReactFlowGraph(
     const staleClass = staleTopology.nodeIds.has(id) ? "stale-node" : "";
     return {
       id,
+      hidden: collapsedCanvasNodeIds.has(id),
       position: flowNode?.position ?? defaultNodePosition(index),
       data: {
         label: isVirtual ? id.toUpperCase() : id,
@@ -8589,11 +8765,13 @@ function toReactFlowGraph(
     const currentEdgeId = edgeId(edge, index);
     const dirtyEdgeClass = dirtyTopology.edgeIds.has(currentEdgeId) ? "dirty-edge" : "";
     const staleEdgeClass = staleTopology.nodeIds.has(edge.from) || staleTopology.nodeIds.has(edge.to) ? "stale-edge" : "";
+    const hidden = collapsedCanvasNodeIds.has(edge.from) || collapsedCanvasNodeIds.has(edge.to);
 
     return {
       id: currentEdgeId,
       source: edge.from,
       target: edge.to,
+      hidden,
       label: edge.condition,
       selected: selectedEdgeId === currentEdgeId,
       markerEnd: { type: MarkerType.ArrowClosed },

@@ -65,15 +65,23 @@ test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
   });
   await openBuilder(page, "light", viewports[0]);
 
+  const safetyGroup = page.getByRole("button", { name: "Recolher grupo Safety" });
+  await expect(safetyGroup).toBeVisible();
+  await expect(safetyGroup).toContainText("2");
+  await safetyGroup.click();
+  await expect(page.getByRole("button", { name: "Expandir grupo Safety" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".react-flow__node", { hasText: "input_safety_check" })).toBeHidden();
+
   const searchInput = page.getByLabel("Buscar nós no canvas");
   const typeFilter = page.getByLabel("Filtrar nós por tipo");
   await searchInput.fill("safety");
   await expect(page.locator(".canvas-search-summary")).toHaveText("2/8");
-  await expect(page.locator(".react-flow__node.search-match")).toHaveCount(2);
 
   const inputSafetyChip = page.locator(".canvas-node-chip", { hasText: "input_safety_check" });
   await expect(inputSafetyChip).toBeVisible();
   await inputSafetyChip.click();
+  await expect(page.getByRole("button", { name: "Recolher grupo Safety" })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".react-flow__node.search-match")).toHaveCount(2);
   await expect(inputSafetyChip).toHaveClass(/selected/);
   await expect(page.locator(".react-flow__node.selected")).toContainText("input_safety_check");
   await expect(page.locator(".react-flow__node.stale-node.selected")).toContainText("input_safety_check");
