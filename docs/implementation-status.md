@@ -84,6 +84,7 @@
 - Builder UI mostra ação `Cancelar` durante `Build`, mantendo polling de progresso até o backend confirmar o cancelamento e registrando o evento no histórico operacional.
 - Histórico Docker aceita filtros por etapa textual do progresso (`progressStage`) e status/severidade do progresso (`progressStatus`: running/done/error/warning/info/canceled); a Builder UI expõe os filtros `Etapa` e `Progresso` no painel `Artefato` e aplica o mesmo recorte à lista de progresso visível.
 - Parser de progresso Docker estima percentuais mesmo quando o output do BuildKit não traz contagem explícita, usando etapa inferida, contexto de linhas `#N DONE` e evento final em 100% para builds concluídos.
+- Shell principal da Builder UI ganhou breakpoint responsivo abaixo de 760px: topbar passa a quebrar em duas linhas com toolbar rolável, workspace vira fluxo vertical sem largura mínima desktop, canvas mantém altura útil e inspector fica abaixo do canvas.
 
 ## Verificado
 
@@ -128,11 +129,12 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre cancelamento de build Docker: `/docker-runtime/cancel` aborta o runner pendente via signal, o build retorna `lastStatus=canceled`, o progresso termina com status `canceled` e o filtro de histórico por `status=canceled` encontra a entrada cancelada.
 - `npm run test:builder-api` cobre filtros de histórico/progresso Docker por `progressStage=metadata`, `progressStatus=done`, `progressStatus=canceled` e rejeição de `progressStatus` inválido.
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
+- Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
 
 ## Ainda não implementado
 
 - Studio Local: evoluir o drill-down do nó com prompt renderizado, custos/tokens quando existirem, spans estruturados e reexecução/fork por checkpoint.
-- Tema claro e escuro ainda precisa de auditoria visual completa em todas as telas e viewports, embora o sistema persistente por tokens já exista nas superfícies principais.
+- Tema claro e escuro ainda precisa de auditoria visual completa em todas as abas, estados e viewports, embora o shell principal já tenha correção responsiva mobile e o sistema persistente por tokens exista nas superfícies principais.
 - Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.

@@ -1343,6 +1343,68 @@ button:disabled {
   }
 }
 
+@media (max-width: 760px) {
+  .app-shell {
+    grid-template-rows: auto minmax(0, 1fr) 36px;
+    min-width: 0;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .brand-block {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .brand-block span {
+    max-width: 100%;
+  }
+
+  .toolbar {
+    width: 100%;
+    justify-content: flex-start;
+    padding-bottom: 2px;
+  }
+
+  .flow-select select {
+    width: 170px;
+  }
+
+  .command-button {
+    min-width: auto;
+    white-space: nowrap;
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(480px, 56vh) auto;
+    overflow: auto;
+  }
+
+  .left-panel,
+  .right-panel {
+    border-right: 0;
+    border-left: 0;
+  }
+
+  .left-panel {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .right-panel {
+    border-top: 1px solid var(--border);
+  }
+
+  .panel-section {
+    padding: 14px 16px;
+  }
+}
+
 [data-theme] {
   color: var(--text);
   background: var(--app-bg);

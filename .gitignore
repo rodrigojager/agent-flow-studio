@@ -12,3 +12,4 @@ build/
 .tmp.drivedownload/
 .builder-api.log
 .playwright-mcp/
+Temp/
