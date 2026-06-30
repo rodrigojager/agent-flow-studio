@@ -32,6 +32,7 @@ import {
   FileJson,
   Gauge,
   GitBranch,
+  Library,
   Play,
   Plus,
   RefreshCw,
@@ -80,7 +81,9 @@ import {
   generateLangGraphSandbox,
   generateRuntimeManifest,
   importFlowWorkspace,
+  applyLocalCatalogItem,
   listGeneratedArtifact,
+  listLocalCatalog,
   listFlows,
   listLlmAdapters,
   listSandboxes,
@@ -96,6 +99,7 @@ import {
   runtimeTranscript,
   sandboxStatus,
   saveFlow,
+  saveLocalCatalogItem,
   savePromptAsset,
   saveRuntimeManifest,
   saveSchemaAsset,
@@ -130,6 +134,9 @@ import type {
   GeneratedArtifactFileContent,
   GeneratedArtifactListing,
   DockerRuntimeOperationStatus,
+  LocalCatalog,
+  LocalCatalogItem,
+  LocalCatalogItemKind,
   LangGraphSandboxApproval,
   LangGraphSandboxApprovalStatus,
   LlmAdapterCatalogItem,
@@ -152,7 +159,7 @@ import type {
 } from "./types.ts";
 import "./styles.css";
 
-type InspectorTab = "properties" | "files" | "validation" | "json" | "artifact" | "runtime" | "sandbox";
+type InspectorTab = "properties" | "files" | "catalog" | "validation" | "json" | "artifact" | "runtime" | "sandbox";
 type StatusKind = "idle" | "ok" | "error" | "busy";
 type ThemeMode = "light" | "dark";
 type PromptMetadataPatch = Partial<Pick<PromptRef, "version" | "description" | "tags" | "variables">>;
@@ -546,6 +553,7 @@ const dockerHistoryStatusOptions: DockerRuntimeOperationStatus[] = ["idle", "run
 const dockerProgressStatusOptions: DockerRuntimeProgressStatus[] = ["running", "done", "error", "warning", "info", "canceled"];
 const dockerHistoryLevelOptions: DockerRuntimeHistoryLevel[] = ["error", "warning", "info", "success"];
 const dockerCriticalOperationOrder: DockerCriticalOperation[] = ["build", "up", "smoke"];
+const catalogKindOptions: LocalCatalogItemKind[] = ["prompt", "schema", "tool", "agent_template", "skill"];
 const dockerHistoryFilterDefaults: DockerHistoryFilterForm = {
   operation: "",
   status: "",
@@ -642,6 +650,9 @@ export default function App() {
     useState<PanelLoadState>({ kind: "idle", message: "Nenhum prompt selecionado." });
   const [schemaAssetLoadState, setSchemaAssetLoadState] =
     useState<PanelLoadState>({ kind: "idle", message: "Nenhum schema selecionado." });
+  const [localCatalog, setLocalCatalog] = useState<LocalCatalog | null>(null);
+  const [catalogLoadState, setCatalogLoadState] =
+    useState<PanelLoadState>({ kind: "idle", message: "Catálogo local ainda não carregado." });
   const [runtimeManifestLoadState, setRuntimeManifestLoadState] =
     useState<PanelLoadState>({ kind: "idle", message: "runtime.manifest.json ainda não carregado." });
   const [studioRunsLoadState, setStudioRunsLoadState] =
@@ -724,9 +735,34 @@ export default function App() {
     }
   }, []);
 
+  const refreshLocalCatalog = useCallback(async (silent = false) => {
+    if (!silent) {
+      setStatus({ kind: "busy", message: "Carregando catálogo local." });
+    }
+    setCatalogLoadState({ kind: "loading", message: "Carregando catálogo local." });
+    try {
+      const catalog = await listLocalCatalog();
+      setLocalCatalog(catalog);
+      setCatalogLoadState({ kind: "ready", message: `${catalog.items.length} item(ns) no catálogo local.` });
+      if (!silent) {
+        setStatus({ kind: "ok", message: `${catalog.items.length} item(ns) no catálogo local.` });
+      }
+      return catalog;
+    } catch (error) {
+      const message = errorMessage(error);
+      setLocalCatalog(null);
+      setCatalogLoadState({ kind: "error", message: `Erro ao carregar catálogo local: ${message}` });
+      if (!silent) {
+        setStatus({ kind: "error", message });
+      }
+      throw error;
+    }
+  }, []);
+
   useEffect(() => {
     void refreshRuntimeManifest(true);
-  }, [refreshRuntimeManifest]);
+    void refreshLocalCatalog(true);
+  }, [refreshLocalCatalog, refreshRuntimeManifest]);
 
   const refreshSandboxState = useCallback(
     async (flowId = selectedFlowId, silent = false) => {
@@ -2201,6 +2237,96 @@ export default function App() {
       setFlowValidation(null);
       await refreshFlows(true);
       setStatus({ kind: "ok", message: `Schema ${removed.deleted.id} removido.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleSaveSelectedPromptToCatalog() {
+    if (!draftFlow || !selectedPromptId) {
+      return;
+    }
+    const prompt = draftFlow.prompts.find((item) => item.id === selectedPromptId);
+    if (!prompt) {
+      setStatus({ kind: "error", message: `Prompt ${selectedPromptId} não encontrado no flow atual.` });
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando prompt ${selectedPromptId} no catálogo local.` });
+    try {
+      const result = await saveLocalCatalogItem({
+        id: localCatalogId(draftFlow.id, selectedPromptId),
+        kind: "prompt",
+        name: prompt.description || prompt.id,
+        description: prompt.description || `Prompt ${prompt.id} de ${draftFlow.name}.`,
+        tags: uniqueTextList(["prompt", "flow", draftFlow.id, ...(prompt.tags ?? [])]),
+        content: promptContent,
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Prompt ${prompt.id} salvo no catálogo local.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleSaveSelectedSchemaToCatalog() {
+    if (!draftFlow || !selectedSchemaId) {
+      return;
+    }
+    const schema = draftFlow.schemas.find((item) => item.id === selectedSchemaId);
+    if (!schema) {
+      setStatus({ kind: "error", message: `Schema ${selectedSchemaId} não encontrado no flow atual.` });
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando schema ${selectedSchemaId} no catálogo local.` });
+    try {
+      const result = await saveLocalCatalogItem({
+        id: localCatalogId(draftFlow.id, selectedSchemaId),
+        kind: "schema",
+        name: schema.description || schema.id,
+        description: schema.description || `Schema ${schema.id} de ${draftFlow.name}.`,
+        tags: uniqueTextList(["schema", "flow", draftFlow.id, ...(schema.tags ?? [])]),
+        content: schemaContent,
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Schema ${schema.id} salvo no catálogo local.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleApplyCatalogItem(item: LocalCatalogItem, targetNodeId?: string) {
+    if (!selectedFlowId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Aplicando ${item.name} no flow.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const result = await applyLocalCatalogItem(selectedFlowId, item.id, item.kind, targetNodeId);
+      setLoadedFlow({ path: result.flowPath, flow: result.flow });
+      setDraftFlow(result.flow);
+      setIsDirty(false);
+      setFlowValidation(null);
+      setStudioScenarioBatchResults([]);
+      setStudioScenarioBatchApproval(null);
+      if (result.prompt) {
+        setSelectedPromptId(result.prompt.id);
+        setPromptContent(result.prompt.content);
+        setPromptDirty(false);
+        setInspectorTab("files");
+      } else if (result.schema) {
+        setSelectedSchemaId(result.schema.id);
+        setSchemaContent(result.schema.content);
+        setSchemaDirty(false);
+        setInspectorTab("files");
+      } else if (result.node) {
+        setSelectedNodeId(result.node.id);
+        setSelectedEdgeId("");
+        setInspectorTab("properties");
+      }
+      await refreshFlows(true);
+      setStatus({ kind: "ok", message: `${item.name} aplicado ao flow.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
@@ -3853,6 +3979,13 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
             </button>
             <button
               type="button"
+              className={inspectorTab === "catalog" ? "active" : ""}
+              onClick={() => setInspectorTab("catalog")}
+            >
+              Catálogo
+            </button>
+            <button
+              type="button"
               className={inspectorTab === "validation" ? "active" : ""}
               onClick={() => setInspectorTab("validation")}
             >
@@ -3949,6 +4082,19 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onSchemaDelete={handleDeleteSchema}
               onSchemaSave={handleSaveSchema}
               onMetadataSave={handleSaveWorkspace}
+            />
+          ) : inspectorTab === "catalog" ? (
+            <CatalogPanel
+              flow={draftFlow}
+              selectedNodeId={selectedNodeId}
+              selectedPromptId={selectedPromptId}
+              selectedSchemaId={selectedSchemaId}
+              catalog={localCatalog}
+              loadState={catalogLoadState}
+              onRefresh={() => refreshLocalCatalog()}
+              onApply={handleApplyCatalogItem}
+              onSavePrompt={handleSaveSelectedPromptToCatalog}
+              onSaveSchema={handleSaveSelectedSchemaToCatalog}
             />
           ) : inspectorTab === "validation" ? (
             <ValidationPanel
@@ -5563,6 +5709,132 @@ function PanelNotice({ state }: { state: PanelLoadState }) {
     >
       {isError ? <AlertCircle size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
       <span>{state.message}</span>
+    </div>
+  );
+}
+
+function CatalogPanel({
+  flow,
+  selectedNodeId,
+  selectedPromptId,
+  selectedSchemaId,
+  catalog,
+  loadState,
+  onRefresh,
+  onApply,
+  onSavePrompt,
+  onSaveSchema,
+}: {
+  flow: AgentFlow | null;
+  selectedNodeId: string;
+  selectedPromptId: string;
+  selectedSchemaId: string;
+  catalog: LocalCatalog | null;
+  loadState: PanelLoadState;
+  onRefresh: () => void;
+  onApply: (item: LocalCatalogItem, targetNodeId?: string) => void;
+  onSavePrompt: () => void;
+  onSaveSchema: () => void;
+}) {
+  const [kindFilter, setKindFilter] = useState<LocalCatalogItemKind | "">("");
+  const items = useMemo(
+    () => (catalog?.items ?? []).filter((item) => !kindFilter || item.kind === kindFilter),
+    [catalog, kindFilter],
+  );
+
+  if (!flow) {
+    return (
+      <div className="empty-state">
+        <AlertCircle size={18} aria-hidden="true" />
+        <span>Nenhum flow carregado.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="assets-body catalog-body">
+      <section className="asset-section">
+        <div className="asset-metadata-title">
+          <strong>Catálogo local</strong>
+          <span>{catalog?.path ?? ".agent-flow/catalog/registry.json"}</span>
+        </div>
+        <PanelNotice state={loadState} />
+        <div className="catalog-toolbar">
+          <label>
+            <span>Tipo</span>
+            <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as LocalCatalogItemKind | "")}>
+              <option value="">Todos</option>
+              {catalogKindOptions.map((kind) => (
+                <option value={kind} key={kind}>
+                  {catalogKindLabel(kind)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="command-button" onClick={onRefresh}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Atualizar
+          </button>
+        </div>
+        <div className="catalog-toolbar">
+          <button type="button" className="command-button" onClick={onSavePrompt} disabled={!selectedPromptId}>
+            <Save size={16} aria-hidden="true" />
+            Salvar prompt atual
+          </button>
+          <button type="button" className="command-button" onClick={onSaveSchema} disabled={!selectedSchemaId}>
+            <Save size={16} aria-hidden="true" />
+            Salvar schema atual
+          </button>
+        </div>
+      </section>
+
+      <section className="asset-section">
+        <div className="asset-metadata-title">
+          <strong>Itens reutilizáveis</strong>
+          <span>{items.length}</span>
+        </div>
+        {items.length ? (
+          <div className="catalog-list">
+            {items.map((item) => (
+              <article className="catalog-card" key={`${item.kind}-${item.id}`}>
+                <div className="catalog-card-header">
+                  <Library size={16} aria-hidden="true" />
+                  <span>{catalogKindLabel(item.kind)}</span>
+                  <small>{item.source === "builtin" ? "embutido" : "local"}</small>
+                </div>
+                <strong>{item.name}</strong>
+                <p>{item.description || item.id}</p>
+                <div className="catalog-tags">
+                  {item.tags.slice(0, 4).map((tag) => (
+                    <span key={`${item.id}-${tag}`}>{tag}</span>
+                  ))}
+                </div>
+                <div className="catalog-card-actions">
+                  <button type="button" className="command-button" onClick={() => onApply(item)}>
+                    <Plus size={16} aria-hidden="true" />
+                    {item.kind === "tool" ? "Criar nó" : "Adicionar"}
+                  </button>
+                  <button
+                    type="button"
+                    className="command-button"
+                    onClick={() => onApply(item, selectedNodeId)}
+                    disabled={!selectedNodeId}
+                    title={selectedNodeId ? `Aplicar em ${selectedNodeId}` : "Selecione um nó para aplicar diretamente"}
+                  >
+                    <Sparkles size={16} aria-hidden="true" />
+                    Usar no nó
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="runtime-item">
+            <strong>Nenhum item encontrado</strong>
+            <span>Altere o filtro ou salve um prompt/schema atual no catálogo local.</span>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -11112,6 +11384,34 @@ function isEditableShortcutTarget(target: EventTarget | null): boolean {
   }
   const tagName = target.tagName.toLowerCase();
   return tagName === "input" || tagName === "textarea" || tagName === "select";
+}
+
+function catalogKindLabel(kind: LocalCatalogItemKind): string {
+  if (kind === "prompt") {
+    return "Prompt";
+  }
+  if (kind === "schema") {
+    return "Schema";
+  }
+  if (kind === "tool") {
+    return "Tool";
+  }
+  if (kind === "agent_template") {
+    return "Agent";
+  }
+  return "Skill";
+}
+
+function localCatalogId(flowId: string, assetId: string): string {
+  return `${flowId}-${assetId}`
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "catalog-item";
+}
+
+function uniqueTextList(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right));
 }
 
 function manifestValidationMessage(result: RuntimeManifestValidationResult): string {

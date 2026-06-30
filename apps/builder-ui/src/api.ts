@@ -18,6 +18,10 @@ import type {
   GeneratedArtifactFileContent,
   GeneratedArtifactListing,
   AgentFlow,
+  LocalCatalog,
+  LocalCatalogApplyResult,
+  LocalCatalogItemKind,
+  LocalCatalogSaveResult,
   LlmAdapterCatalogResult,
   LoadedFlow,
   LangGraphSandboxApprovalStatus,
@@ -62,6 +66,39 @@ export async function createFlowWorkspace(id: string): Promise<CreatedFlowWorksp
 
 export async function listLlmAdapters(): Promise<LlmAdapterCatalogResult> {
   return request<LlmAdapterCatalogResult>("/llm-adapters");
+}
+
+export async function listLocalCatalog(): Promise<LocalCatalog> {
+  return request<LocalCatalog>("/catalog");
+}
+
+export async function saveLocalCatalogItem(item: {
+  id: string;
+  kind: LocalCatalogItemKind;
+  name: string;
+  description?: string;
+  tags?: string[];
+  content?: string;
+  nodePatch?: Record<string, unknown>;
+}): Promise<LocalCatalogSaveResult> {
+  return request<LocalCatalogSaveResult>("/catalog/items", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(item),
+  });
+}
+
+export async function applyLocalCatalogItem(
+  flowId: string,
+  itemId: string,
+  kind: LocalCatalogItemKind,
+  targetNodeId?: string,
+): Promise<LocalCatalogApplyResult> {
+  return request<LocalCatalogApplyResult>(`/flows/${encodeURIComponent(flowId)}/catalog/apply`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ itemId, kind, targetNodeId }),
+  });
 }
 
 export async function saveFlow(flowId: string, flow: AgentFlow): Promise<LoadedFlow> {

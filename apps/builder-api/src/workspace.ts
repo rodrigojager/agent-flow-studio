@@ -152,6 +152,44 @@ export interface ImportFlowWorkspaceResult {
   schemas: number;
 }
 
+export type LocalCatalogItemKind = "prompt" | "schema" | "tool" | "agent_template" | "skill";
+
+export interface LocalCatalogItem {
+  id: string;
+  kind: LocalCatalogItemKind;
+  name: string;
+  description: string;
+  tags: string[];
+  scope: "local";
+  source: "builtin" | "local";
+  createdAt: string;
+  updatedAt: string;
+  content?: string;
+  nodePatch?: Record<string, unknown>;
+}
+
+export interface LocalCatalog {
+  format: typeof LOCAL_CATALOG_FORMAT;
+  path: string;
+  items: LocalCatalogItem[];
+}
+
+export interface SaveLocalCatalogItemResult {
+  status: "ok";
+  item: LocalCatalogItem;
+  catalog: LocalCatalog;
+}
+
+export interface ApplyCatalogItemResult {
+  status: "ok";
+  item: LocalCatalogItem;
+  flow: AgentFlow;
+  flowPath: string;
+  prompt?: FlowAssetContent;
+  schema?: FlowAssetContent;
+  node?: AgentFlow["nodes"][number];
+}
+
 export interface FlowValidationResult {
   status: "ok" | "error";
   id: string;
@@ -199,6 +237,8 @@ export interface GeneratedArtifactArchive {
 }
 
 const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
+const LOCAL_CATALOG_FORMAT = "agent-flow-builder.local-catalog.v1";
+const LOCAL_CATALOG_PATH = ".agent-flow/catalog/registry.json";
 const GENERATED_ARTIFACT_MAX_FILES = 1000;
 const GENERATED_ARTIFACT_MAX_PREVIEW_BYTES = 512 * 1024;
 const GENERATED_ARTIFACT_IGNORED_DIRS = new Set([".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modules", ".langgraph_api"]);
@@ -894,6 +934,67 @@ export async function importFlowWorkspace(
   };
 }
 
+export async function listLocalCatalog(workspaceRoot: string): Promise<LocalCatalog> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  return {
+    format: LOCAL_CATALOG_FORMAT,
+    path: LOCAL_CATALOG_PATH,
+    items: sortCatalogItems([...builtInCatalogItems(), ...(await readStoredCatalogItems(root))]),
+  };
+}
+
+export async function saveLocalCatalogItem(workspaceRoot: string, value: unknown): Promise<SaveLocalCatalogItemResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const input = parseLocalCatalogItemInput(value);
+  const builtInKey = catalogItemKey(input.kind, input.id);
+  if (builtInCatalogItems().some((item) => catalogItemKey(item.kind, item.id) === builtInKey)) {
+    throw new WorkspaceError(`Item de catálogo embutido não pode ser sobrescrito: ${input.kind}/${input.id}`, 409);
+  }
+  const now = new Date().toISOString();
+  const stored = await readStoredCatalogItems(root);
+  const previous = stored.find((item) => catalogItemKey(item.kind, item.id) === builtInKey);
+  const item: LocalCatalogItem = {
+    ...input,
+    scope: "local",
+    source: "local",
+    createdAt: previous?.createdAt ?? now,
+    updatedAt: now,
+  };
+  const nextItems = sortCatalogItems([
+    ...stored.filter((existing) => catalogItemKey(existing.kind, existing.id) !== builtInKey),
+    item,
+  ]);
+  await writeStoredCatalogItems(root, nextItems);
+  return {
+    status: "ok",
+    item,
+    catalog: await listLocalCatalog(root),
+  };
+}
+
+export async function applyCatalogItemToFlow(
+  workspaceRoot: string,
+  flowId: string,
+  value: unknown,
+): Promise<ApplyCatalogItemResult> {
+  const input = parseApplyCatalogItemInput(value);
+  const catalog = await listLocalCatalog(workspaceRoot);
+  const item = findCatalogItem(catalog.items, input.itemId, input.kind);
+  if (!item) {
+    throw new WorkspaceError(`Item de catálogo não encontrado: ${input.itemId}`, 404);
+  }
+  if (item.kind === "prompt") {
+    return applyPromptCatalogItem(workspaceRoot, flowId, item, input);
+  }
+  if (item.kind === "schema") {
+    return applySchemaCatalogItem(workspaceRoot, flowId, item, input);
+  }
+  if (item.kind === "tool") {
+    return applyToolCatalogItem(workspaceRoot, flowId, item, input);
+  }
+  throw new WorkspaceError(`Aplicação de ${item.kind} ainda não está disponível para flows.`, 409);
+}
+
 export async function listGeneratedArtifact(workspaceRoot: string, outDir: string): Promise<GeneratedArtifactListing> {
   const artifact = await resolveGeneratedArtifactRoot(workspaceRoot, outDir);
   const files = await collectGeneratedArtifactFiles(artifact.absoluteOutDir);
@@ -976,6 +1077,490 @@ async function writeFlowFile(loaded: LoadedFlow, flow: AgentFlow): Promise<void>
   const tempPath = `${loaded.absolutePath}.tmp-${Date.now()}`;
   await writeFile(tempPath, serialized, "utf-8");
   await rename(tempPath, loaded.absolutePath);
+}
+
+interface LocalCatalogItemInput {
+  id: string;
+  kind: LocalCatalogItemKind;
+  name: string;
+  description: string;
+  tags: string[];
+  content?: string;
+  nodePatch?: Record<string, unknown>;
+}
+
+interface ApplyCatalogItemInput {
+  itemId: string;
+  kind?: LocalCatalogItemKind;
+  targetNodeId?: string;
+  id?: string;
+}
+
+function builtInCatalogItems(): LocalCatalogItem[] {
+  const createdAt = "2026-06-30T00:00:00.000Z";
+  return [
+    {
+      id: "guided-question-system",
+      kind: "prompt",
+      name: "Prompt de perguntas guiadas",
+      description: "System prompt para agentes que fazem perguntas, coletam respostas e encerram com resumo.",
+      tags: ["starter", "conversation", "questions"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      content:
+        "Você é um agente de conversa guiada.\n\n" +
+        "- Faça uma pergunta objetiva por vez.\n" +
+        "- Use as respostas anteriores para decidir a próxima pergunta.\n" +
+        "- Quando tiver contexto suficiente, gere um resumo claro e acionável.\n",
+    },
+    {
+      id: "question-list-output",
+      kind: "schema",
+      name: "Schema de lista de perguntas",
+      description: "Output estruturado para geração de perguntas a partir de conteúdo consultado.",
+      tags: ["questions", "structured-output"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      content: `${JSON.stringify(
+        {
+          type: "object",
+          required: ["questions"],
+          properties: {
+            questions: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["question", "reason"],
+                properties: {
+                  question: { type: "string" },
+                  reason: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    },
+    {
+      id: "http-json-tool",
+      kind: "tool",
+      name: "HTTP JSON tool",
+      description: "Template para chamar um executor HTTP local por contrato JSON.",
+      tags: ["tool", "http", "json"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      nodePatch: {
+        type: "code",
+        codeLanguage: "external",
+        codeExecution: "http",
+        method: "POST",
+        url: "http://127.0.0.1:9001/run",
+        inputPath: "$.input",
+        outputPath: "$.tool_result",
+        timeoutSeconds: 30,
+      },
+    },
+    {
+      id: "mcp-stdio-tool",
+      kind: "tool",
+      name: "MCP stdio tool",
+      description: "Template para chamar uma tool MCP local via stdio.",
+      tags: ["tool", "mcp", "stdio"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      nodePatch: {
+        type: "code",
+        codeLanguage: "external",
+        codeExecution: "mcp",
+        mcpCommand: "python",
+        mcpArgs: ["tools/server.py"],
+        mcpToolName: "tool_name",
+        mcpProtocolVersion: "2025-11-25",
+        inputPath: "$.input",
+        outputPath: "$.tool_result",
+        timeoutSeconds: 30,
+      },
+    },
+    {
+      id: "sidecar-python-tool",
+      kind: "tool",
+      name: "Sidecar Python tool",
+      description: "Template para chamar um processo Python local por stdin/stdout JSON.",
+      tags: ["tool", "sidecar", "python"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      nodePatch: {
+        type: "code",
+        codeLanguage: "python",
+        codeExecution: "sidecar",
+        sidecarCommand: "python",
+        sidecarArgs: ["app/code/tool.py"],
+        inputPath: "$.input",
+        outputPath: "$.tool_result",
+        timeoutSeconds: 30,
+      },
+    },
+  ];
+}
+
+async function readStoredCatalogItems(workspaceRoot: string): Promise<LocalCatalogItem[]> {
+  const catalogPath = safeResolve(workspaceRoot, LOCAL_CATALOG_PATH);
+  let raw = "";
+  try {
+    raw = await readFile(catalogPath, "utf-8");
+  } catch {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new WorkspaceError("Catálogo local não é JSON válido.", 422, error);
+  }
+  if (!isRecord(parsed) || parsed.format !== LOCAL_CATALOG_FORMAT || !Array.isArray(parsed.items)) {
+    throw new WorkspaceError("Catálogo local não respeita o formato esperado.", 422);
+  }
+  return parsed.items.map(parseStoredCatalogItem);
+}
+
+async function writeStoredCatalogItems(workspaceRoot: string, items: LocalCatalogItem[]): Promise<void> {
+  const catalogPath = safeResolve(workspaceRoot, LOCAL_CATALOG_PATH);
+  await mkdir(path.dirname(catalogPath), { recursive: true });
+  await writeFile(
+    catalogPath,
+    `${JSON.stringify({ format: LOCAL_CATALOG_FORMAT, updatedAt: new Date().toISOString(), items }, null, 2)}\n`,
+    "utf-8",
+  );
+}
+
+function parseStoredCatalogItem(value: unknown): LocalCatalogItem {
+  const input = parseLocalCatalogItemInput(value);
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Item de catálogo deve ser objeto JSON.", 422);
+  }
+  return {
+    ...input,
+    scope: "local",
+    source: "local",
+    createdAt: readCatalogTimestamp(value.createdAt, "createdAt"),
+    updatedAt: readCatalogTimestamp(value.updatedAt, "updatedAt"),
+  };
+}
+
+function parseLocalCatalogItemInput(value: unknown): LocalCatalogItemInput {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Item de catálogo deve ser objeto JSON.", 400);
+  }
+  const kind = parseCatalogKind(value.kind);
+  const id = parseAssetId(value.id, "id do item");
+  const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : titleFromId(id);
+  const description = typeof value.description === "string" ? value.description.trim() : "";
+  const tags = value.tags === undefined ? [] : parseStringList(value.tags, "tags");
+  const item: LocalCatalogItemInput = {
+    id,
+    kind,
+    name,
+    description,
+    tags,
+  };
+  if (kind === "prompt") {
+    item.content = typeof value.content === "string" ? value.content : builtInCatalogItems()[0].content ?? "";
+  } else if (kind === "schema") {
+    const content = typeof value.content === "string" && value.content.trim() ? value.content : '{"type":"object","properties":{}}';
+    try {
+      item.content = `${JSON.stringify(JSON.parse(content), null, 2)}\n`;
+    } catch (error) {
+      throw new WorkspaceError("Conteúdo do item schema deve ser JSON válido.", 422, error);
+    }
+  } else if (kind === "tool") {
+    if (!isRecord(value.nodePatch)) {
+      throw new WorkspaceError("Item tool precisa de nodePatch.", 422);
+    }
+    item.nodePatch = sanitizeCatalogNodePatch(value.nodePatch);
+  } else if (typeof value.content === "string") {
+    item.content = value.content;
+  }
+  return item;
+}
+
+function parseApplyCatalogItemInput(value: unknown): ApplyCatalogItemInput {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Aplicação de catálogo deve ser objeto JSON.", 400);
+  }
+  const itemId = parseAssetId(value.itemId, "itemId");
+  const kind = value.kind === undefined ? undefined : parseCatalogKind(value.kind);
+  const targetNodeId = typeof value.targetNodeId === "string" && value.targetNodeId.trim() ? value.targetNodeId.trim() : undefined;
+  const id = typeof value.id === "string" && value.id.trim() ? parseAssetId(value.id, "id") : undefined;
+  return { itemId, kind, targetNodeId, id };
+}
+
+function parseCatalogKind(value: unknown): LocalCatalogItemKind {
+  if (
+    value === "prompt" ||
+    value === "schema" ||
+    value === "tool" ||
+    value === "agent_template" ||
+    value === "skill"
+  ) {
+    return value;
+  }
+  throw new WorkspaceError("kind do catálogo deve ser prompt, schema, tool, agent_template ou skill.", 422);
+}
+
+function readCatalogTimestamp(value: unknown, label: string): string {
+  if (typeof value === "string" && !Number.isNaN(Date.parse(value))) {
+    return value;
+  }
+  throw new WorkspaceError(`Timestamp inválido no catálogo local: ${label}`, 422);
+}
+
+function findCatalogItem(
+  items: LocalCatalogItem[],
+  itemId: string,
+  kind?: LocalCatalogItemKind,
+): LocalCatalogItem | null {
+  return items.find((item) => item.id === itemId && (!kind || item.kind === kind)) ?? null;
+}
+
+async function applyPromptCatalogItem(
+  workspaceRoot: string,
+  flowId: string,
+  item: LocalCatalogItem,
+  input: ApplyCatalogItemInput,
+): Promise<ApplyCatalogItemResult> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const id = uniqueCatalogRefId(input.id ?? item.id, loaded.flow.prompts.map((prompt) => prompt.id));
+  const assetPath = uniqueCatalogAssetPath(loaded.flow, "prompts", `${id}.md`);
+  const content = item.content ?? "";
+  const nextNodes = input.targetNodeId
+    ? patchNodeById(loaded.flow.nodes, input.targetNodeId, { promptId: id })
+    : loaded.flow.nodes;
+  const promptRef = {
+    id,
+    path: assetPath,
+    version: "v1",
+    description: item.description || undefined,
+    tags: uniqueCatalogTags(["catalog", ...item.tags]),
+    variables: extractPromptVariables(content),
+  };
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    prompts: [...loaded.flow.prompts, promptRef],
+    nodes: nextNodes,
+  });
+  await mkdir(path.dirname(safeResolveFlowAsset(loaded.flowRoot, assetPath)), { recursive: true });
+  await writeFile(safeResolveFlowAsset(loaded.flowRoot, assetPath), content, "utf-8");
+  await writeFlowFile(loaded, flow);
+  return {
+    status: "ok",
+    item,
+    flow,
+    flowPath: loaded.relativePath,
+    prompt: { id, path: assetPath, content },
+  };
+}
+
+async function applySchemaCatalogItem(
+  workspaceRoot: string,
+  flowId: string,
+  item: LocalCatalogItem,
+  input: ApplyCatalogItemInput,
+): Promise<ApplyCatalogItemResult> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const id = uniqueCatalogRefId(input.id ?? item.id, loaded.flow.schemas.map((schema) => schema.id));
+  const assetPath = uniqueCatalogAssetPath(loaded.flow, "schemas", `${id}.schema.json`);
+  let content = item.content ?? '{"type":"object","properties":{}}';
+  try {
+    content = `${JSON.stringify(JSON.parse(content), null, 2)}\n`;
+  } catch (error) {
+    throw new WorkspaceError(`Schema do item de catálogo ${item.id} não é JSON válido.`, 422, error);
+  }
+  const nextNodes = input.targetNodeId
+    ? patchNodeById(loaded.flow.nodes, input.targetNodeId, { outputSchema: id })
+    : loaded.flow.nodes;
+  const schemaRef = {
+    id,
+    path: assetPath,
+    version: "v1",
+    description: item.description || undefined,
+    tags: uniqueCatalogTags(["catalog", ...item.tags]),
+  };
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    schemas: [...loaded.flow.schemas, schemaRef],
+    nodes: nextNodes,
+  });
+  await mkdir(path.dirname(safeResolveFlowAsset(loaded.flowRoot, assetPath)), { recursive: true });
+  await writeFile(safeResolveFlowAsset(loaded.flowRoot, assetPath), content, "utf-8");
+  await writeFlowFile(loaded, flow);
+  return {
+    status: "ok",
+    item,
+    flow,
+    flowPath: loaded.relativePath,
+    schema: { id, path: assetPath, content },
+  };
+}
+
+async function applyToolCatalogItem(
+  workspaceRoot: string,
+  flowId: string,
+  item: LocalCatalogItem,
+  input: ApplyCatalogItemInput,
+): Promise<ApplyCatalogItemResult> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const patch = sanitizeCatalogNodePatch(item.nodePatch ?? {});
+  let appliedNode: AgentFlow["nodes"][number] | null = null;
+  const nodes = input.targetNodeId
+    ? loaded.flow.nodes.map((node) => {
+        if (node.id !== input.targetNodeId) {
+          return node;
+        }
+        appliedNode = {
+          ...node,
+          ...patch,
+          id: node.id,
+          position: node.position,
+          description: stringFromPatch(patch.description) || node.description || item.description || item.name,
+        };
+        return appliedNode;
+      })
+    : [
+        ...loaded.flow.nodes,
+        {
+          type: "code",
+          description: item.description || item.name,
+          ...patch,
+          id: uniqueCatalogRefId(input.id ?? item.id, loaded.flow.nodes.map((node) => node.id)),
+          position: nextCatalogNodePosition(loaded.flow.nodes),
+        },
+      ];
+  if (input.targetNodeId && !appliedNode) {
+    throw new WorkspaceError(`Nó alvo não encontrado para aplicar tool: ${input.targetNodeId}`, 404);
+  }
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    nodes,
+  });
+  const node = appliedNode ?? flow.nodes.at(-1);
+  await writeFlowFile(loaded, flow);
+  return {
+    status: "ok",
+    item,
+    flow,
+    flowPath: loaded.relativePath,
+    node,
+  };
+}
+
+function sanitizeCatalogNodePatch(value: Record<string, unknown>): Record<string, unknown> {
+  const patch = { ...value };
+  delete patch.id;
+  delete patch.position;
+  return patch;
+}
+
+function stringFromPatch(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function patchNodeById(
+  nodes: AgentFlow["nodes"],
+  targetNodeId: string,
+  patch: Partial<AgentFlow["nodes"][number]>,
+): AgentFlow["nodes"] {
+  let found = false;
+  const nextNodes = nodes.map((node) => {
+    if (node.id !== targetNodeId) {
+      return node;
+    }
+    found = true;
+    return { ...node, ...patch, id: node.id, position: node.position };
+  });
+  if (!found) {
+    throw new WorkspaceError(`Nó alvo não encontrado: ${targetNodeId}`, 404);
+  }
+  return nextNodes;
+}
+
+function uniqueCatalogRefId(preferred: string, existing: string[]): string {
+  const base = slugAssetId(preferred);
+  const used = new Set(existing);
+  if (!used.has(base)) {
+    return base;
+  }
+  let index = 2;
+  while (used.has(`${base}-${index}`)) {
+    index += 1;
+  }
+  return `${base}-${index}`;
+}
+
+function uniqueCatalogAssetPath(flow: AgentFlow, prefix: "prompts" | "schemas", fileName: string): string {
+  const normalizedFile = sanitizeFileName(fileName);
+  const extension = path.extname(normalizedFile);
+  const basename = extension ? normalizedFile.slice(0, -extension.length) : normalizedFile;
+  const used = new Set([...flow.prompts, ...flow.schemas].map((asset) => normalizeAssetPath(asset.path)));
+  let candidate = normalizeAssetPath(`${prefix}/${normalizedFile}`);
+  let index = 2;
+  while (used.has(candidate)) {
+    candidate = normalizeAssetPath(`${prefix}/${basename}-${index}${extension}`);
+    index += 1;
+  }
+  return candidate;
+}
+
+function nextCatalogNodePosition(nodes: AgentFlow["nodes"]): { x: number; y: number } {
+  const maxX = Math.max(0, ...nodes.map((node) => node.position?.x ?? 0));
+  const averageY = nodes.length
+    ? Math.round(nodes.reduce((total, node) => total + (node.position?.y ?? 0), 0) / nodes.length)
+    : 120;
+  return { x: maxX + 260, y: averageY };
+}
+
+function slugAssetId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "catalog-item";
+}
+
+function uniqueCatalogTags(tags: string[]): string[] {
+  return Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right));
+}
+
+function extractPromptVariables(content: string): string[] {
+  const variables = new Set<string>();
+  const pattern = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    variables.add(match[1]);
+  }
+  return Array.from(variables).sort((left, right) => left.localeCompare(right));
+}
+
+function sortCatalogItems(items: LocalCatalogItem[]): LocalCatalogItem[] {
+  return [...items].sort((left, right) => {
+    const kindCompare = left.kind.localeCompare(right.kind);
+    return kindCompare || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
+  });
+}
+
+function catalogItemKey(kind: LocalCatalogItemKind, id: string): string {
+  return `${kind}:${id}`;
 }
 
 interface PromptAssetInput {

@@ -477,6 +477,44 @@ export interface FlowWorkspaceImportResult {
   schemas: number;
 }
 
+export type LocalCatalogItemKind = "prompt" | "schema" | "tool" | "agent_template" | "skill";
+
+export interface LocalCatalogItem {
+  id: string;
+  kind: LocalCatalogItemKind;
+  name: string;
+  description: string;
+  tags: string[];
+  scope: "local";
+  source: "builtin" | "local";
+  createdAt: string;
+  updatedAt: string;
+  content?: string;
+  nodePatch?: Record<string, unknown>;
+}
+
+export interface LocalCatalog {
+  format: "agent-flow-builder.local-catalog.v1";
+  path: string;
+  items: LocalCatalogItem[];
+}
+
+export interface LocalCatalogApplyResult {
+  status: "ok";
+  item: LocalCatalogItem;
+  flow: AgentFlow;
+  flowPath: string;
+  prompt?: FlowAssetContent;
+  schema?: FlowAssetContent;
+  node?: FlowNode;
+}
+
+export interface LocalCatalogSaveResult {
+  status: "ok";
+  item: LocalCatalogItem;
+  catalog: LocalCatalog;
+}
+
 export interface SandboxStatus {
   flowId: string;
   running: boolean;

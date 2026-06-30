@@ -8,7 +8,7 @@ const viewports = [
   { name: "compact", width: 390, height: 844 },
 ];
 const themes = ["light", "dark"];
-const inspectorTabs = ["Editar", "Arquivos", "Validação", "JSON", "Artefato", "Runtime", "Studio"];
+const inspectorTabs = ["Editar", "Arquivos", "Catálogo", "Validação", "JSON", "Artefato", "Runtime", "Studio"];
 
 test.describe.configure({ mode: "serial" });
 
@@ -153,6 +153,33 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expectNoDocumentHorizontalOverflow(page);
   await expectTopbarControlsToFit(page);
   expect(pageErrors, "Unexpected browser errors while editing asset metadata").toEqual([]);
+});
+
+test("catalog panel saves local assets and applies a tool", async ({ page }) => {
+  const pageErrors = attachBrowserErrorCollector(page);
+
+  await openBuilder(page, "light", viewports[0]);
+  await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
+  await openInspectorTab(page, "Catálogo");
+
+  await expect(page.getByText("Catálogo local")).toBeVisible();
+  await expect(page.getByText("HTTP JSON tool")).toBeVisible();
+  await expect(page.getByText("Prompt de perguntas guiadas")).toBeVisible();
+
+  await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
+  await expect(page.locator(".catalog-card", { hasText: "Prompt principal para conduzir" })).toBeVisible();
+
+  const httpTool = page.locator(".catalog-card", { hasText: "HTTP JSON tool" });
+  await httpTool.getByRole("button", { name: /^Usar no nó$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("HTTP JSON tool aplicado ao flow", { timeout: 10_000 });
+  await expect(page.locator(".tabs button", { hasText: "Editar" })).toHaveClass(/active/);
+  await expect(page.getByLabel("Modo de execução")).toHaveValue("http");
+  await expect(page.getByLabel("URL do executor")).toHaveValue("http://127.0.0.1:9001/run");
+
+  await expectNoDocumentHorizontalOverflow(page);
+  await expectTopbarControlsToFit(page);
+  expect(pageErrors, "Unexpected browser errors while using local catalog").toEqual([]);
 });
 
 test("inspector panels render internal loading and error states", async ({ page }) => {

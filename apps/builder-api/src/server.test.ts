@@ -1472,6 +1472,119 @@ test("Builder API edits prompt and schema assets referenced by a flow", async (t
   assert.ok(analyzed.json().diagnostics.some((item: { code: string }) => item.code === "missing_prompt_file"));
 });
 
+test("Builder API saves and applies local catalog items", async (t) => {
+  const workspaceRoot = await createWorkspaceFixture();
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const app = buildApp({ workspaceRoot });
+  t.after(() => app.close());
+
+  const catalog = await app.inject({ method: "GET", url: "/catalog" });
+  assert.equal(catalog.statusCode, 200);
+  assert.equal(catalog.json().format, "agent-flow-builder.local-catalog.v1");
+  assert.ok(catalog.json().items.some((item: { kind: string; id: string }) => item.kind === "tool" && item.id === "http-json-tool"));
+  assert.ok(catalog.json().items.every((item: { scope: string }) => item.scope === "local"));
+
+  const savedPrompt = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "prompt",
+      id: "catalog-system",
+      name: "Prompt catalogado",
+      description: "Prompt reutilizável local.",
+      tags: ["catalog", "test"],
+      content: "Use {topic} para gerar uma resposta objetiva.",
+    },
+  });
+  assert.equal(savedPrompt.statusCode, 200);
+  assert.equal(savedPrompt.json().item.source, "local");
+  await access(path.join(workspaceRoot, ".agent-flow", "catalog", "registry.json"));
+
+  const appliedPrompt = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/catalog/apply",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "catalog-system",
+      kind: "prompt",
+      targetNodeId: "llm_step",
+    },
+  });
+  assert.equal(appliedPrompt.statusCode, 200);
+  assert.equal(appliedPrompt.json().prompt.id, "catalog-system");
+  assert.equal(appliedPrompt.json().flow.nodes.find((node: { id: string }) => node.id === "llm_step").promptId, "catalog-system");
+  assert.match(
+    await readFile(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "catalog-system.md"), "utf-8"),
+    /topic/,
+  );
+
+  const savedSchema = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "schema",
+      id: "catalog-result",
+      name: "Resultado catalogado",
+      description: "Schema reutilizável local.",
+      tags: ["catalog", "schema"],
+      content: "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}}}",
+    },
+  });
+  assert.equal(savedSchema.statusCode, 200);
+  assert.match(savedSchema.json().item.content, /summary/);
+
+  const appliedSchema = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/catalog/apply",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "catalog-result",
+      kind: "schema",
+      targetNodeId: "llm_step",
+    },
+  });
+  assert.equal(appliedSchema.statusCode, 200);
+  assert.equal(appliedSchema.json().schema.id, "catalog-result");
+  assert.equal(appliedSchema.json().flow.nodes.find((node: { id: string }) => node.id === "llm_step").outputSchema, "catalog-result");
+
+  const appliedTool = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/catalog/apply",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "http-json-tool",
+      kind: "tool",
+      targetNodeId: "deterministic_gate",
+    },
+  });
+  assert.equal(appliedTool.statusCode, 200);
+  assert.equal(appliedTool.json().node.id, "deterministic_gate");
+  assert.equal(appliedTool.json().node.type, "code");
+  assert.equal(appliedTool.json().node.codeExecution, "http");
+  assert.equal(appliedTool.json().node.url, "http://127.0.0.1:9001/run");
+
+  const validated = await app.inject({ method: "POST", url: "/flows/reference-interview/validate" });
+  assert.equal(validated.statusCode, 200);
+  assert.equal(validated.json().status, "ok");
+
+  const duplicateBuiltin = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "tool",
+      id: "http-json-tool",
+      name: "Tentativa",
+      nodePatch: { type: "code" },
+    },
+  });
+  assert.equal(duplicateBuiltin.statusCode, 409);
+  assert.equal(duplicateBuiltin.json().error, "workspace_error");
+});
+
 test("Builder API exports and imports a flow workspace package", async (t) => {
   const workspaceRoot = await createWorkspaceFixture();
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));

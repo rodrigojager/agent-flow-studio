@@ -23,6 +23,7 @@ import {
   generateApprovedRuntime,
   generateLangGraphSandboxArtifact,
   importFlowWorkspace,
+  listLocalCatalog,
   generateRuntimeManifest,
   generateRuntime,
   listGeneratedArtifact,
@@ -34,11 +35,13 @@ import {
   readGeneratedArtifactFile,
   readPrompt,
   readSchemaAsset,
+  saveLocalCatalogItem,
   saveFlow,
   savePrompt,
   saveRuntimeManifest,
   saveSchemaAsset,
   validateRuntimeManifest,
+  applyCatalogItemToFlow,
   validateFlow,
   WorkspaceError,
 } from "./workspace.ts";
@@ -82,6 +85,13 @@ interface ImportFlowWorkspaceBody {
 
 interface AssetBody {
   content?: unknown;
+}
+
+interface ApplyCatalogItemBody {
+  itemId?: string;
+  kind?: string;
+  targetNodeId?: string;
+  id?: string;
 }
 
 interface SandboxBody {
@@ -192,6 +202,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   }));
 
   app.get("/runtime-manifest-schema", async () => runtimeManifestJsonSchema());
+
+  app.get("/catalog", async () => listLocalCatalog(workspaceRoot));
+
+  app.post<{ Body: unknown }>("/catalog/items", async (request) => saveLocalCatalogItem(workspaceRoot, request.body));
 
   app.get("/runtime-manifest", async () => {
     const loaded = await loadRuntimeManifest(workspaceRoot);
@@ -333,6 +347,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       flow: result.flow,
       deleted: result.deleted,
     };
+  });
+
+  app.post<{ Params: FlowParams; Body: ApplyCatalogItemBody }>("/flows/:flowId/catalog/apply", async (request) => {
+    return applyCatalogItemToFlow(workspaceRoot, request.params.flowId, request.body);
   });
 
   app.post<{ Params: FlowParams }>("/flows/:flowId/validate", async (request) => {
