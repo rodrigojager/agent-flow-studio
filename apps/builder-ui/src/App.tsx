@@ -160,6 +160,13 @@ interface PanelLoadState {
   message: string;
 }
 
+interface NodeFinderEntry {
+  id: string;
+  type: string;
+  label: string;
+  description: string;
+}
+
 interface DockerHistoryFilterForm {
   operation: DockerRuntimeOperation | "";
   status: DockerRuntimeOperationStatus | "";
@@ -490,6 +497,8 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
+  const [nodeSearchQuery, setNodeSearchQuery] = useState("");
+  const [nodeTypeFilter, setNodeTypeFilter] = useState("");
   const [sandbox, setSandbox] = useState<SandboxStatus | null>(null);
   const [activeSandboxes, setActiveSandboxes] = useState<SandboxStatus[]>([]);
   const [sandboxPort, setSandboxPort] = useState("8090");
@@ -1067,6 +1076,23 @@ export default function App() {
   const canGenerateApprovedRuntime = langGraphApprovalStatus?.status === "approved";
   const langGraphApprovalLabel = langGraphApprovalStatusLabel(langGraphApprovalStatus);
   const langGraphApprovalClass = langGraphApprovalStatusClass(langGraphApprovalStatus);
+  const nodeFinderAllEntries = useMemo(() => buildNodeFinderEntries(draftFlow), [draftFlow]);
+  const nodeTypeFilters = useMemo(() => buildNodeTypeFilterOptions(nodeFinderAllEntries), [nodeFinderAllEntries]);
+  const nodeFinderEntries = useMemo(
+    () => filterNodeFinderEntries(nodeFinderAllEntries, nodeSearchQuery, nodeTypeFilter),
+    [nodeFinderAllEntries, nodeSearchQuery, nodeTypeFilter],
+  );
+  const nodeSearchActive = Boolean(nodeSearchQuery.trim() || nodeTypeFilter);
+  const nodeSearchMatchedNodeIds = useMemo(
+    () => new Set(nodeFinderEntries.map((entry) => entry.id)),
+    [nodeFinderEntries],
+  );
+
+  useEffect(() => {
+    if (nodeTypeFilter && !nodeTypeFilters.some((option) => option.type === nodeTypeFilter)) {
+      setNodeTypeFilter("");
+    }
+  }, [nodeTypeFilter, nodeTypeFilters]);
 
   const graph = useMemo(
     () => toReactFlowGraph(
@@ -1076,8 +1102,19 @@ export default function App() {
       runtimeEventsData,
       activeStudioNodeId,
       studioRunCausalContext,
+      nodeSearchActive,
+      nodeSearchMatchedNodeIds,
     ),
-    [activeStudioNodeId, draftFlow, runtimeEventsData, selectedEdgeId, selectedNodeId, studioRunCausalContext],
+    [
+      activeStudioNodeId,
+      draftFlow,
+      nodeSearchActive,
+      nodeSearchMatchedNodeIds,
+      runtimeEventsData,
+      selectedEdgeId,
+      selectedNodeId,
+      studioRunCausalContext,
+    ],
   );
 
   const selectedNode = useMemo(() => {
@@ -1103,21 +1140,31 @@ export default function App() {
     return draftFlow.edges[selectedEdgeIndex] ?? null;
   }, [draftFlow, selectedEdgeIndex]);
 
-  const onNodeClick: NodeMouseHandler = useCallback(
-    (_event, node) => {
-      setSelectedNodeId(node.id);
+  const selectCanvasNode = useCallback(
+    (nodeId: string, focusViewport = false) => {
+      setSelectedNodeId(nodeId);
       setSelectedEdgeId("");
       if (inspectorTab === "sandbox") {
-        setStudioTimelineNodeFilter(node.id);
-        const latestNodeEvent = runtimeEventsData.filter((event) => event.node === node.id).at(-1);
+        setStudioTimelineNodeFilter(nodeId);
+        const latestNodeEvent = runtimeEventsData.filter((event) => event.node === nodeId).at(-1);
         if (latestNodeEvent) {
           setSelectedStudioEventSeq(latestNodeEvent.seq);
         }
-        return;
+      } else {
+        setInspectorTab("properties");
       }
-      setInspectorTab("properties");
+      if (focusViewport) {
+        void reactFlowRef.current?.fitView({ nodes: [{ id: nodeId }], duration: 220, padding: 1.2, maxZoom: 1.05 });
+      }
     },
     [inspectorTab, runtimeEventsData],
+  );
+
+  const onNodeClick: NodeMouseHandler = useCallback(
+    (_event, node) => {
+      selectCanvasNode(node.id);
+    },
+    [selectCanvasNode],
   );
 
   const onEdgeClick: EdgeMouseHandler = useCallback((_event, edge) => {
@@ -3310,6 +3357,66 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         </aside>
 
         <section className="canvas-panel">
+          <div className="canvas-toolbar" aria-label="Busca de nós no canvas">
+            <label className="canvas-search-field">
+              <Search size={15} aria-hidden="true" />
+              <span className="visually-hidden">Buscar nós no canvas</span>
+              <input
+                type="search"
+                value={nodeSearchQuery}
+                placeholder="Buscar nó"
+                aria-label="Buscar nós no canvas"
+                onChange={(event) => setNodeSearchQuery(event.target.value)}
+              />
+            </label>
+            <label className="canvas-type-filter">
+              <span>Tipo</span>
+              <select
+                value={nodeTypeFilter}
+                aria-label="Filtrar nós por tipo"
+                onChange={(event) => setNodeTypeFilter(event.target.value)}
+              >
+                <option value="">Todos</option>
+                {nodeTypeFilters.map((option) => (
+                  <option value={option.type} key={option.type}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="canvas-search-summary">
+              {nodeFinderEntries.length}/{nodeFinderAllEntries.length}
+            </span>
+            <button
+              type="button"
+              className="canvas-clear-button"
+              onClick={() => {
+                setNodeSearchQuery("");
+                setNodeTypeFilter("");
+              }}
+              disabled={!nodeSearchActive}
+            >
+              Limpar
+            </button>
+            <div className="canvas-node-results" aria-label="Nós encontrados">
+              {nodeFinderEntries.length ? (
+                nodeFinderEntries.map((entry) => (
+                  <button
+                    type="button"
+                    className={`canvas-node-chip ${selectedNodeId === entry.id ? "selected" : ""}`}
+                    key={entry.id}
+                    title={`${entry.id} · ${entry.label}`}
+                    onClick={() => selectCanvasNode(entry.id, true)}
+                  >
+                    <strong>{entry.id}</strong>
+                    <span>{entry.label}</span>
+                  </button>
+                ))
+              ) : (
+                <span className="canvas-node-empty">Nenhum nó</span>
+              )}
+            </div>
+          </div>
           <ReactFlow
             nodes={graph.nodes}
             edges={graph.edges}
@@ -7972,6 +8079,68 @@ function studioEventCausalClass(event: EventView, causalAnalysis: StudioRunCausa
   return "";
 }
 
+function buildNodeFinderEntries(flow: AgentFlow | null): NodeFinderEntry[] {
+  if (!flow) {
+    return [];
+  }
+  const virtualEntries: NodeFinderEntry[] = [
+    { id: "start", type: "graph", label: "Start", description: "Entrada do grafo" },
+    { id: "end", type: "graph", label: "End", description: "Saída do grafo" },
+  ];
+  const flowEntries = flow.nodes.map((node) => ({
+    id: node.id,
+    type: node.type,
+    label: nodeTypeLabel(node.type),
+    description: [
+      node.description,
+      node.promptId,
+      node.outputSchema,
+      node.handler,
+      node.stage,
+      node.url,
+      node.sourcePath,
+      node.collectionPath,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  }));
+  return [...virtualEntries, ...flowEntries];
+}
+
+function buildNodeTypeFilterOptions(entries: NodeFinderEntry[]): { type: string; label: string }[] {
+  const options = new Map<string, string>();
+  for (const entry of entries) {
+    options.set(entry.type, nodeTypeLabel(entry.type));
+  }
+  return [...options.entries()]
+    .map(([type, label]) => ({ type, label }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function filterNodeFinderEntries(entries: NodeFinderEntry[], query: string, typeFilter: string): NodeFinderEntry[] {
+  const normalizedQuery = normalizeFinderText(query);
+  return entries.filter((entry) => {
+    if (typeFilter && entry.type !== typeFilter) {
+      return false;
+    }
+    if (!normalizedQuery) {
+      return true;
+    }
+    return normalizeFinderText(`${entry.id} ${entry.type} ${entry.label} ${entry.description}`).includes(normalizedQuery);
+  });
+}
+
+function normalizeFinderText(value: string): string {
+  return value.trim().toLocaleLowerCase("pt-BR");
+}
+
+function nodeTypeLabel(type: string): string {
+  if (type === "graph") {
+    return "Graph";
+  }
+  return nodeTypeOptions.find((option) => option.type === type)?.label ?? type;
+}
+
 function toReactFlowGraph(
   flow: AgentFlow | undefined,
   selectedNodeId: string,
@@ -7979,6 +8148,8 @@ function toReactFlowGraph(
   events: EventView[],
   activeStudioNodeId: string,
   causalAnalysis: StudioRunCausalAnalysis,
+  nodeSearchActive: boolean,
+  nodeSearchMatchedNodeIds: Set<string>,
 ): { nodes: Node[]; edges: Edge[] } {
   if (!flow) {
     return { nodes: [], edges: [] };
@@ -8002,6 +8173,11 @@ function toReactFlowGraph(
         : causalAnalysis.impactedNodes.includes(id)
           ? "status-causal-impact"
           : "";
+    const nodeSearchClass = nodeSearchActive
+      ? nodeSearchMatchedNodeIds.has(id)
+        ? "search-match"
+        : "search-dimmed"
+      : "";
     return {
       id,
       position: flowNode?.position ?? defaultNodePosition(index),
@@ -8012,7 +8188,7 @@ function toReactFlowGraph(
       selected: selectedNodeId === id,
       className: `flow-node ${isVirtual ? "virtual" : flowNode?.type ?? ""} ${
         nodeState?.status ? `status-${nodeState.status}` : ""
-      } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""}`.trim(),
+      } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""} ${nodeSearchClass}`.trim(),
       draggable: !isVirtual,
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
@@ -8038,6 +8214,11 @@ function toReactFlowGraph(
         : isCausalImpactEdge
           ? "status-causal-impact-edge"
           : "";
+    const edgeSearchClass = nodeSearchActive
+      ? nodeSearchMatchedNodeIds.has(edge.from) || nodeSearchMatchedNodeIds.has(edge.to)
+        ? "search-match-edge"
+        : "search-dimmed-edge"
+      : "";
 
     return {
       id: edgeId(edge, index),
@@ -8046,7 +8227,7 @@ function toReactFlowGraph(
       label: edge.condition,
       selected: selectedEdgeId === edgeId(edge, index),
       markerEnd: { type: MarkerType.ArrowClosed },
-      className: `${edgeClass} ${edgeExecutionClass} ${causalClass}`.trim(),
+      className: `${edgeClass} ${edgeExecutionClass} ${causalClass} ${edgeSearchClass}`.trim(),
     };
   });
   return { nodes, edges };

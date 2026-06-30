@@ -39,6 +39,35 @@ for (const theme of themes) {
   }
 }
 
+test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
+  const pageErrors = attachBrowserErrorCollector(page);
+
+  await openBuilder(page, "light", viewports[0]);
+
+  const searchInput = page.getByLabel("Buscar nós no canvas");
+  const typeFilter = page.getByLabel("Filtrar nós por tipo");
+  await searchInput.fill("safety");
+  await expect(page.locator(".canvas-search-summary")).toHaveText("2/8");
+  await expect(page.locator(".react-flow__node.search-match")).toHaveCount(2);
+
+  const inputSafetyChip = page.locator(".canvas-node-chip", { hasText: "input_safety_check" });
+  await expect(inputSafetyChip).toBeVisible();
+  await inputSafetyChip.click();
+  await expect(inputSafetyChip).toHaveClass(/selected/);
+  await expect(page.locator(".react-flow__node.selected")).toContainText("input_safety_check");
+
+  await searchInput.fill("");
+  await typeFilter.selectOption("llm_prompt");
+  await expect(page.locator(".canvas-search-summary")).toHaveText("1/8");
+  await expect(page.locator(".canvas-node-chip")).toContainText("llm_step");
+
+  await page.getByRole("button", { name: "Limpar" }).click();
+  await expect(searchInput).toHaveValue("");
+  await expect(typeFilter).toHaveValue("");
+  await expectNoDocumentHorizontalOverflow(page);
+  expect(pageErrors, "Unexpected browser errors while using canvas finder").toEqual([]);
+});
+
 test("assets panel edits prompt and schema metadata visually", async ({ page }) => {
   const pageErrors = attachBrowserErrorCollector(page);
 
