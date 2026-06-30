@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert";
 import { access, cp, mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -20,6 +22,15 @@ async function createWorkspaceFixture(): Promise<string> {
   await rm(path.join(workspaceRoot, "flows", "reference-interview", ".agent-flow"), { recursive: true, force: true });
   await cp(path.join(REPO_ROOT, "runtime.manifest.json"), path.join(workspaceRoot, "runtime.manifest.json"));
   return workspaceRoot;
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf-8").trim();
+  return raw ? JSON.parse(raw) : {};
 }
 
 test("Builder API lists, validates, reads and generates the reference flow", async (t) => {
@@ -1159,6 +1170,108 @@ test("Builder API reads, validates and generates a runtime manifest bundle", asy
     path.join(workspaceRoot, "generated", "reference-runtime-bundle", "agents", "reference-interview", "app", "main.py"),
   );
   await access(path.join(workspaceRoot, "generated", "reference-runtime-bundle", "bundle.json"));
+
+  const bundleStatus = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/status?outDir=generated%2Freference-runtime-bundle&runtimeUrl=http%3A%2F%2F127.0.0.1%3A9020",
+  });
+  assert.equal(bundleStatus.statusCode, 200);
+  assert.equal(bundleStatus.json().ready, true);
+  assert.equal(bundleStatus.json().target, "runtime-manifest-bundle");
+  assert.equal(bundleStatus.json().resourceName, "sessions");
+  assert.equal(bundleStatus.json().runtimeUrl, "http://127.0.0.1:9020");
+  assert.equal(bundleStatus.json().agents.length, 1);
+  assert.equal(bundleStatus.json().agents[0].id, "reference-interview");
+  assert.equal(bundleStatus.json().agents[0].routePrefix, "/reference-interview");
+  assert.equal(bundleStatus.json().agents[0].resourceName, "sessions");
+
+  const runtimeCalls: Array<{ method: string; url: string; body: unknown }> = [];
+  const runtimeServer = createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const url = request.url ?? "/";
+    const body = method === "GET" ? null : await readJsonBody(request);
+    runtimeCalls.push({ method, url, body });
+    response.setHeader("content-type", "application/json");
+
+    if (method === "GET" && url === "/health") {
+      response.end(JSON.stringify({ status: "ok", db_ok: true, cache_ok: true }));
+      return;
+    }
+    if (method === "GET" && url === "/metadata") {
+      response.end(JSON.stringify({ kind: "bundle", agents: ["reference-interview"] }));
+      return;
+    }
+    if (method === "GET" && url === "/reference-interview/metadata") {
+      response.end(JSON.stringify({ kind: "agent", id: "reference-interview" }));
+      return;
+    }
+    if (method === "POST" && url === "/reference-interview/sessions") {
+      response.end(JSON.stringify({ session: { session_id: "smoke-session" } }));
+      return;
+    }
+    if (method === "POST" && url === "/reference-interview/sessions/smoke-session/start") {
+      response.end(JSON.stringify({ ok: true, phase: "started" }));
+      return;
+    }
+    if (method === "POST" && url === "/reference-interview/sessions/smoke-session/turn") {
+      response.end(JSON.stringify({ ok: true, phase: "turn" }));
+      return;
+    }
+    if (method === "GET" && url === "/reference-interview/sessions/smoke-session/transcript") {
+      response.end(JSON.stringify([{ seq: 1, role: "assistant", content: "ok" }]));
+      return;
+    }
+    if (method === "GET" && url === "/reference-interview/sessions/smoke-session/events") {
+      response.end(JSON.stringify([{ seq: 1, event_type: "session_started" }]));
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not_found", url }));
+  });
+  t.after(() => new Promise<void>((resolve) => runtimeServer.close(() => resolve())));
+  await new Promise<void>((resolve) => runtimeServer.listen(0, "127.0.0.1", () => resolve()));
+  const runtimeAddress = runtimeServer.address() as AddressInfo;
+  const runtimeUrl = `http://127.0.0.1:${runtimeAddress.port}`;
+
+  const bundleSmoke = await app.inject({
+    method: "POST",
+    url: "/docker-runtime/smoke",
+    headers: { "content-type": "application/json" },
+    payload: {
+      outDir: "generated/reference-runtime-bundle",
+      runtimeUrl,
+      agentId: "reference-interview",
+    },
+  });
+  assert.equal(bundleSmoke.statusCode, 200);
+  assert.equal(bundleSmoke.json().ok, true);
+  assert.equal(bundleSmoke.json().target, "runtime-manifest-bundle");
+  assert.equal(bundleSmoke.json().smoke.agentId, "reference-interview");
+  assert.equal(bundleSmoke.json().smoke.routePrefix, "/reference-interview");
+  assert.equal(bundleSmoke.json().smoke.resourceName, "sessions");
+  assert.equal(bundleSmoke.json().smoke.basePath, "/reference-interview/sessions");
+  assert.equal(bundleSmoke.json().smoke.sessionId, "smoke-session");
+  assert.equal(bundleSmoke.json().smoke.transcriptCount, 1);
+  assert.equal(bundleSmoke.json().smoke.eventsCount, 1);
+  assert.deepEqual(
+    runtimeCalls.map((call) => `${call.method} ${call.url}`),
+    [
+      "GET /health",
+      "GET /metadata",
+      "GET /reference-interview/metadata",
+      "POST /reference-interview/sessions",
+      "POST /reference-interview/sessions/smoke-session/start",
+      "POST /reference-interview/sessions/smoke-session/turn",
+      "GET /reference-interview/sessions/smoke-session/transcript",
+      "GET /reference-interview/sessions/smoke-session/events",
+    ],
+  );
+  const createSessionCall = runtimeCalls.find((call) => call.url === "/reference-interview/sessions");
+  assert.deepEqual(createSessionCall?.body, {
+    metadata: { source: "builder-api-smoke", agent_id: "reference-interview" },
+    max_turns: 2,
+  });
 
   await writeFile(
     path.join(workspaceRoot, "runtime.manifest.json"),

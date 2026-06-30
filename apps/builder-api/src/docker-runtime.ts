@@ -16,6 +16,7 @@ export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build"
 export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error" | "canceled";
 export type DockerBuildProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
 export type DockerRuntimeHistoryLevel = "error" | "warning" | "info" | "success";
+export type DockerRuntimeTarget = "fastapi-runtime" | "runtime-manifest-bundle";
 
 interface DockerBuildProgressEvent {
   stage: string;
@@ -50,22 +51,36 @@ export interface DockerRuntimeProject {
   flowId: string | null;
   flowVersion: string | null;
   flowHash: string | null;
-  target: "fastapi-runtime";
-  resourceName: string;
+  target: DockerRuntimeTarget;
+  resourceName: string | null;
+  agents: DockerRuntimeAgent[];
   runtimeUrl: string;
   docsUrl: string;
   openapiUrl: string;
   ports: DockerRuntimePorts;
 }
 
+export interface DockerRuntimeAgent {
+  id: string;
+  flowId: string;
+  flowName: string;
+  flowVersion: string;
+  flowHash: string | null;
+  routePrefix: string;
+  runtimeDir: string;
+  resourceName: string;
+  contract: string;
+}
+
 export interface DockerRuntimeStatus {
   outDir: string;
   ready: boolean;
-  target: "fastapi-runtime" | null;
+  target: DockerRuntimeTarget | null;
   flowId: string | null;
   flowVersion: string | null;
   flowHash: string | null;
   resourceName: string | null;
+  agents: DockerRuntimeAgent[];
   runtimeUrl: string;
   docsUrl: string;
   openapiUrl: string;
@@ -165,6 +180,11 @@ interface DockerRuntimeHistoryFilter {
 export interface DockerRuntimeSmokeResult {
   health: unknown;
   metadata: unknown;
+  agentMetadata?: unknown;
+  agentId?: string;
+  routePrefix?: string;
+  resourceName: string;
+  basePath: string;
   sessionId: string;
   transcriptCount: number;
   eventsCount: number;
@@ -190,6 +210,7 @@ interface GeneratedMetadata {
   flowId?: string;
   flowVersion?: string;
   flowHash?: string;
+  agents?: unknown;
 }
 
 interface RuntimeRecord {
@@ -388,34 +409,36 @@ export class DockerRuntimeManager {
     return this.runDockerCompose(outDir, "down", ["compose", "down"], runtimeUrl);
   }
 
-  async smoke(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  async smoke(outDir: string, runtimeUrl?: string, agentId?: string): Promise<DockerRuntimeOperationResult> {
     const project = await this.resolveProject(outDir, runtimeUrl);
+    const smokeTarget = resolveSmokeTarget(project, agentId);
     const startedAt = new Date().toISOString();
     this.updateRecord(project.outDir, {
       lastOperation: "smoke",
       lastStatus: "running",
       lastExitCode: null,
       updatedAt: new Date().toISOString(),
-      logs: [`Smoke test iniciado em ${project.runtimeUrl}.`],
+      logs: [`Smoke test iniciado em ${project.runtimeUrl}${smokeTarget.basePath}.`],
       inspection: this.readRecord(project.outDir).inspection,
     });
 
     try {
       const health = await runtimeJson(project.runtimeUrl, "/health");
       const metadata = await runtimeJson(project.runtimeUrl, "/metadata");
-      const created = await runtimeJson(project.runtimeUrl, `/${project.resourceName}`, {
+      const agentMetadata = smokeTarget.routePrefix ? await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.routePrefix, "metadata")) : undefined;
+      const created = await runtimeJson(project.runtimeUrl, smokeTarget.basePath, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           "Idempotency-Key": `builder-smoke-create-${Date.now()}`,
         },
         body: JSON.stringify({
-          metadata: { source: "builder-api-smoke" },
+          metadata: { source: "builder-api-smoke", ...(smokeTarget.agentId ? { agent_id: smokeTarget.agentId } : {}) },
           max_turns: 2,
         }),
       });
       const sessionId = extractSessionId(created);
-      await runtimeJson(project.runtimeUrl, `/${project.resourceName}/${sessionId}/start`, {
+      await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "start"), {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -423,7 +446,7 @@ export class DockerRuntimeManager {
         },
         body: JSON.stringify({}),
       });
-      await runtimeJson(project.runtimeUrl, `/${project.resourceName}/${sessionId}/turn`, {
+      await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "turn"), {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -431,17 +454,24 @@ export class DockerRuntimeManager {
         },
         body: JSON.stringify({ user_message: "Smoke test do container final." }),
       });
-      const transcript = await runtimeJson(project.runtimeUrl, `/${project.resourceName}/${sessionId}/transcript`);
-      const events = await runtimeJson(project.runtimeUrl, `/${project.resourceName}/${sessionId}/events`);
+      const transcript = await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "transcript"));
+      const events = await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "events"));
       const smoke: DockerRuntimeSmokeResult = {
         health,
         metadata,
+        agentMetadata,
+        agentId: smokeTarget.agentId ?? undefined,
+        routePrefix: smokeTarget.routePrefix || undefined,
+        resourceName: smokeTarget.resourceName,
+        basePath: smokeTarget.basePath,
         sessionId,
         transcriptCount: Array.isArray(transcript) ? transcript.length : 0,
         eventsCount: Array.isArray(events) ? events.length : 0,
       };
       const logs = [
         `Health: ${readStatusField(health) ?? "ok"}.`,
+        `Endpoint: ${smokeTarget.basePath}.`,
+        ...(smokeTarget.agentId ? [`Agente: ${smokeTarget.agentId}.`] : []),
         `Sessao: ${sessionId}.`,
         `Transcript: ${smoke.transcriptCount} mensagem(ns).`,
         `Eventos: ${smoke.eventsCount} evento(s).`,
@@ -694,13 +724,14 @@ export class DockerRuntimeManager {
       throw new WorkspaceError(`outDir do runtime Docker não é diretório: ${relativeOutDir}`, 400);
     }
     const metadata = await readGeneratedMetadata(absoluteOutDir);
-    if (metadata.target !== "fastapi-runtime") {
-      throw new WorkspaceError("O artefato informado não é um runtime FastAPI/Docker final.", 409, metadata);
+    if (metadata.target !== "fastapi-runtime" && metadata.target !== "runtime-manifest-bundle") {
+      throw new WorkspaceError("O artefato informado não é um runtime FastAPI/Docker final ou bundle multiagente.", 409, metadata);
     }
     await requireRuntimeFile(absoluteOutDir, "Dockerfile");
     await requireRuntimeFile(absoluteOutDir, "docker-compose.yml");
-    const flow = await readEmbeddedFlow(absoluteOutDir);
-    const resourceName = readResourceName(flow);
+    const flow = metadata.target === "fastapi-runtime" ? await readEmbeddedFlow(absoluteOutDir) : null;
+    const agents = metadata.target === "runtime-manifest-bundle" ? readGeneratedAgents(metadata) : [];
+    const resourceName = flow ? readResourceName(flow) : (agents[0]?.resourceName ?? null);
     const ports = await readComposePorts(absoluteOutDir);
     const normalizedRuntimeUrl = normalizeRuntimeUrl(runtimeUrl, ports.api?.hostPort ?? 8080);
     return {
@@ -709,8 +740,9 @@ export class DockerRuntimeManager {
       flowId: metadata.flowId ?? null,
       flowVersion: metadata.flowVersion ?? null,
       flowHash: metadata.flowHash ?? null,
-      target: "fastapi-runtime",
+      target: metadata.target,
       resourceName,
+      agents,
       runtimeUrl: normalizedRuntimeUrl,
       docsUrl: `${normalizedRuntimeUrl}/docs`,
       openapiUrl: `${normalizedRuntimeUrl}/openapi.json`,
@@ -728,6 +760,7 @@ export class DockerRuntimeManager {
       flowVersion: project.flowVersion,
       flowHash: project.flowHash,
       resourceName: project.resourceName,
+      agents: project.agents,
       runtimeUrl: project.runtimeUrl,
       docsUrl: project.docsUrl,
       openapiUrl: project.openapiUrl,
@@ -1013,6 +1046,89 @@ function readResourceName(flow: Record<string, unknown>): string {
     return api.resourceName.trim();
   }
   return "sessions";
+}
+
+function readGeneratedAgents(metadata: GeneratedMetadata): DockerRuntimeAgent[] {
+  if (!Array.isArray(metadata.agents)) {
+    return [];
+  }
+  return metadata.agents
+    .filter(isRecord)
+    .map((agent): DockerRuntimeAgent => ({
+      id: readRequiredString(agent, "id", "agent"),
+      flowId: readRequiredString(agent, "flowId", "agent"),
+      flowName: readOptionalString(agent, "flowName") ?? readRequiredString(agent, "flowId", "agent"),
+      flowVersion: readOptionalString(agent, "flowVersion") ?? "",
+      flowHash: readOptionalString(agent, "flowHash"),
+      routePrefix: normalizeRoutePrefix(readRequiredString(agent, "routePrefix", "agent")),
+      runtimeDir: readOptionalString(agent, "runtimeDir") ?? `agents/${readRequiredString(agent, "id", "agent")}`,
+      resourceName: readOptionalString(agent, "resourceName") ?? "sessions",
+      contract: readOptionalString(agent, "contract") ?? "sessions-v1",
+    }));
+}
+
+function resolveSmokeTarget(
+  project: DockerRuntimeProject,
+  requestedAgentId?: string,
+): { agentId: string | null; routePrefix: string; resourceName: string; basePath: string } {
+  if (project.target === "fastapi-runtime") {
+    const resourceName = project.resourceName ?? "sessions";
+    return {
+      agentId: null,
+      routePrefix: "",
+      resourceName,
+      basePath: joinRuntimePath(resourceName),
+    };
+  }
+  const selected =
+    (requestedAgentId?.trim()
+      ? project.agents.find((agent) => agent.id === requestedAgentId.trim())
+      : project.agents[0]) ?? null;
+  if (!selected) {
+    throw new WorkspaceError(
+      requestedAgentId?.trim()
+        ? `Agente ${requestedAgentId} não existe no bundle multiagente.`
+        : "Bundle multiagente sem agente disponível para smoke test.",
+      400,
+    );
+  }
+  return {
+    agentId: selected.id,
+    routePrefix: selected.routePrefix,
+    resourceName: selected.resourceName,
+    basePath: joinRuntimePath(selected.routePrefix, selected.resourceName),
+  };
+}
+
+function readRequiredString(record: Record<string, unknown>, key: string, label: string): string {
+  const value = readOptionalString(record, key);
+  if (!value) {
+    throw new WorkspaceError(`Metadado ${label}.${key} ausente no bundle.`, 409, record);
+  }
+  return value;
+}
+
+function readOptionalString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeRoutePrefix(routePrefix: string): string {
+  const trimmed = routePrefix.trim();
+  if (!trimmed) {
+    return "/";
+  }
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.replace(/\/+$/g, "") || "/";
+}
+
+function joinRuntimePath(...parts: string[]): string {
+  const joined = parts
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("/");
+  const normalized = `/${joined}`.replace(/\/+/g, "/").replace(/\/+$/g, "");
+  return normalized || "/";
 }
 
 async function requireRuntimeFile(absoluteOutDir: string, fileName: string): Promise<void> {

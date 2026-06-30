@@ -621,6 +621,7 @@ export default function App() {
   const [dockerRuntimeOperation, setDockerRuntimeOperation] = useState<DockerRuntimeOperationResult | null>(null);
   const [dockerRuntimeBusy, setDockerRuntimeBusy] = useState<DockerRuntimeOperation | "refresh" | null>(null);
   const [dockerRuntimeUrl, setDockerRuntimeUrl] = useState("http://127.0.0.1:8080");
+  const [dockerRuntimeAgentId, setDockerRuntimeAgentId] = useState("");
   const [dockerRuntimeHistoryData, setDockerRuntimeHistoryData] = useState<DockerRuntimeHistory | null>(null);
   const [dockerAutoRefresh, setDockerAutoRefresh] = useState(false);
   const [dockerHistoryFilterDraft, setDockerHistoryFilterDraft] =
@@ -2409,7 +2410,12 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setDockerRuntimeBusy(operation);
     setStatus({ kind: "busy", message: `${label} em ${artifactListing.outDir}.` });
     try {
-      const result = await runDockerRuntimeOperation(operation, artifactListing.outDir, dockerRuntimeUrl);
+      const result = await runDockerRuntimeOperation(
+        operation,
+        artifactListing.outDir,
+        dockerRuntimeUrl,
+        operation === "smoke" ? dockerRuntimeAgentId : undefined,
+      );
       setDockerRuntimeOperation(result);
       setDockerRuntimeStatusData(result);
       setDockerRuntimeUrl(result.runtimeUrl);
@@ -2442,9 +2448,16 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
   }
 
   function syncDockerPortFields(result: DockerRuntimeStatus) {
+    const agents = result.agents ?? [];
     setDockerApiPort(String(result.ports.api?.hostPort ?? 8080));
     setDockerPostgresPort(String(result.ports.postgres?.hostPort ?? 5433));
     setDockerRedisPort(String(result.ports.redis?.hostPort ?? 6380));
+    setDockerRuntimeAgentId((current) => {
+      if (!agents.length) {
+        return "";
+      }
+      return current && agents.some((agent) => agent.id === current) ? current : agents[0].id;
+    });
   }
 
   async function handleConfigureDockerPorts() {
@@ -3955,12 +3968,14 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               dockerOperation={dockerRuntimeOperation}
               dockerBusy={dockerRuntimeBusy}
               dockerRuntimeUrl={dockerRuntimeUrl}
+              dockerRuntimeAgentId={dockerRuntimeAgentId}
               dockerApiPort={dockerApiPort}
               dockerPostgresPort={dockerPostgresPort}
               dockerRedisPort={dockerRedisPort}
               dockerHistory={dockerRuntimeHistoryData}
               dockerAutoRefresh={dockerAutoRefresh}
               onDockerRuntimeUrlChange={setDockerRuntimeUrl}
+              onDockerRuntimeAgentIdChange={setDockerRuntimeAgentId}
               onDockerApiPortChange={setDockerApiPort}
               onDockerPostgresPortChange={setDockerPostgresPort}
               onDockerRedisPortChange={setDockerRedisPort}
@@ -5647,12 +5662,14 @@ function GeneratedArtifactPanel({
   dockerOperation,
   dockerBusy,
   dockerRuntimeUrl,
+  dockerRuntimeAgentId,
   dockerApiPort,
   dockerPostgresPort,
   dockerRedisPort,
   dockerHistory,
   dockerAutoRefresh,
   onDockerRuntimeUrlChange,
+  onDockerRuntimeAgentIdChange,
   onDockerApiPortChange,
   onDockerPostgresPortChange,
   onDockerRedisPortChange,
@@ -5681,12 +5698,14 @@ function GeneratedArtifactPanel({
   dockerOperation: DockerRuntimeOperationResult | null;
   dockerBusy: DockerRuntimeOperation | "refresh" | null;
   dockerRuntimeUrl: string;
+  dockerRuntimeAgentId: string;
   dockerApiPort: string;
   dockerPostgresPort: string;
   dockerRedisPort: string;
   dockerHistory: DockerRuntimeHistory | null;
   dockerAutoRefresh: boolean;
   onDockerRuntimeUrlChange: (value: string) => void;
+  onDockerRuntimeAgentIdChange: (value: string) => void;
   onDockerApiPortChange: (value: string) => void;
   onDockerPostgresPortChange: (value: string) => void;
   onDockerRedisPortChange: (value: string) => void;
@@ -5724,6 +5743,7 @@ function GeneratedArtifactPanel({
     () => buildDockerOperationAlerts(dockerHistory?.entries ?? []),
     [dockerHistory],
   );
+  const dockerAgents = dockerStatus?.agents ?? [];
 
   if (!listing) {
     return (
@@ -5766,8 +5786,10 @@ function GeneratedArtifactPanel({
             </span>
           </div>
           <dl className="kv-list inspector-list">
+            <Field label="Tipo" value={dockerStatus?.target ?? "-"} />
             <Field label="Recurso" value={dockerStatus?.resourceName ?? "-"} />
             <Field label="Flow" value={dockerStatus?.flowId ?? "-"} />
+            <Field label="Agentes" value={String(dockerAgents.length)} />
             <Field label="Env local" value={dockerStatus?.envFile ? ".env encontrado" : "copie .env.example para .env antes de subir"} />
           </dl>
           <label className="docker-runtime-url">
@@ -5778,6 +5800,18 @@ function GeneratedArtifactPanel({
               placeholder="http://127.0.0.1:8080"
             />
           </label>
+          {dockerAgents.length ? (
+            <label className="docker-runtime-url">
+              <span>Agente do smoke</span>
+              <select value={dockerRuntimeAgentId} onChange={(event) => onDockerRuntimeAgentIdChange(event.target.value)}>
+                {dockerAgents.map((agent) => (
+                  <option value={agent.id} key={`docker-runtime-agent-${agent.id}`}>
+                    {agent.id} · {joinRuntimePath(agent.routePrefix, agent.resourceName)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <div className="docker-port-grid">
             <label>
               <span>API</span>
@@ -5931,7 +5965,8 @@ function GeneratedArtifactPanel({
             <div className="runtime-item">
               <strong>Smoke test</strong>
               <span>
-                Sessão {dockerOperation.smoke.sessionId}; transcript {dockerOperation.smoke.transcriptCount}; eventos{" "}
+                {dockerOperation.smoke.basePath}; agente {dockerOperation.smoke.agentId ?? "-"}; sessão{" "}
+                {dockerOperation.smoke.sessionId}; transcript {dockerOperation.smoke.transcriptCount}; eventos{" "}
                 {dockerOperation.smoke.eventsCount}.
               </span>
             </div>
@@ -10051,6 +10086,7 @@ async function runDockerRuntimeOperation(
   operation: DockerRuntimeOperation,
   outDir: string,
   runtimeUrl: string,
+  agentId?: string,
 ): Promise<DockerRuntimeOperationResult> {
   if (operation === "prepare_env") {
     return dockerRuntimePrepareEnv(outDir, runtimeUrl);
@@ -10073,7 +10109,7 @@ async function runDockerRuntimeOperation(
   if (operation === "configure_ports") {
     throw new Error("Use a ação de aplicar portas para atualizar o docker-compose.");
   }
-  return dockerRuntimeSmoke(outDir, runtimeUrl);
+  return dockerRuntimeSmoke(outDir, runtimeUrl, agentId);
 }
 
 function dockerOperationLabel(operation: DockerRuntimeOperation): string {

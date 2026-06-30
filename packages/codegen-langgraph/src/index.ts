@@ -99,6 +99,30 @@ async function generatedProjectMetadata(flow: AgentFlow, flowRoot: string, targe
   };
 }
 
+async function generatedManifestBundleMetadata(manifest: RuntimeManifest, agents: ManifestAgentRuntime[]) {
+  return {
+    target: "runtime-manifest-bundle",
+    manifestId: manifest.id,
+    manifestName: manifest.name,
+    manifestVersion: manifest.version,
+    packaging: manifest.packaging,
+    manifestHash: createHash("sha256").update(stableJson(manifest)).digest("hex"),
+    agents: await Promise.all(
+      agents.map(async (agent) => ({
+        id: agent.id,
+        flowId: agent.flow.id,
+        flowName: agent.flow.name,
+        flowVersion: agent.flow.version,
+        flowHash: await flowProjectFingerprint(agent.flow, agent.flowRoot),
+        routePrefix: agent.routePrefix,
+        runtimeDir: `agents/${safeSegment(agent.id)}`,
+        resourceName: agent.flow.api.resourceName,
+        contract: agent.flow.api.contract,
+      })),
+    ),
+  };
+}
+
 interface FingerprintAsset {
   kind: "prompt" | "schema" | "file" | "code";
   path: string;
@@ -212,9 +236,15 @@ export interface GenerateManifestOptions {
 export async function generateManifestRuntime(options: GenerateManifestOptions): Promise<void> {
   const { manifest, agents, outDir } = options;
   await rm(outDir, { force: true, recursive: true });
+  await mkdir(path.join(outDir, ".agent-flow"), { recursive: true });
   await mkdir(path.join(outDir, ".runtime-manifest"), { recursive: true });
   await mkdir(path.join(outDir, "agents"), { recursive: true });
 
+  await writeFile(
+    path.join(outDir, ".agent-flow", "generated-meta.json"),
+    `${JSON.stringify(await generatedManifestBundleMetadata(manifest, agents), null, 2)}\n`,
+    "utf-8",
+  );
   await writeFile(
     path.join(outDir, ".runtime-manifest", "runtime.manifest.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,

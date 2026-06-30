@@ -770,6 +770,7 @@ Status 2026-06-30:
 - implementado campo de Runtime URL local para status/smoke em portas customizadas;
 - implementada edicao visual de portas API/Postgres/Redis no `docker-compose.yml`, com status retornando as portas atuais e historico da operacao;
 - implementado histórico operacional local em `.agent-flow/docker-runtime-history/` e listagem no painel de artefato;
+- implementado reconhecimento do bundle multiagente como artefato Docker operacional, com lista de agentes e smoke test direcionado por `agentId` na rota montada do agente;
 - implementado auto-refresh opt-in para inspeção/status/logs enquanto o usuário está no painel de artefato;
 - verificado por teste automatizado com runner Docker falso, build da UI e `app.inject` no runtime gerado real;
 - implementado painel de progresso por etapa no build Docker (`docker compose build`) com persistência em histórico operacional;

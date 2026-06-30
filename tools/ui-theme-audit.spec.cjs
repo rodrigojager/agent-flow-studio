@@ -248,6 +248,11 @@ test("runtime manifest editor saves visual changes", async ({ page }) => {
   await expect(runtimePanel.getByText("/reference-interview/sessions")).toBeVisible();
   await expect(runtimePanel.getByText("agents/reference-interview")).toBeVisible();
   await expect(runtimePanel.getByText("Validado contra o flow do workspace.")).toBeVisible();
+  await runtimePanel.getByRole("button", { name: /Gerar bundle/ }).click();
+  await expect(page.getByText("API Docker final")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("runtime-manifest-bundle")).toBeVisible();
+  await expect(page.getByLabel("Agente do smoke")).toHaveValue("reference-interview");
+  await expect(page.getByLabel("Agente do smoke")).toContainText("/reference-interview/sessions");
 
   await expectNoDocumentHorizontalOverflow(page);
   await expectTopbarControlsToFit(page);

@@ -92,6 +92,7 @@ interface SandboxBody {
 interface DockerRuntimeBody {
   outDir?: string;
   runtimeUrl?: string;
+  agentId?: string;
   ports?: {
     api?: number;
     postgres?: number;
@@ -485,7 +486,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
 
   app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/smoke", async (request) => {
     const outDir = requiredBodyString(request.body?.outDir, "outDir");
-    return dockerRuntimeManager.smoke(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
+    return dockerRuntimeManager.smoke(
+      outDir,
+      optionalString(request.body?.runtimeUrl, "runtimeUrl"),
+      optionalString(request.body?.agentId, "agentId"),
+    );
   });
 
   app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/inspect", async (request) => {

@@ -1737,6 +1737,14 @@ test("generated multiagent manifest bundle mounts agents in one FastAPI process"
     ],
   });
 
+  const metadata = JSON.parse(await readFile(path.join(outDir, ".agent-flow", "generated-meta.json"), "utf-8"));
+  assert.equal(metadata.target, "runtime-manifest-bundle");
+  assert.equal(metadata.manifestId, "multiagent-reference");
+  assert.equal(metadata.packaging, "multiagent");
+  assert.equal(metadata.agents[0].resourceName, "sessions");
+  assert.equal(metadata.agents[0].routePrefix, "/first");
+  assert.equal(metadata.agents[1].runtimeDir, "agents/second-agent");
+
   await execFileAsync("python", ["-m", "pytest", "-q"], {
     cwd: outDir,
     timeout: 120000,

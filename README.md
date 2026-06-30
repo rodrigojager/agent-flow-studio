@@ -18,7 +18,7 @@ Na prática, a ferramenta cobre três camadas:
 
 - **Builder visual**: edição do grafo, nós, arestas, prompts, schemas, adapters LLM, arquivos e validações.
 - **Studio local**: execução e depuração do agente com sessões, runs, timeline, transcript, events, state inspector, node IO, logs e contexto causal por nó.
-- **Runtime final**: geração de uma API FastAPI/Docker independente, com Swagger/OpenAPI, persistência, cache opcional e smoke test local.
+- **Runtime final**: geração de uma API FastAPI/Docker independente ou bundle multiagente Docker, com Swagger/OpenAPI, persistência, cache opcional e smoke test local por agente.
 
 O fluxo principal foi desenhado para funcionar sem LangSmith Cloud, sem cobrança externa e sem depender de terminal no caminho de produto. Integrações com LangGraph/LangSmith continuam possíveis como compatibilidade opcional.
 
@@ -64,6 +64,7 @@ O nó de código customizado aceita Python, JavaScript e TypeScript no runtime a
 - Codegen multiagente inicial via `runtime.manifest.json`.
 - Editor visual inicial de `runtime.manifest.json`, com edição de metadata, LLM padrão, empacotamento e agentes.
 - Mapa operacional de bundle multiagente na aba `Runtime`, com app raiz, rotas, metadata, runtime por agente e endpoints de sessão após validação.
+- Bundle multiagente com `.agent-flow/generated-meta.json`, `Dockerfile`, `docker-compose.yml` e metadata de agentes para ser reconhecido como artefato Docker operacional pela UI.
 - `agent_id` operacional em metadata, sessões, eventos e runs locais, com resumo por agente e filtro por agente nos runs/timeline do Studio.
 - Geração de `.agent-flow/generated-meta.json` com hash determinístico do projeto.
 - Separação clara entre pacote de sandbox LangGraph e runtime FastAPI/Docker final.
@@ -109,7 +110,7 @@ O nó de código customizado aceita Python, JavaScript e TypeScript no runtime a
   - cancelamento de build em andamento;
   - compose up;
   - compose down;
-  - smoke test;
+  - smoke test, incluindo seleção de agente em bundles multiagente;
   - inspeção de serviços;
   - logs;
   - histórico operacional com filtros por operação, status, resultado, nível, texto, etapa de build e status do progresso.
@@ -300,4 +301,4 @@ tools/
 
 Este repositório está em desenvolvimento ativo.
 
-A base atual já permite editar flows, gerar artefatos, executar sandbox local, inspecionar runs e gerar runtime Docker aprovado. Ainda há trabalho planejado em refinamento de UX, playground avançado, cenários, pinning, multiagente operacional e adapters de runtime mais amplos.
+A base atual já permite editar flows, gerar artefatos, executar sandbox local, inspecionar runs, gerar runtime Docker aprovado e operar o primeiro bundle Docker multiagente com smoke por agente. Ainda há trabalho planejado em refinamento de UX, playground avançado, cenários, pinning, orquestração multiagente avançada e adapters de runtime mais amplos.

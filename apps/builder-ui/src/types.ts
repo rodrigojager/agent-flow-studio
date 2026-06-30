@@ -303,9 +303,26 @@ export interface DockerRuntimeProgressEvent {
 export interface DockerRuntimeSmokeResult {
   health: unknown;
   metadata: unknown;
+  agentMetadata?: unknown;
+  agentId?: string;
+  routePrefix?: string;
+  resourceName: string;
+  basePath: string;
   sessionId: string;
   transcriptCount: number;
   eventsCount: number;
+}
+
+export interface DockerRuntimeAgent {
+  id: string;
+  flowId: string;
+  flowName: string;
+  flowVersion: string;
+  flowHash: string | null;
+  routePrefix: string;
+  runtimeDir: string;
+  resourceName: string;
+  contract: string;
 }
 
 export interface DockerRuntimePortBinding {
@@ -345,11 +362,12 @@ export interface DockerRuntimeInspection {
 export interface DockerRuntimeStatus {
   outDir: string;
   ready: boolean;
-  target: "fastapi-runtime" | null;
+  target: "fastapi-runtime" | "runtime-manifest-bundle" | null;
   flowId: string | null;
   flowVersion: string | null;
   flowHash: string | null;
   resourceName: string | null;
+  agents: DockerRuntimeAgent[];
   runtimeUrl: string;
   docsUrl: string;
   openapiUrl: string;

@@ -251,8 +251,12 @@ export async function dockerRuntimeDown(outDir: string, runtimeUrl?: string): Pr
   return dockerRuntimeCommand("down", outDir, runtimeUrl);
 }
 
-export async function dockerRuntimeSmoke(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
-  return dockerRuntimeCommand("smoke", outDir, runtimeUrl);
+export async function dockerRuntimeSmoke(
+  outDir: string,
+  runtimeUrl?: string,
+  agentId?: string,
+): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("smoke", outDir, runtimeUrl, agentId);
 }
 
 export async function dockerRuntimeInspect(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
@@ -472,11 +476,12 @@ async function dockerRuntimeCommand(
   operation: "prepare-env" | "build" | "cancel" | "up" | "down" | "smoke" | "inspect",
   outDir: string,
   runtimeUrl?: string,
+  agentId?: string,
 ): Promise<DockerRuntimeOperationResult> {
   return request<DockerRuntimeOperationResult>(`/docker-runtime/${operation}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ outDir, runtimeUrl }),
+    body: JSON.stringify({ outDir, runtimeUrl, agentId }),
   });
 }
 
