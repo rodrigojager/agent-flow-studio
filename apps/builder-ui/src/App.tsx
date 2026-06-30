@@ -215,6 +215,28 @@ interface StudioNodePin {
   updatedAt: string;
 }
 
+interface StudioScenarioReplayFixture {
+  format: "agent-flow-builder.replay-fixture.v1";
+  exportedAt: string;
+  flow: {
+    id: string;
+    name: string;
+    version: string;
+    nodeCount: number;
+    edgeCount: number;
+  };
+  scenario: StudioScenario;
+  input: string;
+  metadata: Record<string, unknown>;
+  pins: {
+    enabled: boolean;
+    activeCount: number;
+    staleCount: number;
+    active: StudioNodePin[];
+    stale: StudioNodePin[];
+  };
+}
+
 interface StudioNodePinDraft {
   nodeId: string;
   nodeType: string;
@@ -2104,6 +2126,23 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setStudioRunCompareRunId("");
   }
 
+  function handleExportStudioScenarioFixture() {
+    if (!selectedFlowId || !draftFlow) {
+      return;
+    }
+    const selected = syncStudioScenarioSelection(studioScenarios, studioSelectedScenarioId);
+    if (!selected) {
+      setStatus({ kind: "error", message: "Selecione um cenário para exportar fixture." });
+      return;
+    }
+    const activePins = activeStudioNodePins(studioNodePins, draftFlow);
+    const stalePins = staleStudioNodePins(studioNodePins, draftFlow);
+    const fixture = buildStudioScenarioReplayFixture(selectedFlowId, draftFlow, selected, activePins, stalePins);
+    const fileName = `studio-fixture-${sanitizeFileNamePart(selected.label || selected.id)}.json`;
+    downloadJsonFile(fileName, fixture);
+    setStatus({ kind: "ok", message: `Fixture do cenário "${selected.label}" exportada.` });
+  }
+
   async function handleLoadStudioRun(runId: string) {
     if (!selectedFlowId) {
       return;
@@ -2979,6 +3018,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onStudioPinnedScenarioRun={handleRunPinnedScenario}
               onStudioScenarioPin={toggleStudioScenarioPin}
               onStudioScenarioDelete={handleDeleteStudioScenario}
+              onStudioScenarioFixtureExport={handleExportStudioScenarioFixture}
               onStudioNodePin={handlePinStudioNodeData}
               onStudioNodePinDelete={handleDeleteStudioNodePin}
               onForkCheckpoint={handleForkSelectedCheckpoint}
@@ -4517,6 +4557,7 @@ function SandboxPanel({
   onStudioPinnedScenarioRun,
   onStudioScenarioPin,
   onStudioScenarioDelete,
+  onStudioScenarioFixtureExport,
   onStudioNodePin,
   onStudioNodePinDelete,
   onForkCheckpoint,
@@ -4593,6 +4634,7 @@ function SandboxPanel({
   onStudioPinnedScenarioRun: () => void;
   onStudioScenarioPin: () => void;
   onStudioScenarioDelete: () => void;
+  onStudioScenarioFixtureExport: () => void;
   onStudioNodePin: (pin: StudioNodePinDraft) => void;
   onStudioNodePinDelete: (pinId: string) => void;
   onForkCheckpoint: () => void;
@@ -4815,6 +4857,15 @@ function SandboxPanel({
           >
             <Play size={16} aria-hidden="true" />
             Executar fixado
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onStudioScenarioFixtureExport}
+            disabled={!studioSelectedScenarioId}
+          >
+            <Download size={16} aria-hidden="true" />
+            Exportar fixture
           </button>
           <button
             type="button"
@@ -7375,6 +7426,38 @@ function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: Stu
   return metadata;
 }
 
+function buildStudioScenarioReplayFixture(
+  flowId: string,
+  flow: AgentFlow,
+  scenario: StudioScenario,
+  activePins: StudioNodePin[],
+  stalePins: StudioNodePin[],
+): StudioScenarioReplayFixture {
+  const normalizedScenario = normalizeScenarioDefaults(scenario);
+  const replayPins = normalizedScenario.useNodePins ? activePins : [];
+  return {
+    format: "agent-flow-builder.replay-fixture.v1",
+    exportedAt: new Date().toISOString(),
+    flow: {
+      id: flow.id || flowId,
+      name: flow.name,
+      version: flow.version,
+      nodeCount: flow.nodes.length,
+      edgeCount: flow.edges.length,
+    },
+    scenario: normalizedScenario,
+    input: normalizedScenario.input,
+    metadata: studioScenarioExecutionMetadata(normalizedScenario, replayPins),
+    pins: {
+      enabled: normalizedScenario.useNodePins,
+      activeCount: activePins.length,
+      staleCount: stalePins.length,
+      active: activePins,
+      stale: stalePins,
+    },
+  };
+}
+
 function loadStudioScenarios(flowId: string): StudioScenario[] {
   if (typeof window === "undefined") {
     return [];
@@ -7540,6 +7623,12 @@ function normalizeRegressionThresholdValue(value: unknown, fallback: number): nu
 function activeStudioNodePins(pins: StudioNodePin[], flow: AgentFlow | null): StudioNodePin[] {
   return sortStudioNodePins(
     pins.filter((pin) => hashStudioNodeDefinition(studioPinNodeForHash(flow, pin.nodeId)) === pin.nodeHash),
+  );
+}
+
+function staleStudioNodePins(pins: StudioNodePin[], flow: AgentFlow | null): StudioNodePin[] {
+  return sortStudioNodePins(
+    pins.filter((pin) => hashStudioNodeDefinition(studioPinNodeForHash(flow, pin.nodeId)) !== pin.nodeHash),
   );
 }
 
@@ -7827,6 +7916,11 @@ function isFlowWorkspaceExport(value: unknown): value is FlowWorkspaceExport {
 function downloadJsonFile(fileName: string, value: unknown): void {
   const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: "application/json" });
   downloadBlobFile(fileName, blob);
+}
+
+function sanitizeFileNamePart(value: string): string {
+  const sanitized = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized || "fixture";
 }
 
 function downloadBlobFile(fileName: string, blob: Blob): void {

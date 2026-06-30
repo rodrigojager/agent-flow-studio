@@ -1,4 +1,5 @@
 const { test, expect } = require("@playwright/test");
+const fs = require("node:fs/promises");
 
 const appUrl = process.env.BUILDER_UI_URL ?? "http://127.0.0.1:5273";
 const apiUrl = process.env.BUILDER_API_URL ?? "http://127.0.0.1:3433";
@@ -112,6 +113,22 @@ for (const theme of themes) {
     await expect(selectedScenarioCard.getByText(/Fork de checkpoint: .*#4.*llm_step/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Mock por pins de nó: 1 pin/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Thresholds: tokens \+12%.*custo \+20%.*duração \+30%/)).toBeVisible();
+    const [fixtureDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: /^Exportar fixture$/ }).click(),
+    ]);
+    expect(fixtureDownload.suggestedFilename()).toBe("studio-fixture-fork-llm_step-4.json");
+    const fixturePath = await fixtureDownload.path();
+    if (!fixturePath) {
+      throw new Error("Fixture download path was not available.");
+    }
+    const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8"));
+    expect(fixture.format).toBe("agent-flow-builder.replay-fixture.v1");
+    expect(fixture.scenario.label).toBe("Fork llm_step #4");
+    expect(fixture.scenario.regressionThresholds.tokenGrowthPct).toBe(12);
+    expect(fixture.pins.enabled).toBe(true);
+    expect(fixture.pins.activeCount).toBe(1);
+    expect(fixture.metadata.nodePins.count).toBe(1);
     await expect(page.locator(".turn-input")).toHaveValue("Aumentar conversões em onboarding.");
 
     await expectNoDocumentHorizontalOverflow(page);
