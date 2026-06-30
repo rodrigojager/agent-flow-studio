@@ -6034,7 +6034,7 @@ function CatalogPanel({
           <div className="catalog-list">
             {items.map((item) => {
               const itemKey = localCatalogItemKey(item);
-              const isToolBundle = isToolBundleCatalogItem(item);
+              const createsBlock = catalogItemCreatesBlock(item);
               const revisions = catalogRevisionTimeline(item);
               const compareRevision =
                 revisions.find((revision) => revision.revision === compareRevisionByItem[itemKey]) ?? revisions[0] ?? null;
@@ -6130,7 +6130,7 @@ function CatalogPanel({
                       <>
                         <button type="button" className="command-button" onClick={() => onApply(item)}>
                           <Plus size={16} aria-hidden="true" />
-                          {item.kind === "tool" ? (isToolBundle ? "Criar bloco" : "Criar nó") : "Adicionar"}
+                          {createsBlock ? "Criar bloco" : item.kind === "tool" ? "Criar nó" : "Adicionar"}
                         </button>
                         <button
                           type="button"
@@ -6140,7 +6140,7 @@ function CatalogPanel({
                           title={selectedNodeId ? `Aplicar em ${selectedNodeId}` : "Selecione um nó para aplicar diretamente"}
                         >
                           <Sparkles size={16} aria-hidden="true" />
-                          {isToolBundle ? "Anexar ao nó" : "Usar no nó"}
+                          {createsBlock ? "Anexar ao nó" : "Usar no nó"}
                         </button>
                       </>
                     )}
@@ -6168,13 +6168,16 @@ function localCatalogItemKey(item: Pick<LocalCatalogItem, "kind" | "id">): strin
   return `${item.kind}:${item.id}`;
 }
 
-function isToolBundleCatalogItem(item: LocalCatalogItem): boolean {
-  if (item.kind !== "tool" || !item.content) {
+function catalogItemCreatesBlock(item: LocalCatalogItem): boolean {
+  if (!item.content || (item.kind !== "tool" && item.kind !== "skill")) {
     return false;
   }
   try {
     const parsed = JSON.parse(item.content) as { format?: unknown; nodes?: unknown };
-    return parsed.format === "agent-flow-builder.tool-bundle.v1" && Array.isArray(parsed.nodes);
+    if (item.kind === "tool") {
+      return parsed.format === "agent-flow-builder.tool-bundle.v1" && Array.isArray(parsed.nodes);
+    }
+    return parsed.format === "agent-flow-builder.skill.v1" && Array.isArray(parsed.nodes) && parsed.nodes.length > 0;
   } catch {
     return false;
   }

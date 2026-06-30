@@ -266,6 +266,17 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(labeledSelect(inspector, "Schema")).toHaveValue("question_list");
 
   await openInspectorTab(page, "Catálogo");
+  const contextReviewSkill = page.locator(".catalog-card", { hasText: "Skill composta de revisão com contexto" });
+  await expect(contextReviewSkill).toBeVisible();
+  await contextReviewSkill.getByRole("button", { name: /^Anexar ao nó$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Skill composta de revisão com contexto aplicado ao flow", {
+    timeout: 10_000,
+  });
+  await expect(page.locator(".react-flow__node", { hasText: "context-review-composite-skill-extract_context" })).toHaveCount(1);
+  await expect(page.locator(".react-flow__node", { hasText: "context-review-composite-skill-review_context" })).toHaveCount(1);
+
+  await page.locator(".react-flow__node", { hasText: "llm_step" }).click();
+  await openInspectorTab(page, "Catálogo");
   await page.getByRole("button", { name: /^Salvar skill atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Skill do nó llm_step salva no catálogo local", {
     timeout: 10_000,

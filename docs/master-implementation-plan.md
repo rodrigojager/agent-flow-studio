@@ -797,7 +797,7 @@ Entregaveis:
 - salvar nó atual como tool/skill local reutilizável;
 - reutilizar prompt/schema/tool/skill em flows sem copiar arquivos manualmente;
 - criar novo flow a partir de template de agente;
-- evoluir catalogo para editor visual completo de tools compostas e skills compostas;
+- evoluir catalogo para editor visual completo de tools/skills compostas;
 - filtro shared quando existir compartilhamento real.
 
 Aceite:
@@ -812,15 +812,16 @@ Status 2026-06-30:
 - prompts e schemas aplicados pelo catalogo viram assets reais no flow e podem atualizar o no selecionado;
 - tools aplicadas pelo catalogo criam ou atualizam no `code` com contrato visual/runtime existente, ou materializam bundles compostos de nós/arestas com IDs únicos e conexão automática de entrada/saída;
 - templates de agente criam novos flows completos; os seeds atuais incluem conversa guiada e gerador de perguntas por conteúdo/RAG;
-- skills aplicadas pelo catalogo materializam bundles de prompt/schema e podem transformar o no selecionado por patch seguro; o seed atual adiciona geração estruturada de perguntas a um nó LLM;
+- skills aplicadas pelo catalogo materializam bundles de prompt/schema, podem transformar o no selecionado por patch seguro e agora também podem materializar subgrafos compostos com remapeamento de prompt/schema; os seeds atuais incluem geração estruturada de perguntas e revisão com contexto/RAG;
 - implementada aba `Catalogo` na Builder UI com busca textual, filtros por tipo/origem/tag, refresh, cards de itens, salvar prompt/schema atual, salvar nó selecionado como tool/skill, criar flow por template e aplicar item/skill no flow/no selecionado;
 - implementada primeira camada de tool composta: item `tool` pode usar `content` no formato `agent-flow-builder.tool-bundle.v1`, o seed `Bloco HTTP JSON validado` cria `transform_json -> code/http`, e a UI diferencia `Criar bloco` de `Criar nó`;
+- implementada primeira camada de skill composta: item `skill` pode declarar `nodes`/`edges` no formato `agent-flow-builder.skill.v1`, o seed `Skill composta de revisão com contexto` cria `file_extract -> rag_retrieval -> llm_structured`, e a UI trata a skill como bloco anexável;
 - implementada primeira camada de versionamento/curadoria: itens do catalogo carregam versão, revisão local incremental e hash curto de conteúdo, com metadados visíveis nos cards;
 - implementado histórico local de revisões: ao sobrescrever item local, o snapshot anterior fica em `history` e o card mostra diff compacto contra a revisão atual;
 - implementada restauração de revisão: snapshots antigos podem ser restaurados pela API/UI, criando nova revisão sem apagar o histórico;
 - implementada comparação selecionável: a UI permite escolher qual revisão histórica será comparada com a atual antes de restaurar ou reutilizar o item;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para skills compostas, editor visual completo de tools compostas, curadoria visual completa e compartilhamento real.
+- pendente evoluir para editor visual completo de tools/skills compostas, curadoria visual completa e compartilhamento real.
 
 ### Fase 11: Multiagente Local
 

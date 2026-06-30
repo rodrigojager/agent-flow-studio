@@ -1502,6 +1502,11 @@ test("Builder API saves and applies local catalog items", async (t) => {
       .json()
       .items.some((item: { kind: string; id: string }) => item.kind === "skill" && item.id === "structured-question-generation-skill"),
   );
+  const builtinCompositeSkill = catalog
+    .json()
+    .items.find((item: { kind: string; id: string }) => item.kind === "skill" && item.id === "context-review-composite-skill");
+  assert.ok(builtinCompositeSkill);
+  assert.match(builtinCompositeSkill.content, /"nodes"/);
   assert.ok(catalog.json().items.every((item: { scope: string }) => item.scope === "local"));
 
   const createdFromTemplate = await app.inject({
@@ -1700,6 +1705,37 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(savedSkill.json().item.source, "local");
   assert.match(savedSkill.json().item.content, /agent-flow-builder\.skill\.v1/);
 
+  const savedCompositeSkill = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "skill",
+      id: "local-composite-skill",
+      name: "Skill composta local",
+      description: "Skill local com subgrafo reutilizável.",
+      tags: ["skill", "bundle", "local"],
+      content: JSON.stringify({
+        format: "agent-flow-builder.skill.v1",
+        prompts: [],
+        schemas: [],
+        nodes: [
+          {
+            id: "score_payload",
+            type: "scoring",
+            inputPath: "user_message",
+            resultPath: "scores.local_skill",
+            threshold: 0.7,
+          },
+        ],
+        edges: [],
+      }),
+    },
+  });
+  assert.equal(savedCompositeSkill.statusCode, 200);
+  assert.equal(savedCompositeSkill.json().item.source, "local");
+  assert.match(savedCompositeSkill.json().item.content, /score_payload/);
+
   const appliedSchema = await app.inject({
     method: "POST",
     url: "/flows/reference-interview/catalog/apply",
@@ -1774,6 +1810,32 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.match(
     await readFile(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "question_generation.md"), "utf-8"),
     /transforma conteúdo em perguntas/,
+  );
+
+  const appliedCompositeSkill = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/catalog/apply",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "context-review-composite-skill",
+      kind: "skill",
+      targetNodeId: "llm_step",
+    },
+  });
+  assert.equal(appliedCompositeSkill.statusCode, 200);
+  assert.equal(appliedCompositeSkill.json().prompt.id, "context_review");
+  assert.equal(appliedCompositeSkill.json().schema.id, "context_review_result");
+  assert.equal(appliedCompositeSkill.json().node.id, "context-review-composite-skill-extract_context");
+  const compositeFlow = appliedCompositeSkill.json().flow;
+  const reviewNode = compositeFlow.nodes.find((candidate: { id: string }) => candidate.id === "context-review-composite-skill-review_context");
+  assert.equal(reviewNode.promptId, "context_review");
+  assert.equal(reviewNode.outputSchema, "context_review_result");
+  assert.ok(
+    compositeFlow.edges.some(
+      (edge: { from: string; to: string }) =>
+        edge.from === "context-review-composite-skill-retrieve_context" &&
+        edge.to === "context-review-composite-skill-review_context",
+    ),
   );
 
   const validated = await app.inject({ method: "POST", url: "/flows/reference-interview/validate" });

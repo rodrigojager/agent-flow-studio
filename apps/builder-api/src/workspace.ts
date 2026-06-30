@@ -1245,6 +1245,8 @@ interface SkillCatalogDefinition {
   prompts: unknown;
   schemas: unknown;
   targetNodePatch?: Record<string, unknown>;
+  nodes?: AgentFlow["nodes"];
+  edges?: AgentFlow["edges"];
 }
 
 interface ToolBundleCatalogDefinition {
@@ -1394,6 +1396,89 @@ function builtInCatalogItems(): LocalCatalogItem[] {
           type: "llm_structured",
           description: "Gera perguntas estruturadas a partir do contexto disponível.",
         },
+      ),
+    },
+    {
+      id: "context-review-composite-skill",
+      kind: "skill",
+      name: "Skill composta de revisão com contexto",
+      description: "Materializa extração de conteúdo, recuperação local e resposta estruturada com prompt/schema próprios.",
+      tags: ["skill", "bundle", "rag", "questions", "structured-output"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      content: skillCatalogContent(
+        [
+          {
+            id: "context_review",
+            path: "prompts/context_review.md",
+            content:
+              "Você revisa conteúdo recuperado antes de gerar perguntas.\n\n" +
+              "- Use o contexto recuperado quando existir.\n" +
+              "- Responda com resumo, riscos e próximas perguntas.\n" +
+              "- Se o contexto estiver incompleto, explicite a lacuna.\n",
+          },
+        ],
+        [
+          {
+            id: "context_review_result",
+            path: "schemas/context_review_result.schema.json",
+            content: `${JSON.stringify(
+              {
+                type: "object",
+                required: ["summary", "risks", "next_questions"],
+                properties: {
+                  summary: { type: "string" },
+                  risks: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                  next_questions: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                },
+              },
+              null,
+              2,
+            )}\n`,
+          },
+        ],
+        undefined,
+        [
+          {
+            id: "extract_context",
+            type: "file_extract",
+            description: "Extrai conteúdo local para alimentar a skill.",
+            sourcePath: "files/context.md",
+            contentPath: "context.raw",
+            maxChars: 20000,
+            position: { x: 0, y: 0 },
+          },
+          {
+            id: "retrieve_context",
+            type: "rag_retrieval",
+            description: "Seleciona trechos relevantes para a pergunta atual.",
+            collectionPath: "files/context.md",
+            queryPath: "user_message",
+            contextPath: "context.relevant",
+            topK: 5,
+            position: { x: 260, y: 0 },
+          },
+          {
+            id: "review_context",
+            type: "llm_structured",
+            description: "Gera revisão estruturada com próximas perguntas.",
+            promptId: "context_review",
+            outputSchema: "context_review_result",
+            position: { x: 520, y: 0 },
+          },
+        ],
+        [
+          { from: "extract_context", to: "retrieve_context" },
+          { from: "retrieve_context", to: "review_context" },
+        ],
       ),
     },
     {
@@ -1830,16 +1915,34 @@ function parseToolBundleCatalogContent(item: LocalCatalogItem): ToolBundleCatalo
   if (!isRecord(parsed) || parsed.format !== TOOL_BUNDLE_FORMAT) {
     throw new WorkspaceError(`Tool bundle ${item.id} deve usar formato ${TOOL_BUNDLE_FORMAT}.`, 422);
   }
-  if (!Array.isArray(parsed.nodes) || !parsed.nodes.length) {
-    throw new WorkspaceError(`Tool bundle ${item.id} precisa conter ao menos um nó.`, 422);
+  const bundle = parseCatalogNodeBundleFields(item, "Tool bundle", parsed.nodes, parsed.edges, true);
+  return {
+    format: TOOL_BUNDLE_FORMAT,
+    nodes: bundle.nodes,
+    edges: bundle.edges,
+  };
+}
+
+function parseCatalogNodeBundleFields(
+  item: LocalCatalogItem,
+  label: string,
+  nodesValue: unknown,
+  edgesValue: unknown,
+  requireNodes: boolean,
+): { nodes: AgentFlow["nodes"]; edges: AgentFlow["edges"] } {
+  if (nodesValue === undefined && edgesValue === undefined && !requireNodes) {
+    return { nodes: [], edges: [] };
+  }
+  if (!Array.isArray(nodesValue) || (requireNodes && !nodesValue.length)) {
+    throw new WorkspaceError(`${label} ${item.id} precisa conter ao menos um nó.`, 422);
   }
   const usedNodeIds = new Set<string>();
-  const nodes = parsed.nodes.map((rawNode, index) => {
+  const nodes = nodesValue.map((rawNode, index) => {
     try {
       const node = NodeSchema.parse(rawNode);
       const id = parseAssetId(node.id, `id do nó ${index + 1} do bundle`);
       if (usedNodeIds.has(id)) {
-        throw new WorkspaceError(`Tool bundle ${item.id} contém nó duplicado: ${id}.`, 422);
+        throw new WorkspaceError(`${label} ${item.id} contém nó duplicado: ${id}.`, 422);
       }
       usedNodeIds.add(id);
       return { ...node, id };
@@ -1847,32 +1950,28 @@ function parseToolBundleCatalogContent(item: LocalCatalogItem): ToolBundleCatalo
       if (error instanceof WorkspaceError) {
         throw error;
       }
-      throw new WorkspaceError(`Nó ${index + 1} do tool bundle ${item.id} é inválido.`, 422, error);
+      throw new WorkspaceError(`Nó ${index + 1} de ${label.toLowerCase()} ${item.id} é inválido.`, 422, error);
     }
   });
-  const rawEdges = parsed.edges === undefined ? [] : parsed.edges;
+  const rawEdges = edgesValue === undefined ? [] : edgesValue;
   if (!Array.isArray(rawEdges)) {
-    throw new WorkspaceError(`Tool bundle ${item.id} precisa conter edges como lista.`, 422);
+    throw new WorkspaceError(`${label} ${item.id} precisa conter edges como lista.`, 422);
   }
   const edges = rawEdges.map((rawEdge, index) => {
     try {
       const edge = EdgeSchema.parse(rawEdge);
       if (!usedNodeIds.has(edge.from) || !usedNodeIds.has(edge.to)) {
-        throw new WorkspaceError(`Edge ${index + 1} do tool bundle ${item.id} referencia nó fora do bundle.`, 422);
+        throw new WorkspaceError(`Edge ${index + 1} de ${label.toLowerCase()} ${item.id} referencia nó fora do bundle.`, 422);
       }
       return edge;
     } catch (error) {
       if (error instanceof WorkspaceError) {
         throw error;
       }
-      throw new WorkspaceError(`Edge ${index + 1} do tool bundle ${item.id} é inválida.`, 422, error);
+      throw new WorkspaceError(`Edge ${index + 1} de ${label.toLowerCase()} ${item.id} é inválida.`, 422, error);
     }
   });
-  return {
-    format: TOOL_BUNDLE_FORMAT,
-    nodes,
-    edges,
-  };
+  return { nodes, edges };
 }
 
 function normalizeSkillCatalogContent(content: string): string {
@@ -1899,11 +1998,13 @@ function parseSkillCatalogContent(item: LocalCatalogItem): SkillCatalogDefinitio
   if (!Array.isArray(parsed.schemas)) {
     throw new WorkspaceError(`Skill ${item.id} precisa conter schemas.`, 422);
   }
+  const bundle = parseCatalogNodeBundleFields(item, "Skill", parsed.nodes, parsed.edges, false);
   return {
     format: SKILL_CATALOG_FORMAT,
     prompts: parsed.prompts,
     schemas: parsed.schemas,
     targetNodePatch: isRecord(parsed.targetNodePatch) ? sanitizeCatalogNodePatch(parsed.targetNodePatch) : undefined,
+    ...(bundle.nodes.length ? { nodes: bundle.nodes, edges: bundle.edges } : {}),
   };
 }
 
@@ -2049,12 +2150,37 @@ async function applyToolBundleCatalogItem(
 ): Promise<ApplyCatalogItemResult> {
   const bundle = parseToolBundleCatalogContent(item);
   const loaded = await loadFlowById(workspaceRoot, flowId);
-  const targetNode = input.targetNodeId ? loaded.flow.nodes.find((node) => node.id === input.targetNodeId) : undefined;
+  const applied = appendCatalogNodeBundleToFlow(loaded.flow, item, input, bundle);
+  const flow = applied.flow;
+  await writeFlowFile(loaded, flow);
+  return {
+    status: "ok",
+    item,
+    flow,
+    flowPath: loaded.relativePath,
+    node: applied.node,
+  };
+}
+
+function appendCatalogNodeBundleToFlow(
+  flow: AgentFlow,
+  item: LocalCatalogItem,
+  input: ApplyCatalogItemInput,
+  bundle: { nodes: AgentFlow["nodes"]; edges: AgentFlow["edges"] },
+  assetIds?: {
+    promptIds?: Map<string, string>;
+    schemaIds?: Map<string, string>;
+  },
+): { flow: AgentFlow; node?: AgentFlow["nodes"][number] } {
+  if (!bundle.nodes.length) {
+    return { flow };
+  }
+  const targetNode = input.targetNodeId ? flow.nodes.find((node) => node.id === input.targetNodeId) : undefined;
   if (input.targetNodeId && !targetNode) {
-    throw new WorkspaceError(`Nó alvo não encontrado para aplicar tool bundle: ${input.targetNodeId}`, 404);
+    throw new WorkspaceError(`Nó alvo não encontrado para aplicar bundle: ${input.targetNodeId}`, 404);
   }
 
-  const usedNodeIds = new Set(loaded.flow.nodes.map((node) => node.id));
+  const usedNodeIds = new Set(flow.nodes.map((node) => node.id));
   const idMap = new Map<string, string>();
   for (const node of bundle.nodes) {
     const preferredId = input.id && bundle.nodes.length === 1 ? input.id : `${input.id ?? item.id}-${node.id}`;
@@ -2065,14 +2191,18 @@ async function applyToolBundleCatalogItem(
 
   const basePosition = targetNode
     ? { x: (targetNode.position?.x ?? 0) + 260, y: targetNode.position?.y ?? 120 }
-    : nextCatalogNodePosition(loaded.flow.nodes);
+    : nextCatalogNodePosition(flow.nodes);
   const bundlePositions = bundle.nodes.map((node, index) => node.position ?? { x: index * 260, y: 0 });
   const minX = Math.min(...bundlePositions.map((position) => position.x));
   const minY = Math.min(...bundlePositions.map((position) => position.y));
   const nodes = bundle.nodes.map((node, index) => {
     const localPosition = bundlePositions[index];
+    const promptId = node.promptId ? assetIds?.promptIds?.get(node.promptId) ?? node.promptId : undefined;
+    const outputSchema = node.outputSchema ? assetIds?.schemaIds?.get(node.outputSchema) ?? node.outputSchema : undefined;
     return {
       ...node,
+      ...(promptId ? { promptId } : {}),
+      ...(outputSchema ? { outputSchema } : {}),
       id: idMap.get(node.id) ?? node.id,
       description: node.description || item.description || item.name,
       position: {
@@ -2086,14 +2216,12 @@ async function applyToolBundleCatalogItem(
     from: idMap.get(edge.from) ?? edge.from,
     to: idMap.get(edge.to) ?? edge.to,
   }));
-  const entryEdges = nodes[0]
-    ? [
-        {
-          from: input.targetNodeId ?? "start",
-          to: nodes[0].id,
-        },
-      ]
-    : [];
+  const entryEdges = [
+    {
+      from: input.targetNodeId ?? "start",
+      to: nodes[0].id,
+    },
+  ];
   const bundleEdgeSources = new Set(bundleEdges.map((edge) => edge.from));
   const terminalEdges = nodes
     .filter((node) => !bundleEdgeSources.has(node.id))
@@ -2101,18 +2229,14 @@ async function applyToolBundleCatalogItem(
       from: node.id,
       to: "end",
     }));
-  const flow = parseAgentFlow({
-    ...loaded.flow,
-    nodes: [...loaded.flow.nodes, ...nodes],
-    edges: [...loaded.flow.edges, ...entryEdges, ...bundleEdges, ...terminalEdges],
+  const nextFlow = parseAgentFlow({
+    ...flow,
+    nodes: [...flow.nodes, ...nodes],
+    edges: [...flow.edges, ...entryEdges, ...bundleEdges, ...terminalEdges],
   });
-  await writeFlowFile(loaded, flow);
   return {
-    status: "ok",
-    item,
-    flow,
-    flowPath: loaded.relativePath,
-    node: flow.nodes.find((node) => node.id === nodes[0]?.id),
+    flow: nextFlow,
+    node: nextFlow.nodes.find((candidate) => candidate.id === nodes[0]?.id),
   };
 }
 
@@ -2128,10 +2252,13 @@ async function applySkillCatalogItem(
   const rawSchemas = parseAssetList(skill.schemas, "schemas");
   const createdPrompts: FlowAssetContent[] = [];
   const createdSchemas: FlowAssetContent[] = [];
+  const promptIdMap = new Map<string, string>();
+  const schemaIdMap = new Map<string, string>();
   let nextFlow = loaded.flow;
 
   for (const promptAsset of rawPrompts) {
     const id = uniqueCatalogRefId(promptAsset.id, nextFlow.prompts.map((prompt) => prompt.id));
+    promptIdMap.set(promptAsset.id, id);
     const assetPath = uniqueCatalogAssetPath(nextFlow, "prompts", `${id}.md`);
     const promptRef = {
       id,
@@ -2150,6 +2277,7 @@ async function applySkillCatalogItem(
 
   for (const schemaAsset of rawSchemas) {
     const id = uniqueCatalogRefId(schemaAsset.id, nextFlow.schemas.map((schema) => schema.id));
+    schemaIdMap.set(schemaAsset.id, id);
     const assetPath = uniqueCatalogAssetPath(nextFlow, "schemas", `${id}.schema.json`);
     let content = schemaAsset.content;
     try {
@@ -2186,6 +2314,18 @@ async function applySkillCatalogItem(
       nodes,
     });
     node = nextFlow.nodes.find((candidate) => candidate.id === input.targetNodeId);
+  }
+
+  if (skill.nodes?.length) {
+    const appliedBundle = appendCatalogNodeBundleToFlow(
+      nextFlow,
+      item,
+      input,
+      { nodes: skill.nodes, edges: skill.edges ?? [] },
+      { promptIds: promptIdMap, schemaIds: schemaIdMap },
+    );
+    nextFlow = appliedBundle.flow;
+    node = appliedBundle.node ?? node;
   }
 
   for (const promptAsset of createdPrompts) {
@@ -2527,8 +2667,10 @@ function skillCatalogContent(
   prompts: FlowAssetContent[],
   schemas: FlowAssetContent[],
   targetNodePatch?: Record<string, unknown>,
+  nodes?: AgentFlow["nodes"],
+  edges?: AgentFlow["edges"],
 ): string {
-  return `${JSON.stringify({ format: SKILL_CATALOG_FORMAT, prompts, schemas, targetNodePatch }, null, 2)}\n`;
+  return `${JSON.stringify({ format: SKILL_CATALOG_FORMAT, prompts, schemas, targetNodePatch, nodes, edges }, null, 2)}\n`;
 }
 
 function toolBundleCatalogContent(nodes: AgentFlow["nodes"], edges: AgentFlow["edges"]): string {
