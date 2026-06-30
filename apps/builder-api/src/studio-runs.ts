@@ -141,6 +141,13 @@ export interface StudioRunRegressionSummary {
   candidateRunId: string;
   verdict: string;
   reasons: string[];
+  appliedThresholds: StudioRunRegressionThresholds;
+}
+
+export interface StudioRunRegressionThresholds {
+  tokenGrowthPct: number;
+  costGrowthPct: number;
+  durationGrowthPct: number;
 }
 
 export interface StudioNodeComparison {
@@ -203,6 +210,11 @@ export interface StudioRunList {
 
 const STUDIO_RUN_DIR = ".agent-flow/studio-runs";
 const LOG_LIMIT = 120;
+const DEFAULT_REGRESSION_THRESHOLDS: StudioRunRegressionThresholds = {
+  tokenGrowthPct: 20,
+  costGrowthPct: 20,
+  durationGrowthPct: 30,
+};
 
 export async function listStudioRuns(
   workspaceRoot: string,
@@ -817,6 +829,7 @@ function buildRegressionSummary(
 ): StudioRunRegressionSummary {
   const reasons: string[] = [];
   let severity: StudioRunRegressionSummary["severity"] = "pass";
+  const appliedThresholds = readRegressionThresholds(right);
 
   if (right.errorCount > left.errorCount) {
     severity = "fail";
@@ -839,9 +852,9 @@ function buildRegressionSummary(
     reasons.push(`${changedSharedNodes} nó(s) em comum mudaram state/output`);
   }
 
-  addGrowthReason(reasons, leftMetrics.totalTokens, rightMetrics.totalTokens, "tokens totais", 0.2);
-  addGrowthReason(reasons, leftMetrics.totalCostUsd, rightMetrics.totalCostUsd, "custo estimado", 0.2);
-  addGrowthReason(reasons, calcDurationMs(left), calcDurationMs(right), "duração", 0.3);
+  addGrowthReason(reasons, leftMetrics.totalTokens, rightMetrics.totalTokens, "tokens totais", appliedThresholds.tokenGrowthPct);
+  addGrowthReason(reasons, leftMetrics.totalCostUsd, rightMetrics.totalCostUsd, "custo estimado", appliedThresholds.costGrowthPct);
+  addGrowthReason(reasons, calcDurationMs(left), calcDurationMs(right), "duração", appliedThresholds.durationGrowthPct);
   if (severity === "pass" && reasons.length > 0) {
     severity = "warn";
   }
@@ -862,7 +875,31 @@ function buildRegressionSummary(
     candidateRunId: right.id,
     verdict,
     reasons,
+    appliedThresholds,
   };
+}
+
+function readRegressionThresholds(run: StudioRunRecord): StudioRunRegressionThresholds {
+  const sessionMetadata = run.session.metadata ?? {};
+  const scenarioMetadata = isRecord(sessionMetadata.scenario) ? sessionMetadata.scenario : {};
+  const rawThresholds = isRecord(scenarioMetadata.regressionThresholds)
+    ? scenarioMetadata.regressionThresholds
+    : isRecord(sessionMetadata.regressionThresholds)
+      ? sessionMetadata.regressionThresholds
+      : {};
+  return {
+    tokenGrowthPct: normalizeThresholdPercent(rawThresholds.tokenGrowthPct, DEFAULT_REGRESSION_THRESHOLDS.tokenGrowthPct),
+    costGrowthPct: normalizeThresholdPercent(rawThresholds.costGrowthPct, DEFAULT_REGRESSION_THRESHOLDS.costGrowthPct),
+    durationGrowthPct: normalizeThresholdPercent(rawThresholds.durationGrowthPct, DEFAULT_REGRESSION_THRESHOLDS.durationGrowthPct),
+  };
+}
+
+function normalizeThresholdPercent(value: unknown, fallback: number): number {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1000, Math.round(numeric)));
 }
 
 function addGrowthReason(
@@ -870,14 +907,14 @@ function addGrowthReason(
   left: number | null,
   right: number | null,
   label: string,
-  threshold: number,
+  thresholdPct: number,
 ): void {
   if (left === null || right === null || left <= 0) {
     return;
   }
   const growth = (right - left) / left;
-  if (growth > threshold) {
-    reasons.push(`${label} aumentou ${Math.round(growth * 100)}%`);
+  if (growth * 100 > thresholdPct) {
+    reasons.push(`${label} aumentou ${Math.round(growth * 100)}% (limite ${thresholdPct}%)`);
   }
 }
 

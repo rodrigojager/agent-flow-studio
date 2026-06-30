@@ -593,6 +593,11 @@ export interface StudioRunComparison {
     candidateRunId: string;
     verdict: string;
     reasons: string[];
+    appliedThresholds: {
+      tokenGrowthPct: number;
+      costGrowthPct: number;
+      durationGrowthPct: number;
+    };
   };
   nodeDiff: {
     leftOnly: string[];

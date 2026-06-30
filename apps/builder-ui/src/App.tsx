@@ -171,10 +171,17 @@ interface StudioScenario {
   tags: string[];
   isPinned: boolean;
   useNodePins: boolean;
+  regressionThresholds: StudioScenarioRegressionThresholds;
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
   checkpoint: StudioScenarioCheckpoint | null;
+}
+
+interface StudioScenarioRegressionThresholds {
+  tokenGrowthPct: number;
+  costGrowthPct: number;
+  durationGrowthPct: number;
 }
 
 interface StudioScenarioCheckpoint {
@@ -304,6 +311,11 @@ const palette = nodeTypeOptions;
 const themeStorageKey = "agent-flow-builder.theme";
 const scenarioStorageKeyPrefix = "agent-flow-builder.studio-scenarios.";
 const nodePinStorageKeyPrefix = "agent-flow-builder.studio-node-pins.";
+const defaultStudioRegressionThresholds: StudioScenarioRegressionThresholds = {
+  tokenGrowthPct: 20,
+  costGrowthPct: 20,
+  durationGrowthPct: 30,
+};
 const dockerHistoryOperationOptions: DockerRuntimeOperation[] = [
   "prepare_env",
   "configure_ports",
@@ -365,6 +377,8 @@ export default function App() {
   const [studioScenarioLabel, setStudioScenarioLabel] = useState("");
   const [studioScenarioTags, setStudioScenarioTags] = useState("");
   const [studioScenarioUseNodePins, setStudioScenarioUseNodePins] = useState(false);
+  const [studioScenarioRegressionThresholds, setStudioScenarioRegressionThresholds] =
+    useState<StudioScenarioRegressionThresholds>({ ...defaultStudioRegressionThresholds });
   const [studioNodePins, setStudioNodePins] = useState<StudioNodePin[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
@@ -535,6 +549,7 @@ export default function App() {
       setStudioScenarioLabel("");
       setStudioScenarioTags("");
       setStudioScenarioUseNodePins(false);
+      setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
       setStudioNodePins([]);
       return;
     }
@@ -566,11 +581,13 @@ export default function App() {
           setStudioScenarioLabel(selectedScenario.label);
           setStudioScenarioTags(selectedScenario.tags.join(", "));
           setStudioScenarioUseNodePins(selectedScenario.useNodePins);
+          setStudioScenarioRegressionThresholds(selectedScenario.regressionThresholds);
           setUserMessage(selectedScenario.input);
         } else {
           setStudioScenarioLabel("");
           setStudioScenarioTags("");
           setStudioScenarioUseNodePins(false);
+          setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
         }
         const [nextSandbox, listResult, runList, approvalStatus] = await Promise.all([
           sandboxStatus(loaded.flow.id),
@@ -650,6 +667,7 @@ export default function App() {
         setStudioScenarioLabel("");
         setStudioScenarioTags("");
         setStudioScenarioUseNodePins(false);
+        setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
         setStudioNodePins([]);
         setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
         setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
@@ -2123,6 +2141,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setStudioScenarioLabel("");
     setStudioScenarioTags("");
     setStudioScenarioUseNodePins(false);
+    setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
   }
 
   function persistStudioScenarios(flowId: string, scenarios: StudioScenario[]): void {
@@ -2185,6 +2204,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         input,
         tags,
         useNodePins: studioScenarioUseNodePins,
+        regressionThresholds: studioScenarioRegressionThresholds,
         updatedAt: now,
       };
     } else {
@@ -2195,6 +2215,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         tags,
         isPinned: false,
         useNodePins: studioScenarioUseNodePins,
+        regressionThresholds: studioScenarioRegressionThresholds,
         createdAt: now,
         updatedAt: now,
         lastUsedAt: null,
@@ -2218,6 +2239,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       setStudioScenarioLabel(selected.label);
       setStudioScenarioTags(selected.tags.join(", "));
       setStudioScenarioUseNodePins(selected.useNodePins);
+      setStudioScenarioRegressionThresholds(selected.regressionThresholds);
       setUserMessage(selected.input);
       setStatus({ kind: "ok", message: `Cenário "${selected.label}" selecionado.` });
     } else {
@@ -2238,6 +2260,16 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     persistStudioScenarios(selectedFlowId, sortScenarios(nextScenarios));
   }
 
+  function handleStudioScenarioRegressionThresholdChange(
+    key: keyof StudioScenarioRegressionThresholds,
+    value: string,
+  ) {
+    setStudioScenarioRegressionThresholds((current) => ({
+      ...current,
+      [key]: normalizeRegressionThresholdInput(value, current[key]),
+    }));
+  }
+
   function handleDeleteStudioScenario() {
     if (!selectedFlowId || !studioSelectedScenarioId) {
       return;
@@ -2252,12 +2284,14 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       setStudioScenarioLabel(selected.label);
       setStudioScenarioTags(selected.tags.join(", "));
       setStudioScenarioUseNodePins(selected.useNodePins);
+      setStudioScenarioRegressionThresholds(selected.regressionThresholds);
       setUserMessage(selected.input);
       setStatus({ kind: "ok", message: "Cenário removido." });
     } else {
       setStudioScenarioLabel("");
       setStudioScenarioTags("");
       setStudioScenarioUseNodePins(false);
+      setStudioScenarioRegressionThresholds({ ...defaultStudioRegressionThresholds });
       setStatus({ kind: "ok", message: "Cenário removido." });
     }
     if (!selected) {
@@ -2297,6 +2331,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       tags,
       isPinned: false,
       useNodePins: studioScenarioUseNodePins,
+      regressionThresholds: studioScenarioRegressionThresholds,
       createdAt: now,
       updatedAt: now,
       lastUsedAt: null,
@@ -2308,6 +2343,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setStudioScenarioLabel(label);
     setStudioScenarioTags(tags.join(", "));
     setStudioScenarioUseNodePins(scenario.useNodePins);
+    setStudioScenarioRegressionThresholds(scenario.regressionThresholds);
     setUserMessage(input);
     setStatus({ kind: "ok", message: `Fork criado a partir do evento #${selectedStudioEvent.seq}.` });
   }
@@ -2916,6 +2952,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               studioScenarioLabel={studioScenarioLabel}
               studioScenarioTags={studioScenarioTags}
               studioScenarioUseNodePins={studioScenarioUseNodePins}
+              studioScenarioRegressionThresholds={studioScenarioRegressionThresholds}
               studioNodePins={studioNodePins}
               setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
@@ -2948,6 +2985,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onStudioScenarioLabelChange={setStudioScenarioLabel}
               onStudioScenarioTagsChange={setStudioScenarioTags}
               onStudioScenarioUseNodePinsChange={setStudioScenarioUseNodePins}
+              onStudioScenarioRegressionThresholdChange={handleStudioScenarioRegressionThresholdChange}
               onStartSandbox={handleStartSandbox}
               onStopSandbox={handleStopSandbox}
               onRefreshSandbox={handleRefreshSandbox}
@@ -4452,6 +4490,7 @@ function SandboxPanel({
   studioScenarioLabel,
   studioScenarioTags,
   studioScenarioUseNodePins,
+  studioScenarioRegressionThresholds,
   studioNodePins,
   userMessage,
   studioRunSearch,
@@ -4484,6 +4523,7 @@ function SandboxPanel({
   onStudioScenarioLabelChange,
   onStudioScenarioTagsChange,
   onStudioScenarioUseNodePinsChange,
+  onStudioScenarioRegressionThresholdChange,
   onExportComparison,
   onClearComparison,
   onSelectEvent,
@@ -4524,6 +4564,7 @@ function SandboxPanel({
   studioScenarioLabel: string;
   studioScenarioTags: string;
   studioScenarioUseNodePins: boolean;
+  studioScenarioRegressionThresholds: StudioScenarioRegressionThresholds;
   studioNodePins: StudioNodePin[];
   userMessage: string;
   studioRunSearch: string;
@@ -4558,6 +4599,7 @@ function SandboxPanel({
   onStudioScenarioLabelChange: (value: string) => void;
   onStudioScenarioTagsChange: (value: string) => void;
   onStudioScenarioUseNodePinsChange: (value: boolean) => void;
+  onStudioScenarioRegressionThresholdChange: (key: keyof StudioScenarioRegressionThresholds, value: string) => void;
   onSelectEvent: (seq: number) => void;
   onTimelineNodeFilterChange: (value: string) => void;
   onRefreshRuns: () => void;
@@ -4701,6 +4743,41 @@ function SandboxPanel({
             <span>Usar pins de nó como mock</span>
             <small>{activeNodePinCount} pin(s) ativo(s) serão enviados na execução</small>
           </label>
+          <div className="studio-threshold-grid" aria-label="Thresholds de regressão">
+            <label>
+              <span>Tokens +%</span>
+              <input
+                type="number"
+                min="0"
+                max="1000"
+                step="1"
+                value={studioScenarioRegressionThresholds.tokenGrowthPct}
+                onChange={(event) => onStudioScenarioRegressionThresholdChange("tokenGrowthPct", event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Custo +%</span>
+              <input
+                type="number"
+                min="0"
+                max="1000"
+                step="1"
+                value={studioScenarioRegressionThresholds.costGrowthPct}
+                onChange={(event) => onStudioScenarioRegressionThresholdChange("costGrowthPct", event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Duração +%</span>
+              <input
+                type="number"
+                min="0"
+                max="1000"
+                step="1"
+                value={studioScenarioRegressionThresholds.durationGrowthPct}
+                onChange={(event) => onStudioScenarioRegressionThresholdChange("durationGrowthPct", event.target.value)}
+              />
+            </label>
+          </div>
         </div>
         <div className="sandbox-actions">
           <button
@@ -4762,6 +4839,9 @@ function SandboxPanel({
             {selectedScenario.useNodePins ? (
               <small>Mock por pins de nó: {activeNodePinCount} pin(s) ativo(s)</small>
             ) : null}
+            <small>
+              Thresholds: tokens +{selectedScenario.regressionThresholds.tokenGrowthPct}% · custo +{selectedScenario.regressionThresholds.costGrowthPct}% · duração +{selectedScenario.regressionThresholds.durationGrowthPct}%
+            </small>
             <span>Último uso: {selectedScenario.lastUsedAt ? formatDateTime(selectedScenario.lastUsedAt) : "nunca"}</span>
           </article>
         ) : (
@@ -5057,6 +5137,11 @@ function SandboxPanel({
                 Só no {studioRunComparison.rightRunId}: {studioRunComparison.rightOnlyNodes.join(", ") || "-"} <br />
                 Runtime URL: {studioRunComparison.metrics.runtimeUrlChanged ? "diferente" : "igual"} ·{" "}
                 Pinado vs real: {studioRunComparison.regression.comparesPinnedToLive ? "sim" : "não"}
+              </small>
+              <small>
+                Thresholds: tokens +{studioRunComparison.regression.appliedThresholds.tokenGrowthPct}% · custo +
+                {studioRunComparison.regression.appliedThresholds.costGrowthPct}% · duração +
+                {studioRunComparison.regression.appliedThresholds.durationGrowthPct}%
               </small>
               {studioRunComparison.regression.reasons.length ? (
                 <small>Motivos: {studioRunComparison.regression.reasons.join("; ")}</small>
@@ -7251,6 +7336,7 @@ function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: Stu
       label: scenario.label,
       tags: scenario.tags,
       useNodePins: scenario.useNodePins,
+      regressionThresholds: scenario.regressionThresholds,
     },
   };
   if (scenario.checkpoint) {
@@ -7382,6 +7468,7 @@ function normalizeStudioScenario(value: unknown): StudioScenario | null {
       : [],
     isPinned: value.isPinned === true,
     useNodePins: value.useNodePins === true,
+    regressionThresholds: normalizeStudioScenarioRegressionThresholds(value.regressionThresholds),
     createdAt,
     updatedAt,
     lastUsedAt: value.lastUsedAt === null || typeof value.lastUsedAt === "string" ? value.lastUsedAt : null,
@@ -7422,7 +7509,32 @@ function normalizeScenarioDefaults(scenario: StudioScenario): StudioScenario {
     label: scenario.label.trim() || "Cenário",
     input,
     tags,
+    regressionThresholds: normalizeStudioScenarioRegressionThresholds(scenario.regressionThresholds),
   };
+}
+
+function normalizeStudioScenarioRegressionThresholds(value: unknown): StudioScenarioRegressionThresholds {
+  const record = isRecord(value) ? value : {};
+  return {
+    tokenGrowthPct: normalizeRegressionThresholdValue(record.tokenGrowthPct, defaultStudioRegressionThresholds.tokenGrowthPct),
+    costGrowthPct: normalizeRegressionThresholdValue(record.costGrowthPct, defaultStudioRegressionThresholds.costGrowthPct),
+    durationGrowthPct: normalizeRegressionThresholdValue(record.durationGrowthPct, defaultStudioRegressionThresholds.durationGrowthPct),
+  };
+}
+
+function normalizeRegressionThresholdInput(value: string, fallback: number): number {
+  if (!value.trim()) {
+    return fallback;
+  }
+  return normalizeRegressionThresholdValue(Number(value), fallback);
+}
+
+function normalizeRegressionThresholdValue(value: unknown, fallback: number): number {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1000, Math.round(numeric)));
 }
 
 function activeStudioNodePins(pins: StudioNodePin[], flow: AgentFlow | null): StudioNodePin[] {

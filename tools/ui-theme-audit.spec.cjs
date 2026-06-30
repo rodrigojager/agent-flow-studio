@@ -88,7 +88,7 @@ for (const theme of themes) {
     await page.getByRole("button", { name: /^Comparar$/ }).click();
     const comparisonSection = page.locator(".studio-comparison-item", { hasText: "Comparação" });
     await expect(comparisonSection.getByText("Regressão funcional detectada.")).toBeVisible();
-    await expect(comparisonSection.getByText(/tokens/)).toBeVisible();
+    await expect(comparisonSection.getByText("tokens", { exact: true })).toBeVisible();
     await expect(comparisonSection.getByText(/168 para -/)).toBeVisible();
     await page.getByRole("button", { name: /ui-audit-ok/ }).click();
     await page.getByRole("button", { name: /#4\s+llm_completed/ }).click();
@@ -103,6 +103,7 @@ for (const theme of themes) {
     await expect(nodePinsSection.getByText(/atual/).first()).toBeVisible();
     await page.getByLabel("Usar pins de nó como mock").check();
     await expect(page.getByLabel("Usar pins de nó como mock")).toBeChecked();
+    await page.getByLabel("Tokens +%").fill("12");
     await page.getByRole("button", { name: /^Criar fork$/ }).click();
     await expect(page.getByText("Fork criado a partir do evento #4.")).toBeVisible();
     const scenarioSection = page.locator(".sandbox-section", { hasText: "Cenários de teste" });
@@ -110,6 +111,7 @@ for (const theme of themes) {
     await expect(selectedScenarioCard.getByText("Fork llm_step #4", { exact: true })).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Fork de checkpoint: .*#4.*llm_step/)).toBeVisible();
     await expect(selectedScenarioCard.getByText(/Mock por pins de nó: 1 pin/)).toBeVisible();
+    await expect(selectedScenarioCard.getByText(/Thresholds: tokens \+12%.*custo \+20%.*duração \+30%/)).toBeVisible();
     await expect(page.locator(".turn-input")).toHaveValue("Aumentar conversões em onboarding.");
 
     await expectNoDocumentHorizontalOverflow(page);

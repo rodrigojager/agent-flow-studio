@@ -1768,6 +1768,21 @@ button:disabled {
   white-space: nowrap;
 }
 
+.studio-threshold-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 7px;
+}
+
+.studio-threshold-grid label {
+  min-width: 0;
+}
+
+.studio-threshold-grid input {
+  width: 100%;
+  min-width: 0;
+}
+
 .node-pin-list {
   display: grid;
   gap: 7px;

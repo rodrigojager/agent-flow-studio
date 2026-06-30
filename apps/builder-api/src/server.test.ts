@@ -212,7 +212,14 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
         phase: "finalizing",
         turn: 3,
         max_turns: 3,
-        metadata: { source: "test" },
+        metadata: {
+          source: "test",
+          scenario: {
+            id: "scenario-error",
+            label: "Erro controlado",
+            regressionThresholds: { tokenGrowthPct: 7, costGrowthPct: 8, durationGrowthPct: 9 },
+          },
+        },
         is_complete: true,
       },
       transcript: [{ seq: 1, role: "assistant", code: "DONE", content: "Vamos encerrar.", metadata: {} }],
@@ -368,6 +375,11 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(studioRunsCompared.json().metrics.runKindRight, "live");
   assert.equal(studioRunsCompared.json().regression.severity, "fail");
   assert.equal(studioRunsCompared.json().regression.comparesPinnedToLive, true);
+  assert.deepEqual(studioRunsCompared.json().regression.appliedThresholds, {
+    tokenGrowthPct: 7,
+    costGrowthPct: 8,
+    durationGrowthPct: 9,
+  });
   assert.ok(studioRunsCompared.json().regression.reasons.some((reason: string) => reason.includes("erros aumentaram")));
   assert.deepEqual(studioRunsCompared.json().nodeDiff.leftOnly, ["ask_question"]);
   assert.deepEqual(studioRunsCompared.json().nodeDiff.rightOnly, ["finish"]);
