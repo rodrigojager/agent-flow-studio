@@ -1156,6 +1156,23 @@ export default function App() {
     await saveDirtyAssets();
   }
 
+  async function handleSaveWorkspace() {
+    if (!selectedFlowId) {
+      return;
+    }
+    if (!isDirty && !promptDirty && !schemaDirty) {
+      setStatus({ kind: "ok", message: "Workspace já está salvo." });
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando workspace ${selectedFlowId}.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      setStatus({ kind: "ok", message: `Workspace ${selectedFlowId} salvo.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleExportFlow() {
     if (!selectedFlowId) {
       return;
@@ -2252,6 +2269,34 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     }
   }
 
+  const hasWorkspaceDirty = isDirty || promptDirty || schemaDirty;
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      const hasPrimaryModifier = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (hasPrimaryModifier && key === "s") {
+        event.preventDefault();
+        void handleSaveWorkspace();
+        return;
+      }
+      if (hasPrimaryModifier && event.key === "Enter") {
+        event.preventDefault();
+        void handleValidate();
+        return;
+      }
+      if (!hasPrimaryModifier && event.key === "Escape" && !isEditableShortcutTarget(event.target)) {
+        if (selectedNodeId || selectedEdgeId) {
+          event.preventDefault();
+          setSelectedNodeId("");
+          setSelectedEdgeId("");
+        }
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [handleSaveWorkspace, handleValidate, selectedEdgeId, selectedNodeId]);
+
   return (
     <div className="app-shell" data-theme={theme}>
       <header className="topbar">
@@ -2311,13 +2356,25 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           <button type="button" className="icon-button" onClick={handleImportClick} title="Importar workspace" aria-label="Importar workspace">
             <Upload size={17} aria-hidden="true" />
           </button>
-          <button type="button" className="command-button" onClick={handleValidate} disabled={!selectedFlowId}>
+          <button
+            type="button"
+            className="command-button"
+            onClick={handleValidate}
+            disabled={!selectedFlowId}
+            title="Validar flow (Ctrl+Enter)"
+          >
             <CheckCircle2 size={17} aria-hidden="true" />
             Validar
           </button>
-          <button type="button" className="command-button" onClick={handleSaveFlow} disabled={!selectedFlowId || !isDirty}>
+          <button
+            type="button"
+            className="command-button"
+            onClick={handleSaveWorkspace}
+            disabled={!selectedFlowId || !hasWorkspaceDirty}
+            title="Salvar workspace (Ctrl+S)"
+          >
             <FileJson size={17} aria-hidden="true" />
-            {isDirty ? "Salvar" : "Salvo"}
+            {hasWorkspaceDirty ? "Salvar" : "Salvo"}
           </button>
           <button
             type="button"
@@ -6142,6 +6199,17 @@ function dockerProgressMatchesFilter(step: DockerRuntimeProgressEvent, filters: 
     return false;
   }
   return true;
+}
+
+function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  const tagName = target.tagName.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select";
 }
 
 function manifestValidationMessage(result: RuntimeManifestValidationResult): string {

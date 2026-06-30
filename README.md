@@ -34,6 +34,7 @@ O fluxo principal foi desenhado para funcionar sem LangSmith Cloud, sem cobranç
 - Diagnósticos estruturados de validação com navegação para o ponto afetado.
 - Preview do JSON do flow.
 - Tema claro e escuro persistente por `localStorage`.
+- Atalhos iniciais: `Ctrl/Cmd+S` para salvar workspace, `Ctrl/Cmd+Enter` para validar e `Esc` para limpar seleção do canvas.
 
 ### Tipos De Nó E Capacidades Do Flow
 

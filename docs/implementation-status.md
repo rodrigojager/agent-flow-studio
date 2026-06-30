@@ -85,6 +85,7 @@
 - Histórico Docker aceita filtros por etapa textual do progresso (`progressStage`) e status/severidade do progresso (`progressStatus`: running/done/error/warning/info/canceled); a Builder UI expõe os filtros `Etapa` e `Progresso` no painel `Artefato` e aplica o mesmo recorte à lista de progresso visível.
 - Parser de progresso Docker estima percentuais mesmo quando o output do BuildKit não traz contagem explícita, usando etapa inferida, contexto de linhas `#N DONE` e evento final em 100% para builds concluídos.
 - Shell principal da Builder UI ganhou breakpoint responsivo abaixo de 760px: topbar passa a quebrar em duas linhas com toolbar rolável, workspace vira fluxo vertical sem largura mínima desktop, canvas mantém altura útil e inspector fica abaixo do canvas.
+- Builder UI possui atalhos globais iniciais: `Ctrl/Cmd+S` salva flow/prompts/schemas sujos, `Ctrl/Cmd+Enter` valida o flow atual e `Esc` limpa a seleção do canvas quando o foco não está em campo editável.
 
 ## Verificado
 
@@ -130,6 +131,7 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre filtros de histórico/progresso Docker por `progressStage=metadata`, `progressStatus=done`, `progressStatus=canceled` e rejeição de `progressStatus` inválido.
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 - Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
+- `npm run typecheck` e `npm run build:builder-ui` passaram após a inclusão dos atalhos globais iniciais.
 
 ## Ainda não implementado
 
@@ -156,7 +158,7 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
 2. **Canvas/produtos de trabalho refinados (Média prioridade)**
    - grupos colapsáveis, atalhos e estado dirty/stale por nó/aresta;
    - edição visual de metadados e esquemas no painel lateral sem precisar abrir JSON;
-   - atalhos de fluxo (Ctrl+S, Ctrl+Enter, A, F, Esc, filtros).
+   - ampliar atalhos para adicionar/focar/buscar nós e filtros (`A`, `F` e comandos contextuais).
 
 3. **Cenários + pinning avançado (Média prioridade)**
    - consolidar cenários nomeados por agente/run;
