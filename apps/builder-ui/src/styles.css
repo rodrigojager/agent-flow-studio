@@ -571,6 +571,88 @@ button:disabled {
   white-space: nowrap;
 }
 
+.asset-metadata {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.asset-metadata-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.asset-metadata-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-metadata-title span {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.asset-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.asset-metadata-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.asset-metadata-grid label span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.asset-metadata-grid input,
+.asset-metadata-grid textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface-bg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.asset-metadata-grid input[readonly] {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+
+.asset-metadata-grid textarea {
+  resize: vertical;
+  line-height: 1.35;
+}
+
+.asset-metadata-wide {
+  grid-column: 1 / -1;
+}
+
 .asset-editor {
   width: 100%;
   min-height: 230px;

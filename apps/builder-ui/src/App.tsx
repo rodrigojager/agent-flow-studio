@@ -112,6 +112,7 @@ import type {
   FlowNode,
   FlowSummary,
   FlowWorkspaceExport,
+  PromptRef,
   ApprovedGenerateResult,
   DockerRuntimeHistory,
   DockerRuntimeHistoryEntry,
@@ -136,6 +137,7 @@ import type {
   RuntimeManifestValidationResult,
   SandboxStatus,
   SessionView,
+  SchemaRef,
   StudioRunRecord,
   StudioRunSummary,
   StudioRunComparison,
@@ -149,6 +151,8 @@ import "./styles.css";
 type InspectorTab = "properties" | "files" | "validation" | "json" | "artifact" | "runtime" | "sandbox";
 type StatusKind = "idle" | "ok" | "error" | "busy";
 type ThemeMode = "light" | "dark";
+type PromptMetadataPatch = Partial<Pick<PromptRef, "version" | "description" | "tags" | "variables">>;
+type SchemaMetadataPatch = Partial<Pick<SchemaRef, "version" | "description" | "tags">>;
 
 interface DockerHistoryFilterForm {
   operation: DockerRuntimeOperation | "";
@@ -1619,6 +1623,68 @@ export default function App() {
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
+  }
+
+  function handlePromptMetadataChange(promptId: string, patch: PromptMetadataPatch) {
+    updateDraft((flow) => ({
+      ...flow,
+      prompts: flow.prompts.map((prompt) => {
+        if (prompt.id !== promptId) {
+          return prompt;
+        }
+        const nextPrompt = { ...prompt };
+        if ("version" in patch) {
+          nextPrompt.version = patch.version?.trim() || "v1";
+        }
+        if ("description" in patch) {
+          const description = patch.description ?? "";
+          if (description.trim()) {
+            nextPrompt.description = description;
+          } else {
+            delete nextPrompt.description;
+          }
+        }
+        if ("tags" in patch) {
+          nextPrompt.tags = patch.tags ?? [];
+        }
+        if ("variables" in patch) {
+          nextPrompt.variables = patch.variables ?? [];
+        }
+        return nextPrompt;
+      }),
+    }));
+  }
+
+  function handleSchemaMetadataChange(schemaId: string, patch: SchemaMetadataPatch) {
+    updateDraft((flow) => ({
+      ...flow,
+      schemas: flow.schemas.map((schema) => {
+        if (schema.id !== schemaId) {
+          return schema;
+        }
+        const nextSchema = { ...schema };
+        if ("version" in patch) {
+          const version = patch.version?.trim() ?? "";
+          if (version) {
+            nextSchema.version = version;
+          } else {
+            delete nextSchema.version;
+          }
+        }
+        if ("description" in patch) {
+          const description = patch.description ?? "";
+          if (description.trim()) {
+            nextSchema.description = description;
+          } else {
+            delete nextSchema.description;
+          }
+        }
+        if ("tags" in patch) {
+          nextSchema.tags = patch.tags ?? [];
+        }
+        return nextSchema;
+      }),
+    }));
   }
 
   async function handleCreatePrompt(promptId: string) {
@@ -3307,6 +3373,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               schemaContent={schemaContent}
               promptDirty={promptDirty}
               schemaDirty={schemaDirty}
+              metadataDirty={isDirty}
               onPromptSelect={setSelectedPromptId}
               onSchemaSelect={setSelectedSchemaId}
               onPromptChange={(value) => {
@@ -3316,6 +3383,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 setStudioScenarioBatchResults([]);
                 setStudioScenarioBatchApproval(null);
               }}
+              onPromptMetadataChange={handlePromptMetadataChange}
               onSchemaChange={(value) => {
                 setSchemaContent(value);
                 setSchemaDirty(true);
@@ -3323,12 +3391,14 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 setStudioScenarioBatchResults([]);
                 setStudioScenarioBatchApproval(null);
               }}
+              onSchemaMetadataChange={handleSchemaMetadataChange}
               onPromptCreate={handleCreatePrompt}
               onPromptDelete={handleDeletePrompt}
               onPromptSave={handleSavePrompt}
               onSchemaCreate={handleCreateSchema}
               onSchemaDelete={handleDeleteSchema}
               onSchemaSave={handleSaveSchema}
+              onMetadataSave={handleSaveWorkspace}
             />
           ) : inspectorTab === "validation" ? (
             <ValidationPanel
@@ -4084,16 +4154,20 @@ function AssetsPanel({
   schemaContent,
   promptDirty,
   schemaDirty,
+  metadataDirty,
   onPromptSelect,
   onSchemaSelect,
   onPromptChange,
+  onPromptMetadataChange,
   onSchemaChange,
+  onSchemaMetadataChange,
   onPromptCreate,
   onPromptDelete,
   onPromptSave,
   onSchemaCreate,
   onSchemaDelete,
   onSchemaSave,
+  onMetadataSave,
 }: {
   flow: AgentFlow | null;
   selectedPromptId: string;
@@ -4102,16 +4176,20 @@ function AssetsPanel({
   schemaContent: string;
   promptDirty: boolean;
   schemaDirty: boolean;
+  metadataDirty: boolean;
   onPromptSelect: (value: string) => void;
   onSchemaSelect: (value: string) => void;
   onPromptChange: (value: string) => void;
+  onPromptMetadataChange: (promptId: string, patch: PromptMetadataPatch) => void;
   onSchemaChange: (value: string) => void;
+  onSchemaMetadataChange: (schemaId: string, patch: SchemaMetadataPatch) => void;
   onPromptCreate: (value: string) => void;
   onPromptDelete: () => void;
   onPromptSave: () => void;
   onSchemaCreate: (value: string) => void;
   onSchemaDelete: () => void;
   onSchemaSave: () => void;
+  onMetadataSave: () => void;
 }) {
   const [newPromptId, setNewPromptId] = useState("");
   const [newSchemaId, setNewSchemaId] = useState("");
@@ -4166,6 +4244,58 @@ function AssetsPanel({
           ))}
         </select>
         {selectedPrompt ? <small className="asset-path">{selectedPrompt.path}</small> : null}
+        {selectedPrompt ? (
+          <div className="asset-metadata">
+            <div className="asset-metadata-title">
+              <strong>Metadados</strong>
+              <span>{metadataDirty ? "workspace alterado" : "salvo"}</span>
+            </div>
+            <div className="asset-metadata-grid">
+              <label>
+                <span>ID</span>
+                <input value={selectedPrompt.id} readOnly />
+              </label>
+              <label>
+                <span>Caminho</span>
+                <input value={selectedPrompt.path} readOnly />
+              </label>
+              <label>
+                <span>Versão do prompt</span>
+                <input
+                  value={selectedPrompt.version}
+                  onChange={(event) => onPromptMetadataChange(selectedPrompt.id, { version: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Variáveis do prompt</span>
+                <input
+                  value={selectedPrompt.variables.join(", ")}
+                  onChange={(event) => onPromptMetadataChange(selectedPrompt.id, { variables: splitTags(event.target.value) })}
+                  placeholder="session_id, user_message"
+                />
+              </label>
+              <label className="asset-metadata-wide">
+                <span>Descrição do prompt</span>
+                <textarea
+                  value={selectedPrompt.description ?? ""}
+                  onChange={(event) => onPromptMetadataChange(selectedPrompt.id, { description: event.target.value })}
+                  rows={2}
+                />
+              </label>
+              <label className="asset-metadata-wide">
+                <span>Tags do prompt</span>
+                <input
+                  value={(selectedPrompt.tags ?? []).join(", ")}
+                  onChange={(event) => onPromptMetadataChange(selectedPrompt.id, { tags: splitTags(event.target.value) })}
+                  placeholder="entrada, llm, produção"
+                />
+              </label>
+            </div>
+            <button type="button" className="command-button full-width" onClick={onMetadataSave} disabled={!metadataDirty}>
+              Salvar metadados
+            </button>
+          </div>
+        ) : null}
         <textarea
           className="asset-editor prompt-editor"
           value={promptContent}
@@ -4216,6 +4346,51 @@ function AssetsPanel({
           ))}
         </select>
         {selectedSchema ? <small className="asset-path">{selectedSchema.path}</small> : null}
+        {selectedSchema ? (
+          <div className="asset-metadata">
+            <div className="asset-metadata-title">
+              <strong>Metadados</strong>
+              <span>{metadataDirty ? "workspace alterado" : "salvo"}</span>
+            </div>
+            <div className="asset-metadata-grid">
+              <label>
+                <span>ID</span>
+                <input value={selectedSchema.id} readOnly />
+              </label>
+              <label>
+                <span>Caminho</span>
+                <input value={selectedSchema.path} readOnly />
+              </label>
+              <label>
+                <span>Versão do schema</span>
+                <input
+                  value={selectedSchema.version ?? ""}
+                  onChange={(event) => onSchemaMetadataChange(selectedSchema.id, { version: event.target.value })}
+                  placeholder="v1"
+                />
+              </label>
+              <label className="asset-metadata-wide">
+                <span>Descrição do schema</span>
+                <textarea
+                  value={selectedSchema.description ?? ""}
+                  onChange={(event) => onSchemaMetadataChange(selectedSchema.id, { description: event.target.value })}
+                  rows={2}
+                />
+              </label>
+              <label className="asset-metadata-wide">
+                <span>Tags do schema</span>
+                <input
+                  value={(selectedSchema.tags ?? []).join(", ")}
+                  onChange={(event) => onSchemaMetadataChange(selectedSchema.id, { tags: splitTags(event.target.value) })}
+                  placeholder="estado, saída, contrato"
+                />
+              </label>
+            </div>
+            <button type="button" className="command-button full-width" onClick={onMetadataSave} disabled={!metadataDirty}>
+              Salvar metadados
+            </button>
+          </div>
+        ) : null}
         <textarea
           className="asset-editor schema-editor"
           value={schemaContent}

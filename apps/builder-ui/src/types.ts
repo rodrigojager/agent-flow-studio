@@ -11,12 +11,17 @@ export interface PromptRef {
   id: string;
   path: string;
   version: string;
+  description?: string;
+  tags?: string[];
   variables: string[];
 }
 
 export interface SchemaRef {
   id: string;
   path: string;
+  version?: string;
+  description?: string;
+  tags?: string[];
 }
 
 export interface FlowNode {

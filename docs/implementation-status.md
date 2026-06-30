@@ -36,6 +36,7 @@
 - Builder API exporta e importa pacotes JSON versionados de workspace de flow, contendo `agent.flow.json`, prompts e schemas referenciados, com proteção contra conflito e path traversal.
 - Builder API lista, lê e empacota artefatos gerados dentro de `generated/` via `/artifacts`, `/artifacts/file` e `/artifacts/archive`.
 - Builder UI possui aba `Arquivos` para criar, remover e editar prompts e schemas referenciados pelo flow antes de validar, gerar ou iniciar sandbox.
+- Flow Spec, Builder API e Builder UI preservam metadados visuais de prompts/schemas no `agent.flow.json`: versão, descrição, tags e variáveis de prompt, com formulário dedicado na aba `Arquivos` e salvamento pelo mesmo fluxo dirty do workspace.
 - Builder UI permite exportar e importar workspace de flow pela toolbar, salvando alterações pendentes antes de exportar.
 - Builder UI possui aba `Artefato` para pré-visualizar arquivos do runtime ou bundle gerado e baixar um zip do projeto.
 - Builder UI possui aba `Validação` para exibir diagnósticos estruturados e navegar para nós, arestas, prompts ou schemas afetados.
@@ -147,12 +148,12 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 - Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
 - `npm run typecheck` e `npm run build:builder-ui` passaram após a inclusão dos atalhos globais iniciais.
-- `npm run test:ui-theme` passou com 12 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, origem observada de restore de checkpoint, pin local de input/output por nó, toggle de mock por pins em cenário, thresholds de regressão por cenário, importação/exportação de fixture JSON de replay, ação de execução em lote, comparação de runs com veredito de regressão, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, alertas operacionais persistentes de Build/Up/Smoke, e estados Docker de loading/progresso, container running, smoke com erro e container stopped.
+- `npm run test:ui-theme` passou com 13 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, edição visual de metadados de prompt/schema na aba `Arquivos`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, origem observada de restore de checkpoint, pin local de input/output por nó, toggle de mock por pins em cenário, thresholds de regressão por cenário, importação/exportação de fixture JSON de replay, ação de execução em lote, comparação de runs com veredito de regressão, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, alertas operacionais persistentes de Build/Up/Smoke, e estados Docker de loading/progresso, container running, smoke com erro e container stopped.
 
 ## Ainda não implementado
 
 - Tema claro e escuro ainda precisa ampliar a auditoria visual para estados internos específicos de erro/loading em painéis como arquivos, runtime manifest e Studio; o status global, shell principal, abas base, runs locais com dados, aprovação desatualizada, fluxo aprovado até o artefato Docker final e estados Docker build/running/stopped/erro já têm gate automatizado.
-- Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
+- Ergonomia refinada do canvas, incluindo grupos colapsáveis, busca/filtro de nós, comandos contextuais mais completos e edição visual profunda do conteúdo de JSON Schema além dos metadados já cobertos.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
@@ -172,7 +173,7 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
 
 2. **Canvas/produtos de trabalho refinados (Média prioridade)**
    - grupos colapsáveis e estado dirty/stale por nó/aresta;
-   - edição visual de metadados e esquemas no painel lateral sem precisar abrir JSON;
+   - edição visual profunda de propriedades internas de JSON Schema no painel lateral sem precisar abrir JSON;
    - ampliar comandos contextuais para buscar nós, filtrar e executar ações comuns sem depender de mouse.
 
 3. **Cenários + pinning avançado (Média prioridade)**

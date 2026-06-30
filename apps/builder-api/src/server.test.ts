@@ -1229,13 +1229,19 @@ test("Builder API edits prompt and schema assets referenced by a flow", async (t
       id: "draft_prompt",
       path: "prompts/draft_prompt.md",
       version: "v1",
+      description: "Prompt de rascunho para edição visual.",
+      tags: ["draft", "llm"],
       variables: ["user_message"],
       content: "# Prompt novo\n\nVocê é um prompt criado pela API.\n",
     },
   });
   assert.equal(createdPrompt.statusCode, 200);
   assert.equal(createdPrompt.json().prompt.id, "draft_prompt");
-  assert.ok(createdPrompt.json().flow.prompts.some((item: { id: string }) => item.id === "draft_prompt"));
+  const draftPromptRef = createdPrompt.json().flow.prompts.find((item: { id: string }) => item.id === "draft_prompt");
+  assert.ok(draftPromptRef);
+  assert.equal(draftPromptRef.description, "Prompt de rascunho para edição visual.");
+  assert.deepEqual(draftPromptRef.tags, ["draft", "llm"]);
+  assert.deepEqual(draftPromptRef.variables, ["user_message"]);
   assert.match(await readFile(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "draft_prompt.md"), "utf-8"), /Prompt novo/);
 
   const duplicatePrompt = await app.inject({
@@ -1263,12 +1269,19 @@ test("Builder API edits prompt and schema assets referenced by a flow", async (t
     payload: {
       id: "draft_schema",
       path: "schemas/draft.schema.json",
+      version: "v2",
+      description: "Schema de rascunho para edição visual.",
+      tags: ["draft", "contract"],
       content: "{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}}}",
     },
   });
   assert.equal(createdSchema.statusCode, 200);
   assert.equal(createdSchema.json().schema.id, "draft_schema");
-  assert.ok(createdSchema.json().flow.schemas.some((item: { id: string }) => item.id === "draft_schema"));
+  const draftSchemaRef = createdSchema.json().flow.schemas.find((item: { id: string }) => item.id === "draft_schema");
+  assert.ok(draftSchemaRef);
+  assert.equal(draftSchemaRef.version, "v2");
+  assert.equal(draftSchemaRef.description, "Schema de rascunho para edição visual.");
+  assert.deepEqual(draftSchemaRef.tags, ["draft", "contract"]);
 
   const deleteStateSchema = await app.inject({ method: "DELETE", url: "/flows/reference-interview/schemas/session_state" });
   assert.equal(deleteStateSchema.statusCode, 409);

@@ -25,12 +25,17 @@ export const PromptRefSchema = z.object({
   id: z.string().min(1),
   path: z.string().min(1),
   version: z.string().min(1),
+  description: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
   variables: z.array(z.string().min(1)).default([]),
 });
 
 export const SchemaRefSchema = z.object({
   id: z.string().min(1),
   path: z.string().min(1),
+  version: z.string().min(1).optional(),
+  description: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
 });
 
 export const LlmConfigSchema = z.object({

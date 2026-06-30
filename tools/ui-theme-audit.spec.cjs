@@ -39,6 +39,37 @@ for (const theme of themes) {
   }
 }
 
+test("assets panel edits prompt and schema metadata visually", async ({ page }) => {
+  const pageErrors = attachBrowserErrorCollector(page);
+
+  await openBuilder(page, "light", viewports[0]);
+  await openInspectorTab(page, "Arquivos");
+
+  await page.getByLabel("Descrição do prompt").fill("Prompt principal para conduzir entrevista guiada.");
+  await page.getByLabel("Tags do prompt").fill("entrevista, llm, principal");
+  await page.getByLabel("Variáveis do prompt").fill("session_id, user_message, recent_messages, objetivo");
+  await page.getByLabel("Versão do prompt").fill("v2");
+
+  await page.getByLabel("Descrição do schema").fill("Estado público da sessão e saída estruturada.");
+  await page.getByLabel("Tags do schema").fill("estado, contrato, sessão");
+  await page.getByLabel("Versão do schema").fill("v2");
+
+  await expect(page.getByText("workspace alterado").first()).toBeVisible();
+  await page.getByRole("button", { name: /^Salvar metadados$/ }).first().click();
+  await expect(page.getByRole("status")).toContainText("Workspace reference-interview salvo.");
+
+  await openInspectorTab(page, "JSON");
+  const preview = page.locator(".json-preview");
+  await expect(preview).toContainText('"description": "Prompt principal para conduzir entrevista guiada."');
+  await expect(preview).toContainText('"tags": [');
+  await expect(preview).toContainText('"objetivo"');
+  await expect(preview).toContainText('"description": "Estado público da sessão e saída estruturada."');
+
+  await expectNoDocumentHorizontalOverflow(page);
+  await expectTopbarControlsToFit(page);
+  expect(pageErrors, "Unexpected browser errors while editing asset metadata").toEqual([]);
+});
+
 for (const theme of themes) {
   test(`studio runs with data render in ${theme} theme`, async ({ page, request }) => {
     const pageErrors = attachBrowserErrorCollector(page);

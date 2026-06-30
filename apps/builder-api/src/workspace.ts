@@ -508,7 +508,17 @@ export async function createPrompt(
 
   const flow = parseAgentFlow({
     ...loaded.flow,
-    prompts: [...loaded.flow.prompts, { id: input.id, path: input.path, version: input.version, variables: input.variables }],
+    prompts: [
+      ...loaded.flow.prompts,
+      {
+        id: input.id,
+        path: input.path,
+        version: input.version,
+        description: input.description,
+        tags: input.tags,
+        variables: input.variables,
+      },
+    ],
   });
   await mkdir(path.dirname(absolutePath), { recursive: true });
   await writeFile(absolutePath, input.content, "utf-8");
@@ -622,7 +632,16 @@ export async function createSchemaAsset(
   const formatted = `${JSON.stringify(input.parsed, null, 2)}\n`;
   const flow = parseAgentFlow({
     ...loaded.flow,
-    schemas: [...loaded.flow.schemas, { id: input.id, path: input.path }],
+    schemas: [
+      ...loaded.flow.schemas,
+      {
+        id: input.id,
+        path: input.path,
+        version: input.version,
+        description: input.description,
+        tags: input.tags,
+      },
+    ],
   });
   await mkdir(path.dirname(absolutePath), { recursive: true });
   await writeFile(absolutePath, formatted, "utf-8");
@@ -931,6 +950,8 @@ interface PromptAssetInput {
   id: string;
   path: string;
   version: string;
+  description?: string;
+  tags: string[];
   variables: string[];
   content: string;
 }
@@ -938,6 +959,9 @@ interface PromptAssetInput {
 interface SchemaAssetInput {
   id: string;
   path: string;
+  version: string;
+  description?: string;
+  tags: string[];
   parsed: unknown;
 }
 
@@ -948,6 +972,8 @@ function parsePromptAssetInput(value: unknown): PromptAssetInput {
   const id = parseAssetId(value.id, "id do prompt");
   const promptPath = typeof value.path === "string" && value.path.trim() ? value.path.trim() : `prompts/${id}.md`;
   const version = typeof value.version === "string" && value.version.trim() ? value.version.trim() : "v1";
+  const description = parseOptionalAssetText(value.description);
+  const tags = value.tags === undefined ? [] : parseStringList(value.tags, "tags");
   const variables = value.variables === undefined ? [] : parseStringList(value.variables, "variables");
   const content =
     typeof value.content === "string"
@@ -957,6 +983,8 @@ function parsePromptAssetInput(value: unknown): PromptAssetInput {
     id,
     path: normalizeAssetPath(promptPath),
     version,
+    description,
+    tags,
     variables,
     content,
   };
@@ -968,6 +996,9 @@ function parseSchemaAssetInput(value: unknown): SchemaAssetInput {
   }
   const id = parseAssetId(value.id, "id do schema");
   const schemaPath = typeof value.path === "string" && value.path.trim() ? value.path.trim() : `schemas/${id}.schema.json`;
+  const version = typeof value.version === "string" && value.version.trim() ? value.version.trim() : "v1";
+  const description = parseOptionalAssetText(value.description);
+  const tags = value.tags === undefined ? [] : parseStringList(value.tags, "tags");
   const content = typeof value.content === "string" && value.content.trim()
     ? value.content
     : '{"type":"object","properties":{}}';
@@ -980,8 +1011,15 @@ function parseSchemaAssetInput(value: unknown): SchemaAssetInput {
   return {
     id,
     path: normalizeAssetPath(schemaPath),
+    version,
+    description,
+    tags,
     parsed,
   };
+}
+
+function parseOptionalAssetText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function parseAssetId(value: unknown, label: string): string {
