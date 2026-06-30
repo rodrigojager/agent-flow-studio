@@ -33,6 +33,7 @@ from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 FLOW_ID = "reference-interview"
+AGENT_ID = FLOW_ID
 FLOW_VERSION = "0.1.0"
 
 
@@ -91,6 +92,7 @@ def create_app() -> FastAPI:
             "runtime": "langgraph-fastapi-python",
             "contract": "sessions-v1",
             "flow_id": FLOW_ID,
+            "agent_id": AGENT_ID,
             "flow_version": FLOW_VERSION,
             "llm_adapter": settings.llm_adapter,
             "supports_multi_agent_bundle": False,

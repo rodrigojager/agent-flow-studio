@@ -12,6 +12,7 @@ from app.settings import Settings
 class ReferenceState(TypedDict, total=False):
     action: Literal["start", "turn", "finish"]
     session_id: str
+    agent_id: str
     status: str
     phase: str
     turn: int

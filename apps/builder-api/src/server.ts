@@ -132,6 +132,7 @@ interface DockerHistoryQuery extends ArtifactQuery {
 
 interface StudioRunQuery {
   q?: string;
+  agentId?: string;
   status?: string;
   phase?: string;
   hasErrors?: string;
@@ -516,6 +517,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       }
       return listStudioRuns(workspaceRoot, request.params.flowId, {
         q: optionalQueryString(request.query.q, "q"),
+        agentId: optionalQueryString(request.query.agentId, "agentId"),
         status: optionalQueryString(request.query.status, "status"),
         phase: optionalQueryString(request.query.phase, "phase"),
         hasErrors: optionalBooleanQuery(request.query.hasErrors, "hasErrors"),

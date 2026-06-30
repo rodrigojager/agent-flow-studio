@@ -10,11 +10,13 @@ from app.settings import Settings
 
 
 RECENT_LIMIT = 20
+AGENT_ID = "reference-interview"
 
 
 def session_view(row: AgentSession) -> dict[str, Any]:
     return {
         "session_id": row.session_id,
+        "agent_id": row.agent_id,
         "status": row.status,
         "phase": row.phase,
         "turn": row.turn,
@@ -37,6 +39,7 @@ def message_view(row: AgentMessage) -> dict[str, Any]:
 def event_view(row) -> dict[str, Any]:
     return {
         "seq": row.seq,
+        "agent_id": row.agent_id,
         "event_type": row.event_type,
         "node": row.node,
         "payload": row.payload or {},
@@ -123,6 +126,7 @@ class ReferenceAgentService:
         except Exception:
             turn = max(0, int(row.turn or 0))
         restored["session_id"] = row.session_id
+        restored["agent_id"] = row.agent_id
         restored["status"] = status
         restored["phase"] = phase
         restored["turn"] = turn
@@ -174,7 +178,7 @@ class ReferenceAgentService:
         max_turns: int,
         auto_start: bool = False,
     ) -> dict[str, Any]:
-        row = repo.create_session(db, max_turns=max_turns, metadata_json=metadata)
+        row = repo.create_session(db, agent_id=AGENT_ID, max_turns=max_turns, metadata_json=metadata)
         restore = self._initial_restore(row)
         if restore:
             restore_state = restore["state"]
@@ -188,6 +192,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="session_created",
             node=None,
             payload={"auto_start": auto_start, "restored": bool(restore)},
@@ -196,6 +201,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=row.session_id,
+                agent_id=row.agent_id,
                 event_type="checkpoint_restored",
                 node=None,
                 payload=self._restore_event_payload(restore),
@@ -243,6 +249,7 @@ class ReferenceAgentService:
             {
                 "action": "start",
                 "session_id": row.session_id,
+                "agent_id": row.agent_id,
                 "status": row.status,
                 "phase": row.phase,
                 "turn": row.turn,
@@ -263,6 +270,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="node_completed",
             node="start_node",
             payload={
@@ -303,6 +311,7 @@ class ReferenceAgentService:
         graph_state = {
             "action": "turn",
             "session_id": row.session_id,
+            "agent_id": row.agent_id,
             "status": row.status,
             "phase": row.phase,
             "turn": row.turn,
@@ -355,6 +364,7 @@ class ReferenceAgentService:
             {
                 "action": "finish",
                 "session_id": row.session_id,
+                "agent_id": row.agent_id,
                 "status": row.status,
                 "phase": row.phase,
                 "turn": row.turn,
@@ -375,6 +385,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="node_completed",
             node="finish_node",
             payload={
@@ -387,6 +398,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="post_finish_pending",
             node=None,
             payload={"kind": "mock_summary"},
@@ -422,9 +434,11 @@ class ReferenceAgentService:
         self.cache.set_json(recent_key(session_id), payload[-RECENT_LIMIT:], ttl_seconds=self.settings.redis_ttl_seconds)
 
     def _persist_turn_events(self, db: Session, session_id: str, result: dict[str, Any], user_message_id: str) -> None:
+        agent_id = str(result.get("agent_id") or AGENT_ID)
         repo.append_event(
             db,
             session_id=session_id,
+            agent_id=agent_id,
             event_type="node_completed",
             node="input_safety_check",
             payload={
@@ -447,6 +461,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=session_id,
+                agent_id=agent_id,
                 event_type="llm_called",
                 node="llm_step",
                 payload=llm_payload,
@@ -454,6 +469,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=session_id,
+                agent_id=agent_id,
                 event_type="node_completed",
                 node="output_safety_check",
                 payload={
@@ -467,6 +483,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=session_id,
+                agent_id=agent_id,
                 event_type="node_completed",
                 node="deterministic_gate",
                 payload={

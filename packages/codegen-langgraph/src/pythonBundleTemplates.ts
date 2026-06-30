@@ -362,6 +362,7 @@ def test_multiagent_bundle_metadata_and_mounted_routes(tmp_path):
         child_metadata = client.get(f"{agent['route_prefix']}/metadata")
         assert child_metadata.status_code == 200
         assert child_metadata.json()["flow_id"] == agent["id"]
+        assert child_metadata.json()["agent_id"] == agent["id"]
 
 
 def test_multiagent_idempotency_is_namespaced_by_route_prefix(tmp_path):
@@ -378,6 +379,7 @@ def test_multiagent_idempotency_is_namespaced_by_route_prefix(tmp_path):
     )
     assert first_create.status_code == 200
     first_session_id = first_create.json()["session"]["session_id"]
+    assert first_create.json()["session"]["agent_id"] == first["id"]
 
     first_duplicate = client.post(
         _base(first),
@@ -394,6 +396,7 @@ def test_multiagent_idempotency_is_namespaced_by_route_prefix(tmp_path):
     )
     assert second_create.status_code == 200
     second_session_id = second_create.json()["session"]["session_id"]
+    assert second_create.json()["session"]["agent_id"] == second["id"]
     assert second_session_id != first_session_id
 
     first_start = client.post(
@@ -402,6 +405,9 @@ def test_multiagent_idempotency_is_namespaced_by_route_prefix(tmp_path):
         json={},
     )
     assert first_start.status_code == 200
+    first_events = client.get(f"{_base(first)}/{first_session_id}/events")
+    assert first_events.status_code == 200
+    assert {item["agent_id"] for item in first_events.json()} == {first["id"]}
 
     second_start = client.post(
         f"{_base(second)}/{second_session_id}/start",
@@ -409,6 +415,9 @@ def test_multiagent_idempotency_is_namespaced_by_route_prefix(tmp_path):
         json={},
     )
     assert second_start.status_code == 200
+    second_events = client.get(f"{_base(second)}/{second_session_id}/events")
+    assert second_events.status_code == 200
+    assert {item["agent_id"] for item in second_events.json()} == {second["id"]}
 `;
 }
 

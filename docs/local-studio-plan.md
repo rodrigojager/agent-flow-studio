@@ -507,8 +507,9 @@ Mas a ferramenta não deve depender disso para operar.
    - runtime adapters dedicados continuam pendentes para ambientes que exigirem isolamento próprio;
    - logs estruturados por nó customizado já possuem implementação inicial no Studio com busca, filtro por modo/status e exportação JSON; faltam logs avançados de sandbox isolado.
 6. multiagente operacional:
-   - `agent_id` em runtime de teste e final;
-   - filtros por agente em runs e execução.
+   - `agent_id` em runtime de teste e final já foi implementado em `/metadata`, sessão e eventos;
+   - filtros por agente em runs locais do Studio já foram implementados;
+   - falta ampliar o trace/histórico multiagente para uma visão dedicada de bundle.
 
 ## Regra de decisão para novos comportamentos
 

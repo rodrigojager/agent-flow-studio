@@ -10,7 +10,7 @@ from app import repo
 from app.auth import require_agent_api_key
 from app.cache import build_cache
 from app.db import get_session, init_db
-from app.generated_flow import API_CONTRACT, API_RESOURCE, FLOW_ID, FLOW_NAME, FLOW_VERSION
+from app.generated_flow import AGENT_ID, API_CONTRACT, API_RESOURCE, FLOW_ID, FLOW_NAME, FLOW_VERSION
 from app.graph import build_checkpointer, build_graph
 from app.idempotency import normalize_idempotency_key, run_idempotent
 from app.llm import LLMClient
@@ -90,6 +90,7 @@ def create_app() -> FastAPI:
             "runtime": "langgraph-fastapi-python",
             "contract": API_CONTRACT,
             "flow_id": FLOW_ID,
+            "agent_id": AGENT_ID,
             "flow_version": FLOW_VERSION,
             "llm_adapter": settings.llm_adapter,
             "supports_multi_agent_bundle": False,

@@ -5,6 +5,7 @@ import type { AgentFlow } from "@agent-flow-builder/flow-spec";
 
 export interface StudioSessionSnapshot {
   session_id: string;
+  agent_id: string;
   status: string;
   phase: string;
   turn: number;
@@ -23,6 +24,7 @@ export interface StudioMessageSnapshot {
 
 export interface StudioEventSnapshot {
   seq: number;
+  agent_id?: string | null;
   event_type: string;
   node?: string | null;
   payload: Record<string, unknown>;
@@ -59,6 +61,7 @@ export interface StudioRunSummary {
   id: string;
   flowId: string;
   flowVersion: string | null;
+  agentId: string;
   sessionId: string;
   status: string;
   phase: string;
@@ -186,6 +189,7 @@ export interface StudioRunRecord extends StudioRunSummary {
 
 export interface StudioRunFilterOptions {
   q?: string;
+  agentId?: string;
   status?: string;
   phase?: string;
   hasErrors?: boolean;
@@ -360,7 +364,9 @@ export async function saveStudioRun(
   const transcript = parseMessages(input.transcript);
   const events = parseEvents(input.events);
   const logs = parseLogs(input.logs);
-  const stateSnapshots = buildStateSnapshots(session, transcript, events);
+  const agentId = readAgentId(session, loaded.flow.id);
+  const sessionWithAgent = { ...session, agent_id: agentId };
+  const stateSnapshots = buildStateSnapshots(sessionWithAgent, transcript, events);
   const resourceName = parseOptionalString(input.resourceName, "resourceName") || loaded.flow.api.resourceName;
   const runtimeUrl = parseOptionalString(input.runtimeUrl, "runtimeUrl") || "";
   const id = runIdFromSession(session.session_id);
@@ -370,7 +376,7 @@ export async function saveStudioRun(
   const existing = await readExistingRun(runPath);
   const nodeCount = new Set(events.map((event) => event.node).filter((node): node is string => Boolean(node))).size;
   const errorCount = events.filter(isErrorEvent).length;
-  const completedAt = session.is_complete ? existing?.completedAt ?? now : null;
+  const completedAt = sessionWithAgent.is_complete ? existing?.completedAt ?? now : null;
   const causalAnalysis = buildCausalAnalysis(loaded.flow, events);
 
   const record: StudioRunRecord = {
@@ -378,12 +384,13 @@ export async function saveStudioRun(
     flowId: loaded.flow.id,
     flowName: loaded.flow.name,
     flowVersion: loaded.flow.version,
-    sessionId: session.session_id,
-    status: session.status,
-    phase: session.phase,
-    turn: session.turn,
-    maxTurns: session.max_turns,
-    isComplete: session.is_complete,
+    agentId,
+    sessionId: sessionWithAgent.session_id,
+    status: sessionWithAgent.status,
+    phase: sessionWithAgent.phase,
+    turn: sessionWithAgent.turn,
+    maxTurns: sessionWithAgent.max_turns,
+    isComplete: sessionWithAgent.is_complete,
     resourceName,
     runtimeUrl,
     messageCount: transcript.length,
@@ -396,9 +403,9 @@ export async function saveStudioRun(
     updatedAt: now,
     completedAt,
     runPath: toWorkspaceRelative(workspaceRoot, runPath),
-    session,
+    session: sessionWithAgent,
     transcript,
-    events,
+    events: events.map((event) => ({ ...event, agent_id: event.agent_id ?? agentId })),
     stateSnapshots,
     logs: logs.slice(-LOG_LIMIT),
   };
@@ -415,6 +422,7 @@ function toSummary(record: StudioRunRecord): StudioRunSummary {
     id: record.id,
     flowId: record.flowId,
     flowVersion: record.flowVersion,
+    agentId: record.agentId,
     sessionId: record.sessionId,
     status: record.status,
     phase: record.phase,
@@ -449,6 +457,15 @@ async function readStudioRunFile(runPath: string, flow?: AgentFlow): Promise<Stu
     throw new WorkspaceError("Arquivo de run local inválido.", 422);
   }
   const record = parsed as unknown as StudioRunRecord;
+  if (typeof record.agentId !== "string" || !record.agentId.trim()) {
+    record.agentId = readAgentId(record.session, record.flowId);
+  }
+  if (record.session && (!record.session.agent_id || typeof record.session.agent_id !== "string")) {
+    record.session.agent_id = record.agentId;
+  }
+  if (Array.isArray(record.events)) {
+    record.events = record.events.map((event) => ({ ...event, agent_id: event.agent_id ?? record.agentId }));
+  }
   if (!Array.isArray(record.stateSnapshots)) {
     record.stateSnapshots = buildStateSnapshots(record.session, record.transcript ?? [], record.events ?? []);
   }
@@ -1068,6 +1085,10 @@ function calcDurationMs(run: StudioRunRecord): number | null {
 }
 
 function matchStudioRunFilter(record: StudioRunRecord, options: StudioRunFilterOptions): boolean {
+  const agentId = options.agentId?.trim().toLowerCase();
+  if (agentId && record.agentId.toLowerCase() !== agentId) {
+    return false;
+  }
   if (options.status && record.status !== options.status) {
     return false;
   }
@@ -1104,6 +1125,7 @@ function matchStudioRunFilter(record: StudioRunRecord, options: StudioRunFilterO
   }
   const searchable = [
     record.id,
+    record.agentId,
     record.sessionId,
     record.status,
     record.phase,
@@ -1135,13 +1157,15 @@ function parseSession(value: unknown): StudioSessionSnapshot {
     throw new WorkspaceError("session é obrigatório.", 400);
   }
   const sessionId = requiredString(value.session_id, "session.session_id");
+  const metadata = isRecord(value.metadata) ? value.metadata : {};
   return {
     session_id: sessionId,
+    agent_id: optionalRecordString(value, "agent_id") ?? readAgentIdFromMetadata(metadata) ?? "",
     status: requiredString(value.status, "session.status"),
     phase: requiredString(value.phase, "session.phase"),
     turn: requiredInteger(value.turn, "session.turn"),
     max_turns: requiredInteger(value.max_turns, "session.max_turns"),
-    metadata: isRecord(value.metadata) ? value.metadata : {},
+    metadata,
     is_complete: Boolean(value.is_complete),
   };
 }
@@ -1180,6 +1204,7 @@ function parseEvents(value: unknown): StudioEventSnapshot[] {
     }
     return {
       seq: requiredInteger(item.seq, `events[${index}].seq`),
+      agent_id: optionalRecordString(item, "agent_id"),
       event_type: requiredString(item.event_type, `events[${index}].event_type`),
       node: typeof item.node === "string" ? item.node : null,
       payload: isRecord(item.payload) ? item.payload : {},
@@ -1195,6 +1220,7 @@ function buildStateSnapshots(
   let currentState: Record<string, unknown> = {
     session: {
       session_id: session.session_id,
+      agent_id: session.agent_id,
       status: "created",
       phase: "created",
       turn: 0,
@@ -1228,6 +1254,7 @@ function buildStateSnapshots(
       nextState.session = {
         ...(isRecord(nextState.session) ? nextState.session : {}),
         session_id: session.session_id,
+        agent_id: session.agent_id,
         status: payloadStatus ?? (index === events.length - 1 ? session.status : "running"),
         phase: payloadPhase ?? (index === events.length - 1 ? session.phase : "running"),
         turn: payloadTurn ?? (index === events.length - 1 ? session.turn : 0),
@@ -1345,6 +1372,24 @@ function optionalPayloadString(value: unknown): string | null {
 
 function optionalPayloadInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
+function readAgentId(session: StudioSessionSnapshot | undefined, fallback: string): string {
+  return normalizeAgentId(session?.agent_id || readAgentIdFromMetadata(session?.metadata ?? {}) || fallback);
+}
+
+function readAgentIdFromMetadata(metadata: Record<string, unknown>): string | null {
+  const value = metadata.agent_id ?? metadata.agentId ?? metadata.agent;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeAgentId(value: string): string {
+  return value.trim() || "unknown-agent";
+}
+
+function optionalRecordString(value: Record<string, unknown>, key: string): string | null {
+  const raw = value[key];
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
 }
 
 function parseLogs(value: unknown): string[] {

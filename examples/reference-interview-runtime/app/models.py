@@ -10,6 +10,7 @@ class AgentSession(Base):
     __tablename__ = "agent_sessions"
 
     session_id = Column(String, primary_key=True)
+    agent_id = Column(String, nullable=False, index=True)
     status = Column(String, nullable=False, default="created")
     phase = Column(String, nullable=False, default="created")
     turn = Column(Integer, nullable=False, default=0)
@@ -46,6 +47,7 @@ class AgentEvent(Base):
     __tablename__ = "agent_events"
 
     event_id = Column(String, primary_key=True)
+    agent_id = Column(String, nullable=False, index=True)
     session_id = Column(String, ForeignKey("agent_sessions.session_id"), nullable=False)
     seq = Column(Integer, nullable=False)
     event_type = Column(String, nullable=False)

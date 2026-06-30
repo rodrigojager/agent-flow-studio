@@ -52,6 +52,7 @@
 - Flow Spec define `RuntimeManifest` para agrupamento monoagente ou multiagente, com agentes referenciando `agent.flow.json` por `flowPath`.
 - Codegen gera bundle a partir de `runtime.manifest.json`, com metadados, README e um runtime independente por agente em `generated/reference-runtime-bundle/agents/`.
 - Codegen gera app FastAPI raiz para manifestos `multiagent`, montando os agentes em um único processo pelos `routePrefix` e preservando idempotência por prefixo de rota.
+- Runtime baseline, runtime gerado e bundles multiagente agora expõem `agent_id` em `/metadata`, sessão e eventos; o Studio envia `agent_id` na criação de sessão, persiste `agentId` nos runs locais e filtra runs por agente.
 - Builder API lê, valida e gera bundles por manifesto via rotas `/runtime-manifest`, `/runtime-manifest/validate` e `/runtime-manifest/generate`.
 - Builder UI possui aba `Runtime` para carregar `runtime.manifest.json`, exibir agentes, validar o manifesto e gerar bundle por manifesto via Builder API.
 - Sandbox local inicial: Builder API inicia/para o runtime gerado, lista runtimes em memória, acompanha status/logs e aceita porta configurável; Builder UI permite iniciar/parar/atualizar, acompanhar logs recentes, escolher porta e acionar criação de sessão, turnos, finalização, transcript e events.
@@ -161,7 +162,7 @@ Também foi validado localmente:
 
 - Ergonomia refinada do canvas ainda precisa de comandos contextuais mais completos; o editor visual de JSON Schema ainda não cobre recursos avançados como `oneOf`, `allOf`, `anyOf`, `$ref` navegável e mapas dinâmicos por `additionalProperties`.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript/TypeScript, HTTP, MCP stdio e sidecar local, incluindo runtime adapter dedicado para outras linguagens, sandbox isolado por nó e painel avançado de logs/erros por sandbox no Studio Local.
-- Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
+- Evoluir a composição multiagente inicial para editor visual de manifesto, isolamento operacional mais explícito por rota/agente e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
 - Jobs pós-finalização com worker.
 - Streaming.
@@ -187,8 +188,9 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
    - ampliar logs avançados de sandbox isolado e mapear isolamento dedicado por nó quando necessário.
 
 4. **Multiagente operacional**
-   - rota/agent_id estável no runtime e no Studio;
-   - trace e histórico por agente no UI.
+   - rota/agent_id estável no runtime e no Studio já possui primeira implementação;
+   - ampliar trace e histórico por agente no UI;
+   - validar bundle multiagente com PostgreSQL real compartilhado.
 
 ## Regras de bloqueio até fechamento de uma fase
 

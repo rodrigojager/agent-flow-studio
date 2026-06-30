@@ -146,6 +146,7 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
         max_turns: 3,
         metadata: {
           source: "test",
+          agent_id: "reference-interview",
           scenario: { id: "scenario-pinned", label: "Replay pinado", useNodePins: true },
           nodePins: { enabled: true, mode: "mock", items: [{ nodeId: "ask_question", output: { text: "pin" } }] },
         },
@@ -176,6 +177,9 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   });
   assert.equal(studioRun.statusCode, 200);
   assert.equal(studioRun.json().id, "run-session-abc");
+  assert.equal(studioRun.json().agentId, "reference-interview");
+  assert.equal(studioRun.json().session.agent_id, "reference-interview");
+  assert.equal(studioRun.json().events[0].agent_id, "reference-interview");
   assert.equal(studioRun.json().messageCount, 2);
   assert.equal(studioRun.json().eventCount, 2);
   assert.equal(studioRun.json().snapshotCount, 2);
@@ -195,6 +199,7 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(studioRuns.statusCode, 200);
   assert.equal(studioRuns.json().runs.length, 1);
   assert.equal(studioRuns.json().runs[0].id, "run-session-abc");
+  assert.equal(studioRuns.json().runs[0].agentId, "reference-interview");
   assert.equal(studioRuns.json().runs[0].runtimeUrl, "http://127.0.0.1:8090");
   assert.equal(studioRuns.json().runs[0].snapshotCount, 2);
   assert.equal(studioRuns.json().runs[0].causalAnalysis.failedNode, null);
@@ -254,7 +259,7 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
         phase: "finalizing",
         turn: 3,
         max_turns: 3,
-        metadata: { source: "test" },
+        metadata: { source: "test", agent_id: "support-agent" },
         is_complete: true,
       },
       transcript: [],
@@ -267,6 +272,7 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
     },
   });
   assert.equal(multiParentCausalStudioRun.statusCode, 200);
+  assert.equal(multiParentCausalStudioRun.json().agentId, "support-agent");
   assert.equal(multiParentCausalStudioRun.json().causalAnalysis.failedEventSeq, 3);
   assert.equal(multiParentCausalStudioRun.json().causalAnalysis.failedNode, "end");
   assert.deepEqual(
@@ -351,6 +357,15 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(studioRunsFilteredBySearch.statusCode, 200);
   assert.equal(studioRunsFilteredBySearch.json().runs.length, 1);
   assert.equal(studioRunsFilteredBySearch.json().runs[0].sessionId, "session-abc");
+
+  const studioRunsFilteredByAgent = await app.inject({
+    method: "GET",
+    url: "/flows/reference-interview/studio-runs?agentId=support-agent",
+  });
+  assert.equal(studioRunsFilteredByAgent.statusCode, 200);
+  assert.equal(studioRunsFilteredByAgent.json().runs.length, 1);
+  assert.equal(studioRunsFilteredByAgent.json().runs[0].sessionId, "session-multi-parent");
+  assert.equal(studioRunsFilteredByAgent.json().runs[0].agentId, "support-agent");
 
   const studioRunsCompared = await app.inject({
     method: "GET",

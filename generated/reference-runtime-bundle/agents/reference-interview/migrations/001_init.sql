@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS agent_sessions (
   session_id VARCHAR PRIMARY KEY,
+  agent_id VARCHAR NOT NULL,
   status VARCHAR NOT NULL,
   phase VARCHAR NOT NULL,
   turn INTEGER NOT NULL DEFAULT 0,
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 
 CREATE TABLE IF NOT EXISTS agent_events (
   event_id VARCHAR PRIMARY KEY,
+  agent_id VARCHAR NOT NULL,
   session_id VARCHAR NOT NULL REFERENCES agent_sessions(session_id),
   seq INTEGER NOT NULL,
   event_type VARCHAR NOT NULL,

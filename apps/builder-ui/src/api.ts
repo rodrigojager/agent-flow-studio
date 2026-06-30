@@ -388,6 +388,9 @@ export async function listStudioRuns(flowId: string, query: StudioRunQuery = {})
   if (query.q) {
     params.set("q", query.q);
   }
+  if (query.agentId) {
+    params.set("agentId", query.agentId);
+  }
   if (query.status) {
     params.set("status", query.status);
   }

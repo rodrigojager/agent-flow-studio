@@ -560,6 +560,7 @@ export default function App() {
   const [studioRuns, setStudioRuns] = useState<StudioRunSummary[]>([]);
   const [selectedStudioRunId, setSelectedStudioRunId] = useState("");
   const [studioRunSearch, setStudioRunSearch] = useState("");
+  const [studioRunAgentFilter, setStudioRunAgentFilter] = useState("");
   const [studioRunNodeFilter, setStudioRunNodeFilter] = useState("");
   const [studioRunStatusFilter, setStudioRunStatusFilter] = useState("");
   const [studioRunPhaseFilter, setStudioRunPhaseFilter] = useState("");
@@ -765,6 +766,7 @@ export default function App() {
       setStudioRuns([]);
       setSelectedStudioRunId("");
       setStudioRunsLoadState({ kind: "idle", message: "Selecione um flow para carregar runs locais." });
+      setStudioRunAgentFilter("");
       setPromptAssetLoadState({ kind: "idle", message: "Nenhum prompt selecionado." });
       setSchemaAssetLoadState({ kind: "idle", message: "Nenhum schema selecionado." });
       setStudioRunCompletionFilter("");
@@ -791,6 +793,7 @@ export default function App() {
           return;
         }
         setStudioRunSearch("");
+        setStudioRunAgentFilter("");
         setStudioRunStatusFilter("");
         setStudioRunPhaseFilter("");
         setStudioRunNodeFilter("");
@@ -901,6 +904,7 @@ export default function App() {
         setPromptAssetLoadState({ kind: "idle", message: "Nenhum prompt selecionado." });
         setSchemaAssetLoadState({ kind: "idle", message: "Nenhum schema selecionado." });
         setStudioRunSearch("");
+        setStudioRunAgentFilter("");
         setStudioRunStatusFilter("");
         setStudioRunPhaseFilter("");
         setStudioRunNodeFilter("");
@@ -2551,6 +2555,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           : undefined;
     return {
       q: studioRunSearch.trim() || undefined,
+      agentId: studioRunAgentFilter.trim() || undefined,
       node: studioRunNodeFilter.trim() || undefined,
       status: studioRunStatusFilter || undefined,
       phase: studioRunPhaseFilter || undefined,
@@ -2949,7 +2954,10 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     const created = await createRuntimeSession(
       sandboxUrl,
       resourceName,
-      studioScenarioExecutionMetadata(scenario, scenario.useNodePins ? activeStudioNodePins(studioNodePins, draftFlow) : []),
+      runtimeAgentMetadata(
+        draftFlow,
+        studioScenarioExecutionMetadata(scenario, scenario.useNodePins ? activeStudioNodePins(studioNodePins, draftFlow) : []),
+      ),
     );
     if (!created.session.session_id) {
       throw new Error("Sessão de execução não retornou ID.");
@@ -3213,7 +3221,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     }
     setStatus({ kind: "busy", message: "Criando sessão no runtime." });
     try {
-      const created = await createRuntimeSession(sandbox.url, draftFlow.api.resourceName);
+      const created = await createRuntimeSession(sandbox.url, draftFlow.api.resourceName, runtimeAgentMetadata(draftFlow));
       const started = await startRuntimeSession(sandbox.url, draftFlow.api.resourceName, created.session.session_id);
       setRuntimeSession(started.session);
       setTranscript(started.messages);
@@ -3806,6 +3814,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               selectedCompareRunId={studioRunCompareRunId}
               userMessage={userMessage}
               studioRunSearch={studioRunSearch}
+              studioRunAgentFilter={studioRunAgentFilter}
               studioRunNodeFilter={studioRunNodeFilter}
               studioRunStatusFilter={studioRunStatusFilter}
               studioRunPhaseFilter={studioRunPhaseFilter}
@@ -3826,6 +3835,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
               onStudioRunSearchChange={setStudioRunSearch}
+              onStudioRunAgentFilterChange={setStudioRunAgentFilter}
               onStudioRunNodeFilterChange={setStudioRunNodeFilter}
               onStudioRunStatusFilterChange={setStudioRunStatusFilter}
               onStudioRunPhaseFilterChange={setStudioRunPhaseFilter}
@@ -6126,6 +6136,7 @@ function SandboxPanel({
   studioNodePins,
   userMessage,
   studioRunSearch,
+  studioRunAgentFilter,
   studioRunStatusFilter,
   studioRunPhaseFilter,
   studioRunMinDurationMsFilter,
@@ -6135,6 +6146,7 @@ function SandboxPanel({
   setSandboxPort,
   setUserMessage,
   onStudioRunSearchChange,
+  onStudioRunAgentFilterChange,
   onStudioRunNodeFilterChange,
   onStudioRunStatusFilterChange,
   onStudioRunPhaseFilterChange,
@@ -6209,6 +6221,7 @@ function SandboxPanel({
   studioNodePins: StudioNodePin[];
   userMessage: string;
   studioRunSearch: string;
+  studioRunAgentFilter: string;
   studioRunNodeFilter: string;
   studioRunStatusFilter: string;
   studioRunPhaseFilter: string;
@@ -6218,6 +6231,7 @@ function SandboxPanel({
   setSandboxPort: (value: string) => void;
   setUserMessage: (value: string) => void;
   onStudioRunSearchChange: (value: string) => void;
+  onStudioRunAgentFilterChange: (value: string) => void;
   onStudioRunNodeFilterChange: (value: string) => void;
   onStudioRunStatusFilterChange: (value: string) => void;
   onStudioRunPhaseFilterChange: (value: string) => void;
@@ -6308,6 +6322,7 @@ function SandboxPanel({
   );
   const pinnedScenario = studioScenarios.find((scenario) => scenario.isPinned);
   const activeNodePinCount = activeStudioNodePins(studioNodePins, flow).length;
+  const agentFilterOptions = Array.from(new Set(studioRuns.map((run) => run.agentId).filter(Boolean))).sort();
   const batchSummary = summarizeStudioScenarioBatchResults(studioScenarioBatchResults);
   const batchReportHash = studioScenarioBatchResults.length > 0
     ? studioScenarioBatchReportHash(flow, batchSummary, studioScenarioBatchResults)
@@ -6689,6 +6704,7 @@ function SandboxPanel({
           <span>{session?.session_id ? session.session_id.slice(0, 8) : "sem sessão"}</span>
         </div>
         <div className="studio-metrics">
+          <Field label="Agente" value={session?.agent_id ?? flow?.id ?? "-"} />
           <Field label="Status" value={session?.status ?? "-"} />
           <Field label="Fase" value={session?.phase ?? "-"} />
           <Field label="Turno" value={session ? `${session.turn}/${session.max_turns}` : "-"} />
@@ -6743,6 +6759,14 @@ function SandboxPanel({
             placeholder="Buscar por sessão, status, fase..."
             value={studioRunSearch}
             onChange={(event) => onStudioRunSearchChange(event.target.value)}
+          />
+          <input
+            className="search-input"
+            type="text"
+            list="studio-run-agent-filter-options"
+            placeholder="Filtrar por agente..."
+            value={studioRunAgentFilter}
+            onChange={(event) => onStudioRunAgentFilterChange(event.target.value)}
           />
           <input
             className="search-input"
@@ -6812,6 +6836,11 @@ function SandboxPanel({
             <span>Somente erros</span>
           </label>
         </div>
+        <datalist id="studio-run-agent-filter-options">
+          {agentFilterOptions.map((agentId) => (
+            <option key={`studio-run-agent-filter-${agentId}`} value={agentId} />
+          ))}
+        </datalist>
         <datalist id="studio-run-node-filter-options">
           {nodeFilterOptions.map((nodeId) => (
             <option key={`studio-run-node-filter-${nodeId}`} value={nodeId} />
@@ -6994,7 +7023,7 @@ function SandboxPanel({
                   <span className="studio-run-main">
                     <strong>{run.sessionId}</strong>
                     <small>
-                      {run.phase} · {run.status} · {formatDateTime(run.updatedAt)}
+                      {run.agentId} · {run.phase} · {run.status} · {formatDateTime(run.updatedAt)}
                     </small>
                   </span>
                   <span className="studio-run-metrics">
@@ -9919,6 +9948,14 @@ function studioScenarioExecutionMetadata(scenario: StudioScenario, nodePins: Stu
     };
   }
   return metadata;
+}
+
+function runtimeAgentMetadata(flow: AgentFlow, metadata: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...metadata,
+    agent_id: flow.id,
+    agentId: flow.id,
+  };
 }
 
 function buildStudioScenarioReplayFixture(

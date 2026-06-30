@@ -471,6 +471,7 @@ export interface SandboxListResult {
 
 export interface SessionView {
   session_id: string;
+  agent_id: string;
   status: string;
   phase: string;
   turn: number;
@@ -489,6 +490,7 @@ export interface MessageView {
 
 export interface EventView {
   seq: number;
+  agent_id?: string | null;
   event_type: string;
   node?: string | null;
   payload: Record<string, unknown>;
@@ -525,6 +527,7 @@ export interface StudioRunSummary {
   id: string;
   flowId: string;
   flowVersion: string | null;
+  agentId: string;
   sessionId: string;
   status: string;
   phase: string;
@@ -546,6 +549,7 @@ export interface StudioRunSummary {
 
 export interface StudioRunQuery {
   q?: string;
+  agentId?: string;
   status?: string;
   phase?: string;
   hasErrors?: boolean;

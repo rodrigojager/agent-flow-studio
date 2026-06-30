@@ -62,6 +62,7 @@ O nó de código customizado aceita Python, JavaScript e TypeScript no runtime a
 - Codegen para runtime Python/FastAPI/LangGraph.
 - Codegen para pacote LangGraph compatível com `langgraph dev`.
 - Codegen multiagente inicial via `runtime.manifest.json`.
+- `agent_id` operacional em metadata, sessões, eventos e runs locais, com filtro por agente no Studio.
 - Geração de `.agent-flow/generated-meta.json` com hash determinístico do projeto.
 - Separação clara entre pacote de sandbox LangGraph e runtime FastAPI/Docker final.
 - Artefatos navegáveis pela UI e exportáveis em zip.

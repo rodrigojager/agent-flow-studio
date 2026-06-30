@@ -25,6 +25,7 @@ from app.graph import (
     SWITCH_NODE_IDS,
     TRANSFORM_JSON_NODE_IDS,
 )
+from app.generated_flow import AGENT_ID
 from app.models import AgentMessage, AgentSession
 from app.settings import Settings
 
@@ -35,6 +36,7 @@ RECENT_LIMIT = 20
 def session_view(row: AgentSession) -> dict[str, Any]:
     return {
         "session_id": row.session_id,
+        "agent_id": row.agent_id,
         "status": row.status,
         "phase": row.phase,
         "turn": row.turn,
@@ -57,6 +59,7 @@ def message_view(row: AgentMessage) -> dict[str, Any]:
 def event_view(row) -> dict[str, Any]:
     return {
         "seq": row.seq,
+        "agent_id": row.agent_id,
         "event_type": row.event_type,
         "node": row.node,
         "payload": row.payload or {},
@@ -208,7 +211,7 @@ class ReferenceAgentService:
         max_turns: int,
         auto_start: bool = False,
     ) -> dict[str, Any]:
-        row = repo.create_session(db, max_turns=max_turns, metadata_json=metadata)
+        row = repo.create_session(db, agent_id=AGENT_ID, max_turns=max_turns, metadata_json=metadata)
         restore = self._initial_restore(row)
         if restore:
             restore_state = restore["state"]
@@ -222,6 +225,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="session_created",
             node=None,
             payload={"auto_start": auto_start, "restored": bool(restore)},
@@ -230,6 +234,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=row.session_id,
+                agent_id=row.agent_id,
                 event_type="checkpoint_restored",
                 node=None,
                 payload=self._restore_event_payload(restore),
@@ -278,6 +283,7 @@ class ReferenceAgentService:
             {
                 "action": "start",
                 "session_id": row.session_id,
+                "agent_id": row.agent_id,
                 "status": row.status,
                 "phase": row.phase,
                 "turn": row.turn,
@@ -328,6 +334,7 @@ class ReferenceAgentService:
         graph_state = {
             "action": "turn",
             "session_id": row.session_id,
+            "agent_id": row.agent_id,
             "status": row.status,
             "phase": row.phase,
             "turn": row.turn,
@@ -382,6 +389,7 @@ class ReferenceAgentService:
             {
                 "action": "finish",
                 "session_id": row.session_id,
+                "agent_id": row.agent_id,
                 "status": row.status,
                 "phase": row.phase,
                 "turn": row.turn,
@@ -404,6 +412,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="post_finish_pending",
             node=None,
             payload={"kind": "mock_summary"},
@@ -474,6 +483,7 @@ class ReferenceAgentService:
         result: dict[str, Any],
         source_message_id: str | None = None,
     ) -> None:
+        agent_id = str(result.get("agent_id") or AGENT_ID)
         for node_id in result.get("executed_nodes") or []:
             payload: dict[str, Any] = {
                 "status": result.get("status"),
@@ -548,6 +558,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=session_id,
+                agent_id=agent_id,
                 event_type=event_type,
                 node=node_id,
                 payload=payload,

@@ -320,6 +320,7 @@ def assert_metadata_matches_flow(label: str, metadata: dict[str, Any], flow: dic
         "runtime": "langgraph-fastapi-python",
         "contract": flow["api"]["contract"],
         "flow_id": flow["id"],
+        "agent_id": flow["id"],
         "flow_version": flow["version"],
         "llm_adapter": flow["llm"]["adapter"],
         "supports_multi_agent_bundle": False,

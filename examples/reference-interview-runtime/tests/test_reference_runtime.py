@@ -17,6 +17,11 @@ def _client(tmp_path):
 def test_reference_session_flow_idempotency_transcript_and_events(tmp_path):
     client = _client(tmp_path)
 
+    metadata = client.get("/metadata")
+    assert metadata.status_code == 200
+    assert metadata.json()["flow_id"] == "reference-interview"
+    assert metadata.json()["agent_id"] == "reference-interview"
+
     create_resp = client.post(
         "/sessions",
         headers={"Idempotency-Key": "create-1"},
@@ -24,6 +29,7 @@ def test_reference_session_flow_idempotency_transcript_and_events(tmp_path):
     )
     assert create_resp.status_code == 200
     session_id = create_resp.json()["session"]["session_id"]
+    assert create_resp.json()["session"]["agent_id"] == "reference-interview"
 
     duplicate_create = client.post(
         "/sessions",
@@ -52,6 +58,7 @@ def test_reference_session_flow_idempotency_transcript_and_events(tmp_path):
     turn_data = turn_resp.json()
     assert turn_data["assistant_message"]["code"] == "ECHO"
     assert turn_data["safety"]["decision"] == "allow"
+    assert turn_data["session"]["agent_id"] == "reference-interview"
     assert turn_data["session"]["turn"] == 1
 
     duplicate_turn = client.post(
@@ -68,6 +75,7 @@ def test_reference_session_flow_idempotency_transcript_and_events(tmp_path):
 
     events = client.get(f"/sessions/{session_id}/events").json()
     event_types = [item["event_type"] for item in events]
+    assert {item["agent_id"] for item in events} == {"reference-interview"}
     assert "session_created" in event_types
     assert "llm_called" in event_types
 

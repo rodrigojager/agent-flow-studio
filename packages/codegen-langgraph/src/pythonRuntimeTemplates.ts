@@ -874,6 +874,7 @@ import json
 
 FLOW = json.loads(${pyJson(flow)})
 FLOW_ID = FLOW["id"]
+AGENT_ID = FLOW_ID
 FLOW_NAME = FLOW["name"]
 FLOW_VERSION = FLOW["version"]
 API_RESOURCE = FLOW["api"]["resourceName"]
@@ -1011,6 +1012,7 @@ class AgentSession(Base):
     __tablename__ = "agent_sessions"
 
     session_id = Column(String, primary_key=True)
+    agent_id = Column(String, nullable=False, index=True)
     status = Column(String, nullable=False, default="created")
     phase = Column(String, nullable=False, default="created")
     turn = Column(Integer, nullable=False, default=0)
@@ -1047,6 +1049,7 @@ class AgentEvent(Base):
     __tablename__ = "agent_events"
 
     event_id = Column(String, primary_key=True)
+    agent_id = Column(String, nullable=False, index=True)
     session_id = Column(String, ForeignKey("agent_sessions.session_id"), nullable=False)
     seq = Column(Integer, nullable=False)
     event_type = Column(String, nullable=False)
@@ -1113,11 +1116,13 @@ def check_db_health(session: Session) -> bool:
 def create_session(
     session: Session,
     *,
+    agent_id: str,
     max_turns: int,
     metadata_json: dict[str, Any] | None,
 ) -> AgentSession:
     row = AgentSession(
         session_id=new_id(),
+        agent_id=agent_id,
         status="created",
         phase="created",
         turn=0,
@@ -1228,12 +1233,14 @@ def append_event(
     session: Session,
     *,
     session_id: str,
+    agent_id: str,
     event_type: str,
     node: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> AgentEvent:
     row = AgentEvent(
         event_id=new_id(),
+        agent_id=agent_id,
         session_id=session_id,
         seq=_next_event_seq(session, session_id),
         event_type=event_type,
@@ -1679,6 +1686,7 @@ ANALYTICS_NODE_IDS = _node_ids(node_type="analytics")
 class ReferenceState(TypedDict, total=False):
     action: Literal["start", "turn", "finish"]
     session_id: str
+    agent_id: str
     status: str
     phase: str
     turn: int
@@ -3478,6 +3486,7 @@ class TurnRequest(IdempotentBody):
 
 class SessionView(BaseModel):
     session_id: str
+    agent_id: str
     status: str
     phase: str
     turn: int
@@ -3496,6 +3505,7 @@ class MessageView(BaseModel):
 
 class EventView(BaseModel):
     seq: int
+    agent_id: str
     event_type: str
     node: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -3540,6 +3550,7 @@ class MetadataResponse(BaseModel):
     runtime: str
     contract: str
     flow_id: str
+    agent_id: str
     flow_version: str
     llm_adapter: str
     supports_multi_agent_bundle: bool
@@ -3574,6 +3585,7 @@ from app.graph import (
     SWITCH_NODE_IDS,
     TRANSFORM_JSON_NODE_IDS,
 )
+from app.generated_flow import AGENT_ID
 from app.models import AgentMessage, AgentSession
 from app.settings import Settings
 
@@ -3584,6 +3596,7 @@ RECENT_LIMIT = 20
 def session_view(row: AgentSession) -> dict[str, Any]:
     return {
         "session_id": row.session_id,
+        "agent_id": row.agent_id,
         "status": row.status,
         "phase": row.phase,
         "turn": row.turn,
@@ -3606,6 +3619,7 @@ def message_view(row: AgentMessage) -> dict[str, Any]:
 def event_view(row) -> dict[str, Any]:
     return {
         "seq": row.seq,
+        "agent_id": row.agent_id,
         "event_type": row.event_type,
         "node": row.node,
         "payload": row.payload or {},
@@ -3757,7 +3771,7 @@ class ReferenceAgentService:
         max_turns: int,
         auto_start: bool = False,
     ) -> dict[str, Any]:
-        row = repo.create_session(db, max_turns=max_turns, metadata_json=metadata)
+        row = repo.create_session(db, agent_id=AGENT_ID, max_turns=max_turns, metadata_json=metadata)
         restore = self._initial_restore(row)
         if restore:
             restore_state = restore["state"]
@@ -3771,6 +3785,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="session_created",
             node=None,
             payload={"auto_start": auto_start, "restored": bool(restore)},
@@ -3779,6 +3794,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=row.session_id,
+                agent_id=row.agent_id,
                 event_type="checkpoint_restored",
                 node=None,
                 payload=self._restore_event_payload(restore),
@@ -3827,6 +3843,7 @@ class ReferenceAgentService:
             {
                 "action": "start",
                 "session_id": row.session_id,
+                "agent_id": row.agent_id,
                 "status": row.status,
                 "phase": row.phase,
                 "turn": row.turn,
@@ -3877,6 +3894,7 @@ class ReferenceAgentService:
         graph_state = {
             "action": "turn",
             "session_id": row.session_id,
+            "agent_id": row.agent_id,
             "status": row.status,
             "phase": row.phase,
             "turn": row.turn,
@@ -3931,6 +3949,7 @@ class ReferenceAgentService:
             {
                 "action": "finish",
                 "session_id": row.session_id,
+                "agent_id": row.agent_id,
                 "status": row.status,
                 "phase": row.phase,
                 "turn": row.turn,
@@ -3953,6 +3972,7 @@ class ReferenceAgentService:
         repo.append_event(
             db,
             session_id=row.session_id,
+            agent_id=row.agent_id,
             event_type="post_finish_pending",
             node=None,
             payload={"kind": "mock_summary"},
@@ -4023,6 +4043,7 @@ class ReferenceAgentService:
         result: dict[str, Any],
         source_message_id: str | None = None,
     ) -> None:
+        agent_id = str(result.get("agent_id") or AGENT_ID)
         for node_id in result.get("executed_nodes") or []:
             payload: dict[str, Any] = {
                 "status": result.get("status"),
@@ -4097,6 +4118,7 @@ class ReferenceAgentService:
             repo.append_event(
                 db,
                 session_id=session_id,
+                agent_id=agent_id,
                 event_type=event_type,
                 node=node_id,
                 payload=payload,
@@ -4133,7 +4155,7 @@ from app import repo
 from app.auth import require_agent_api_key
 from app.cache import build_cache
 from app.db import get_session, init_db
-from app.generated_flow import API_CONTRACT, API_RESOURCE, FLOW_ID, FLOW_NAME, FLOW_VERSION
+from app.generated_flow import AGENT_ID, API_CONTRACT, API_RESOURCE, FLOW_ID, FLOW_NAME, FLOW_VERSION
 from app.graph import build_checkpointer, build_graph
 from app.idempotency import normalize_idempotency_key, run_idempotent
 from app.llm import LLMClient
@@ -4213,6 +4235,7 @@ def create_app() -> FastAPI:
             "runtime": "langgraph-fastapi-python",
             "contract": API_CONTRACT,
             "flow_id": FLOW_ID,
+            "agent_id": AGENT_ID,
             "flow_version": FLOW_VERSION,
             "llm_adapter": settings.llm_adapter,
             "supports_multi_agent_bundle": False,
@@ -4449,7 +4472,7 @@ def test_langgraph_platform_entrypoint_loads_and_invokes(tmp_path):
 function renderRuntimeTest(): string {
   return `from fastapi.testclient import TestClient
 
-from app.generated_flow import API_RESOURCE, FLOW_ID
+from app.generated_flow import AGENT_ID, API_RESOURCE, FLOW_ID
 from tests.conftest import set_test_env
 
 
@@ -4474,6 +4497,7 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     metadata = client.get("/metadata")
     assert metadata.status_code == 200
     assert metadata.json()["flow_id"] == FLOW_ID
+    assert metadata.json()["agent_id"] == AGENT_ID
 
     create_resp = client.post(
         _path(),
@@ -4482,6 +4506,7 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     )
     assert create_resp.status_code == 200
     session_id = create_resp.json()["session"]["session_id"]
+    assert create_resp.json()["session"]["agent_id"] == AGENT_ID
 
     duplicate_create = client.post(
         _path(),
@@ -4510,6 +4535,7 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     turn_data = turn_resp.json()
     assert turn_data["assistant_message"]["code"] == "ECHO"
     assert turn_data["safety"]["decision"] == "allow"
+    assert turn_data["session"]["agent_id"] == AGENT_ID
     assert turn_data["session"]["turn"] == 1
 
     duplicate_turn = client.post(
@@ -4526,6 +4552,7 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
 
     events = client.get(_path(f"/{session_id}/events")).json()
     assert "llm_called" in [item["event_type"] for item in events]
+    assert {item["agent_id"] for item in events} == {AGENT_ID}
 
 
 def test_generated_runtime_idempotency_conflict_and_safety(tmp_path):
@@ -4576,6 +4603,7 @@ def test_generated_runtime_idempotency_conflict_and_safety(tmp_path):
 function renderMigration(): string {
   return `CREATE TABLE IF NOT EXISTS agent_sessions (
   session_id VARCHAR PRIMARY KEY,
+  agent_id VARCHAR NOT NULL,
   status VARCHAR NOT NULL,
   phase VARCHAR NOT NULL,
   turn INTEGER NOT NULL DEFAULT 0,
@@ -4600,6 +4628,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 
 CREATE TABLE IF NOT EXISTS agent_events (
   event_id VARCHAR PRIMARY KEY,
+  agent_id VARCHAR NOT NULL,
   session_id VARCHAR NOT NULL REFERENCES agent_sessions(session_id),
   seq INTEGER NOT NULL,
   event_type VARCHAR NOT NULL,

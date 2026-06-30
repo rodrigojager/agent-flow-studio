@@ -22,11 +22,13 @@ def check_db_health(session: Session) -> bool:
 def create_session(
     session: Session,
     *,
+    agent_id: str,
     max_turns: int,
     metadata_json: dict[str, Any] | None,
 ) -> AgentSession:
     row = AgentSession(
         session_id=new_id(),
+        agent_id=agent_id,
         status="created",
         phase="created",
         turn=0,
@@ -137,12 +139,14 @@ def append_event(
     session: Session,
     *,
     session_id: str,
+    agent_id: str,
     event_type: str,
     node: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> AgentEvent:
     row = AgentEvent(
         event_id=new_id(),
+        agent_id=agent_id,
         session_id=session_id,
         seq=_next_event_seq(session, session_id),
         event_type=event_type,

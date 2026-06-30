@@ -84,6 +84,7 @@ ANALYTICS_NODE_IDS = _node_ids(node_type="analytics")
 class ReferenceState(TypedDict, total=False):
     action: Literal["start", "turn", "finish"]
     session_id: str
+    agent_id: str
     status: str
     phase: str
     turn: int
