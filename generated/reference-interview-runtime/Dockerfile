@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir .
 
 COPY app ./app
 COPY migrations ./migrations
+RUN npm install --prefix app/code --omit=dev
 
 EXPOSE 8080
 

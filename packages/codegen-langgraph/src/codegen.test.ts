@@ -405,7 +405,7 @@ def test_switch_and_human_input_events(tmp_path):
   });
 });
 
-test("generated runtime records custom code node contracts", async (t) => {
+test("generated runtime executes TypeScript custom code node files", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-custom-code-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
 
@@ -415,7 +415,20 @@ test("generated runtime records custom code node contracts", async (t) => {
   await mkdir(path.join(flowRoot, "code"), { recursive: true });
   await writeFile(
     path.join(flowRoot, "code", "generateQuestions.ts"),
-    "export function generateQuestions(input, context) { return { input, node: context.node_id }; }\n",
+    `export async function generateQuestions(input: string, context: { node_id: string; session_id: string; input_path: string }) {
+  const text = String(input || "");
+  return {
+    question_count: 2,
+    questions: [
+      "Qual é o ponto principal de " + text.slice(0, 24) + "?",
+      "Qual detalhe precisa ser confirmado?",
+    ],
+    node: context.node_id,
+    session_id: context.session_id,
+    input_path: context.input_path,
+  };
+}
+`,
     "utf-8",
   );
 
@@ -454,10 +467,15 @@ test("generated runtime records custom code node contracts", async (t) => {
   await generateLangGraphRuntime({ flow, flowRoot, outDir });
   const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
   assert.match(graph, /CODE_NODE_IDS/);
-  assert.match(graph, /custom_code_not_executed/);
+  assert.match(graph, /custom_code_executed/);
   assert.match(graph, /\\"codeLanguage\\": \\"typescript\\"/);
+  assert.match(graph, /execute_custom_node_code/);
+  const codePackage = JSON.parse(await readFile(path.join(outDir, "app", "code", "package.json"), "utf-8"));
+  assert.equal(codePackage.type, "module");
+  assert.equal(codePackage.dependencies.typescript, "^5.8.0");
+  assert.equal(codePackage.dependencies.zod, "^3.23.0");
   await writeFile(
-    path.join(outDir, "tests", "test_custom_code_nodes.py"),
+    path.join(outDir, "tests", "test_typescript_custom_code_nodes.py"),
     `from fastapi.testclient import TestClient
 
 from app.generated_flow import API_RESOURCE
@@ -479,7 +497,7 @@ def _client(tmp_path):
     return TestClient(create_app())
 
 
-def test_custom_code_contract_event(tmp_path):
+def test_typescript_custom_code_executes_and_records_output(tmp_path):
     client = _client(tmp_path)
     create_resp = client.post(_path(), headers={"Idempotency-Key": "create"}, json={"max_turns": 2})
     session_id = create_resp.json()["session"]["session_id"]
@@ -494,8 +512,9 @@ def test_custom_code_contract_event(tmp_path):
 
     events = client.get(_path(f"/{session_id}/events")).json()
     by_type = {item["event_type"]: item for item in events}
-    custom = by_type["custom_code_declared"]["payload"]["custom"]
-    assert custom["status"] == "custom_code_not_executed"
+    custom = by_type["custom_code_executed"]["payload"]["custom"]
+    assert custom["ok"] is True
+    assert custom["status"] == "custom_code_executed"
     assert custom["node_id"] == "generate_questions"
     assert custom["contract"]["language"] == "typescript"
     assert custom["contract"]["execution"] == "file"
@@ -503,6 +522,11 @@ def test_custom_code_contract_event(tmp_path):
     assert custom["contract"]["entry"] == "generateQuestions"
     assert custom["contract"]["input_path"] == "assistant_message.text"
     assert custom["contract"]["dependencies"] == "zod@^3.23.0"
+    assert custom["output"]["question_count"] == 2
+    assert len(custom["output"]["questions"]) == 2
+    assert custom["output"]["node"] == "generate_questions"
+    assert custom["output"]["session_id"] == session_id
+    assert custom["output"]["input_path"] == "assistant_message.text"
 `,
     "utf-8",
   );
@@ -694,7 +718,7 @@ test("generated runtime executes JavaScript custom code node files", async (t) =
   await readFile(path.join(outDir, "app", "code", "generateQuestions.js"), "utf-8");
   await readFile(path.join(outDir, "app", "code_runner.mjs"), "utf-8");
   const graph = await readFile(path.join(outDir, "app", "graph.py"), "utf-8");
-  assert.match(graph, /execute_custom_javascript_code/);
+  assert.match(graph, /execute_custom_node_code/);
   await writeFile(
     path.join(outDir, "tests", "test_javascript_custom_code_nodes.py"),
     `from fastapi.testclient import TestClient

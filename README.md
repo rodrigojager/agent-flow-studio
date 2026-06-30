@@ -54,7 +54,7 @@ O contrato atual já suporta nós para:
 - Analytics.
 - Código customizado.
 
-O nó de código customizado aceita Python e JavaScript no runtime atual, por arquivo ou inline, com input/output tipado, logs de execução e inclusão no hash de aprovação. TypeScript e outras linguagens estão planejadas via adapter, sidecar, HTTP ou MCP.
+O nó de código customizado aceita Python, JavaScript e TypeScript no runtime atual, por arquivo ou inline, com input/output tipado, logs de execução e inclusão no hash de aprovação. Dependências npm declaradas por `codeDependencies` entram no `app/code/package.json` do runtime gerado. Outras linguagens continuam planejadas via adapter, sidecar, HTTP ou MCP.
 
 ### Codegen E Artefatos
 
@@ -167,7 +167,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 - Annotation queues locais.
 - Auth avançada.
 - Integração opcional com LangSmith Cloud.
-- Adapters para TypeScript e outras linguagens via sidecar, HTTP, MCP ou runtime adapter.
+- Adapters para outras linguagens via sidecar, HTTP, MCP ou runtime adapter.
 
 ## Como Rodar Localmente
 

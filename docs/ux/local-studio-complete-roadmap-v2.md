@@ -35,8 +35,8 @@ Regra de sucesso:
    O produto precisa reproduzir: sessão conversacional, turnos, transcript/events, idempotência, estado por conversa, perguntas, consulta de conteúdo, persistência/caching, mock/LLM real, safety, testes, pacote Docker.
 
 4. **Linguagem dos comportamentos customizados**  
-   Python e JavaScript já são nativos (arquivo/inline).  
-   TypeScript/outras linguagens entraram como contrato suportado e serão executadas via adapter (HTTP/MCP/sidecar) até haver runtime adapter dedicado.
+   Python, JavaScript e TypeScript são nativos (arquivo/inline).
+   Outras linguagens entram como contrato suportado e serão executadas via adapter (HTTP/MCP/sidecar) até haver runtime adapter dedicado.
 
 5. **Aprovação com rastreabilidade**  
    Hash cobre:

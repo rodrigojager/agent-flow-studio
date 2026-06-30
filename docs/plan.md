@@ -220,7 +220,7 @@ Tecnologias:
 - builder-api: Node/Fastify ou equivalente em TypeScript;
 - flow-spec: Zod/TypeScript como fonte canônica;
 - codegen: TypeScript com templates;
-- runtime gerado: Python, FastAPI, LangGraph, Pydantic, SQLAlchemy, Redis, OpenAI SDK e runner Node para nós JavaScript;
+- runtime gerado: Python, FastAPI, LangGraph, Pydantic, SQLAlchemy, Redis, OpenAI SDK e runner Node para nós JavaScript/TypeScript;
 - containers: Docker e Docker Compose.
 
 O Flow Spec será canônico em Zod/TypeScript e exportará JSON Schema. O Python gerado consome artefatos derivados quando precisar validar especificações.

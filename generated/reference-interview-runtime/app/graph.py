@@ -478,14 +478,16 @@ def build_graph(
             "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
         }
 
-    def execute_custom_javascript_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+    def execute_custom_node_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         node_id = config["id"]
         started_at = time.perf_counter()
         entry_name = str(config.get("codeEntry") or "run")
         source_path = config.get("codePath")
         inline_source = config.get("codeInline")
+        language = str(config.get("codeLanguage") or "javascript").lower()
         request: dict[str, Any] = {
             "entry": entry_name,
+            "language": language,
         }
         if inline_source:
             request["inlineSource"] = str(inline_source)
@@ -534,7 +536,7 @@ def build_graph(
                 "status": "custom_code_failed",
                 "node_id": node_id,
                 "contract": contract,
-                "error": error.get("message") if isinstance(error, dict) else str(error or "javascript_runner_failed"),
+                "error": error.get("message") if isinstance(error, dict) else str(error or "node_runner_failed"),
                 "stderr": stderr,
             }
         return {
@@ -557,9 +559,9 @@ def build_graph(
                 "contract": contract,
                 "reason": "external_executor_not_configured",
             }
-        if language in {"javascript", "js"}:
+        if language in {"javascript", "js", "typescript", "ts"}:
             try:
-                return execute_custom_javascript_code(config, state, contract)
+                return execute_custom_node_code(config, state, contract)
             except Exception as exc:
                 return {
                     "ok": False,

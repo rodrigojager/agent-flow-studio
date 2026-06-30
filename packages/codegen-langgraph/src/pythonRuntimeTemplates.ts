@@ -101,7 +101,7 @@ export function renderPythonRuntimeFiles(flow: AgentFlow): RuntimeFile[] {
     { relativePath: "app/safety.py", content: renderSafety() },
     { relativePath: "app/llm.py", content: renderLlm(flow) },
     { relativePath: "app/code_runner.mjs", content: renderCodeRunner() },
-    { relativePath: "app/code/package.json", content: renderCodePackageJson() },
+    { relativePath: "app/code/package.json", content: renderCodePackageJson(flow) },
     { relativePath: "app/graph.py", content: renderGraph(flow, plan) },
     { relativePath: "app/schemas.py", content: renderSchemas() },
     { relativePath: "app/service.py", content: renderService() },
@@ -131,7 +131,7 @@ export function renderPythonLangGraphSandboxFiles(flow: AgentFlow): RuntimeFile[
     { relativePath: "app/safety.py", content: renderSafety() },
     { relativePath: "app/llm.py", content: renderLlm(flow) },
     { relativePath: "app/code_runner.mjs", content: renderCodeRunner() },
-    { relativePath: "app/code/package.json", content: renderCodePackageJson() },
+    { relativePath: "app/code/package.json", content: renderCodePackageJson(flow) },
     { relativePath: "app/graph.py", content: renderGraph(flow, plan) },
     { relativePath: "app/langgraph_app.py", content: renderLangGraphApp() },
     { relativePath: "tests/conftest.py", content: renderTestConftest() },
@@ -522,6 +522,7 @@ RUN pip install --no-cache-dir .
 
 COPY app ./app
 COPY migrations ./migrations
+RUN npm install --prefix app/code --omit=dev
 
 EXPOSE 8080
 
@@ -529,16 +530,69 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
 `;
 }
 
-function renderCodePackageJson(): string {
-  return `{"type":"module"}
-`;
+function renderCodePackageJson(flow: AgentFlow): string {
+  const dependencies = collectNodeCodeDependencies(flow);
+  if (flow.nodes.some((node) => node.type === "code" && isTypeScriptCodeLanguage(node.codeLanguage))) {
+    dependencies.set("typescript", dependencies.get("typescript") ?? "^5.8.0");
+  }
+  const packageJson: Record<string, unknown> = {
+    type: "module",
+  };
+  if (dependencies.size) {
+    packageJson.dependencies = Object.fromEntries([...dependencies.entries()].sort(([left], [right]) => left.localeCompare(right)));
+  }
+  return `${JSON.stringify(packageJson, null, 2)}\n`;
+}
+
+function collectNodeCodeDependencies(flow: AgentFlow): Map<string, string> {
+  const dependencies = new Map<string, string>();
+  for (const node of flow.nodes) {
+    if (node.type !== "code" || !node.codeDependencies || !isNodePackageCodeLanguage(node.codeLanguage)) {
+      continue;
+    }
+    for (const dependency of String(node.codeDependencies).split(/[\n,]+/)) {
+      const parsed = parseNpmDependencySpec(dependency);
+      if (parsed) {
+        dependencies.set(parsed.name, parsed.version);
+      }
+    }
+  }
+  return dependencies;
+}
+
+function parseNpmDependencySpec(value: string): { name: string; version: string } | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const atIndex = trimmed.startsWith("@") ? trimmed.indexOf("@", 1) : trimmed.lastIndexOf("@");
+  if (atIndex > 0) {
+    const name = trimmed.slice(0, atIndex);
+    const version = trimmed.slice(atIndex + 1) || "*";
+    return { name, version };
+  }
+  return { name: trimmed, version: "*" };
+}
+
+function isTypeScriptCodeLanguage(language: unknown): boolean {
+  return typeof language === "string" && ["typescript", "ts"].includes(language.toLowerCase());
+}
+
+function isNodePackageCodeLanguage(language: unknown): boolean {
+  return typeof language === "string" && ["javascript", "js", "typescript", "ts"].includes(language.toLowerCase());
 }
 
 function renderCodeRunner(): string {
-  return `import { mkdtemp, rm, writeFile } from "node:fs/promises";
+  return `import { createRequire } from "node:module";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const appRoot = path.dirname(fileURLToPath(import.meta.url));
+const codeRoot = path.join(appRoot, "code");
+const requireFromRunner = createRequire(import.meta.url);
+const requireFromCode = createRequire(path.join(codeRoot, "package.json"));
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -565,6 +619,10 @@ function serializeError(error) {
 
 async function loadModule(request) {
   if (request.sourcePath) {
+    if (isTypeScriptRequest(request)) {
+      const source = await readFile(request.sourcePath, "utf8");
+      return loadTypeScriptModule(source, request.sourcePath);
+    }
     const url = pathToFileURL(request.sourcePath);
     url.searchParams.set("t", String(Date.now()));
     return import(url.href);
@@ -575,14 +633,68 @@ async function loadModule(request) {
   }
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-flow-js-"));
-  const inlinePath = path.join(tempDir, "inline.mjs");
+  const inlinePath = path.join(tempDir, isTypeScriptRequest(request) ? "inline.ts" : "inline.mjs");
+  const modulePath = isTypeScriptRequest(request)
+    ? await materializeTypeScriptModule(request.inlineSource, inlinePath, tempDir)
+    : inlinePath;
   await writeFile(inlinePath, request.inlineSource, "utf8");
   try {
-    const url = pathToFileURL(inlinePath);
+    const url = pathToFileURL(modulePath);
     url.searchParams.set("t", String(Date.now()));
     return await import(url.href);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+function isTypeScriptRequest(request) {
+  const language = String(request.language || "").toLowerCase();
+  return language === "typescript" || language === "ts" || isTypeScriptPath(request.sourcePath || "");
+}
+
+function isTypeScriptPath(filePath) {
+  return /\\.tsx?$/i.test(String(filePath || ""));
+}
+
+async function loadTypeScriptModule(source, sourceName) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-flow-ts-"));
+  try {
+    const modulePath = await materializeTypeScriptModule(source, sourceName, tempDir);
+    const url = pathToFileURL(modulePath);
+    url.searchParams.set("t", String(Date.now()));
+    return await import(url.href);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function materializeTypeScriptModule(source, sourceName, tempDir) {
+  const output = transpileTypeScript(source, sourceName);
+  const modulePath = path.join(tempDir, path.basename(String(sourceName || "inline.ts")).replace(/\\.tsx?$/i, ".mjs"));
+  await writeFile(modulePath, output, "utf8");
+  return modulePath;
+}
+
+function transpileTypeScript(source, sourceName) {
+  try {
+    const ts = requireFromCode("typescript");
+    const result = ts.transpileModule(source, {
+      fileName: String(sourceName || "agent-flow.ts"),
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ES2022,
+        esModuleInterop: true,
+        sourceMap: false,
+        inlineSources: false,
+      },
+    });
+    return result.outputText;
+  } catch {
+    const nodeModule = requireFromRunner("node:module");
+    if (typeof nodeModule.stripTypeScriptTypes === "function") {
+      return nodeModule.stripTypeScriptTypes(source);
+    }
+    throw new Error("typescript_transpiler_unavailable");
   }
 }
 
@@ -676,7 +788,7 @@ pytest -q
 uvicorn app.main:app --reload --port 8080
 \`\`\`
 
-Se o fluxo usa nó \`code\` em JavaScript, o ambiente local também precisa ter \`node\` disponível. O Dockerfile gerado já instala \`nodejs\` e \`npm\` para executar esses nós no container final.
+Se o fluxo usa nó \`code\` em JavaScript ou TypeScript, o ambiente local também precisa ter \`node\` disponível. O Dockerfile gerado já instala \`nodejs\`/\`npm\` e executa \`npm install --prefix app/code --omit=dev\` para preparar dependências declaradas por \`codeDependencies\`.
 
 ## Container Docker
 
@@ -1940,14 +2052,16 @@ def build_graph(
             "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
         }
 
-    def execute_custom_javascript_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+    def execute_custom_node_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         node_id = config["id"]
         started_at = time.perf_counter()
         entry_name = str(config.get("codeEntry") or "run")
         source_path = config.get("codePath")
         inline_source = config.get("codeInline")
+        language = str(config.get("codeLanguage") or "javascript").lower()
         request: dict[str, Any] = {
             "entry": entry_name,
+            "language": language,
         }
         if inline_source:
             request["inlineSource"] = str(inline_source)
@@ -1996,7 +2110,7 @@ def build_graph(
                 "status": "custom_code_failed",
                 "node_id": node_id,
                 "contract": contract,
-                "error": error.get("message") if isinstance(error, dict) else str(error or "javascript_runner_failed"),
+                "error": error.get("message") if isinstance(error, dict) else str(error or "node_runner_failed"),
                 "stderr": stderr,
             }
         return {
@@ -2019,9 +2133,9 @@ def build_graph(
                 "contract": contract,
                 "reason": "external_executor_not_configured",
             }
-        if language in {"javascript", "js"}:
+        if language in {"javascript", "js", "typescript", "ts"}:
             try:
-                return execute_custom_javascript_code(config, state, contract)
+                return execute_custom_node_code(config, state, contract)
             except Exception as exc:
                 return {
                     "ok": False,
