@@ -129,6 +129,16 @@ for (const theme of themes) {
     expect(fixture.pins.enabled).toBe(true);
     expect(fixture.pins.activeCount).toBe(1);
     expect(fixture.metadata.nodePins.count).toBe(1);
+    const [fixtureChooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      page.getByRole("button", { name: /^Importar fixture$/ }).click(),
+    ]);
+    await fixtureChooser.setFiles(fixturePath);
+    await expect(page.getByText('Fixture "Fork llm_step #4" importada com 1 pin(s).')).toBeVisible();
+    await expect(page.getByLabel("Usar pins de nó como mock")).toBeChecked();
+    await expect(page.getByLabel("Tokens +%")).toHaveValue("12");
+    await expect(nodePinsSection.getByText(/llm_prompt.*#4.*llm_completed/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Executar selecionado$/ })).toBeEnabled();
     await expect(page.locator(".turn-input")).toHaveValue("Aumentar conversões em onboarding.");
 
     await expectNoDocumentHorizontalOverflow(page);

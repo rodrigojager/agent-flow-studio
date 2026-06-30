@@ -436,6 +436,7 @@ export default function App() {
     message: "Builder API aguardando ação.",
   });
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const fixtureInputRef = useRef<HTMLInputElement | null>(null);
   const firstPaletteButtonRef = useRef<HTMLButtonElement | null>(null);
   const reactFlowRef = useRef<ReactFlowInstance | null>(null);
 
@@ -1339,6 +1340,10 @@ export default function App() {
     importInputRef.current?.click();
   }
 
+  function handleStudioScenarioFixtureImportClick() {
+    fixtureInputRef.current?.click();
+  }
+
   async function handleCreateFlow() {
     const rawId = window.prompt("ID do novo flow", "novo-agente");
     const flowId = rawId?.trim();
@@ -1402,6 +1407,62 @@ export default function App() {
         kind: "ok",
         message: `Workspace ${imported.flow.id} importado em ${imported.path}.`,
       });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleImportStudioScenarioFixtureFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (!selectedFlowId || !draftFlow) {
+      setStatus({ kind: "error", message: "Selecione um flow para importar fixture." });
+      return;
+    }
+    setStatus({ kind: "busy", message: `Importando fixture ${file.name}.` });
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const fixture = normalizeStudioScenarioReplayFixture(parsed);
+      if (!fixture) {
+        throw new Error("Arquivo não é uma fixture de replay válida.");
+      }
+      if (fixture.flow.id && fixture.flow.id !== selectedFlowId) {
+        const confirmed = window.confirm(`Fixture é do flow ${fixture.flow.id}. Importar no flow atual ${selectedFlowId}?`);
+        if (!confirmed) {
+          setStatus({ kind: "idle", message: "Importação de fixture cancelada." });
+          return;
+        }
+      }
+      const now = new Date().toISOString();
+      const importedScenario = normalizeScenarioDefaults({
+        ...fixture.scenario,
+        id: `scenario-fixture-${Date.now()}`,
+        input: fixture.input,
+        isPinned: false,
+        createdAt: now,
+        updatedAt: now,
+        lastUsedAt: null,
+      });
+      const importedPins = importedStudioFixturePins(fixture, now);
+      const nextScenarios = sortScenarios([importedScenario, ...studioScenarios]);
+      persistStudioScenarios(selectedFlowId, nextScenarios);
+      if (importedPins.length > 0) {
+        const pinsByNode = new Map(studioNodePins.map((pin) => [pin.nodeId, pin]));
+        for (const pin of importedPins) {
+          pinsByNode.set(pin.nodeId, pin);
+        }
+        persistStudioNodePins(selectedFlowId, Array.from(pinsByNode.values()));
+      }
+      setStudioSelectedScenarioId(importedScenario.id);
+      setStudioScenarioLabel(importedScenario.label);
+      setStudioScenarioTags(importedScenario.tags.join(", "));
+      setStudioScenarioUseNodePins(importedScenario.useNodePins);
+      setStudioScenarioRegressionThresholds(importedScenario.regressionThresholds);
+      setUserMessage(importedScenario.input);
+      setStatus({ kind: "ok", message: `Fixture "${importedScenario.label}" importada com ${importedPins.length} pin(s).` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
@@ -2596,6 +2657,13 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
             className="visually-hidden"
             onChange={handleImportFile}
           />
+          <input
+            ref={fixtureInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="visually-hidden"
+            onChange={handleImportStudioScenarioFixtureFile}
+          />
           <label className="flow-select">
             <span>Flow</span>
             <select value={selectedFlowId} onChange={(event) => setSelectedFlowId(event.target.value)}>
@@ -3019,6 +3087,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onStudioScenarioPin={toggleStudioScenarioPin}
               onStudioScenarioDelete={handleDeleteStudioScenario}
               onStudioScenarioFixtureExport={handleExportStudioScenarioFixture}
+              onStudioScenarioFixtureImport={handleStudioScenarioFixtureImportClick}
               onStudioNodePin={handlePinStudioNodeData}
               onStudioNodePinDelete={handleDeleteStudioNodePin}
               onForkCheckpoint={handleForkSelectedCheckpoint}
@@ -4558,6 +4627,7 @@ function SandboxPanel({
   onStudioScenarioPin,
   onStudioScenarioDelete,
   onStudioScenarioFixtureExport,
+  onStudioScenarioFixtureImport,
   onStudioNodePin,
   onStudioNodePinDelete,
   onForkCheckpoint,
@@ -4635,6 +4705,7 @@ function SandboxPanel({
   onStudioScenarioPin: () => void;
   onStudioScenarioDelete: () => void;
   onStudioScenarioFixtureExport: () => void;
+  onStudioScenarioFixtureImport: () => void;
   onStudioNodePin: (pin: StudioNodePinDraft) => void;
   onStudioNodePinDelete: (pinId: string) => void;
   onForkCheckpoint: () => void;
@@ -4866,6 +4937,14 @@ function SandboxPanel({
           >
             <Download size={16} aria-hidden="true" />
             Exportar fixture
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onStudioScenarioFixtureImport}
+          >
+            <Upload size={16} aria-hidden="true" />
+            Importar fixture
           </button>
           <button
             type="button"
@@ -7456,6 +7535,66 @@ function buildStudioScenarioReplayFixture(
       stale: stalePins,
     },
   };
+}
+
+function normalizeStudioScenarioReplayFixture(value: unknown): StudioScenarioReplayFixture | null {
+  if (!isRecord(value) || value.format !== "agent-flow-builder.replay-fixture.v1") {
+    return null;
+  }
+  const scenario = normalizeStudioScenario(value.scenario);
+  if (!scenario) {
+    return null;
+  }
+  const flow = isRecord(value.flow) ? value.flow : {};
+  const pins = isRecord(value.pins) ? value.pins : {};
+  const activePins = normalizeStudioFixturePinList(pins.active);
+  const stalePins = normalizeStudioFixturePinList(pins.stale);
+  const input = typeof value.input === "string" ? value.input : scenario.input;
+  const normalizedScenario = normalizeScenarioDefaults({ ...scenario, input });
+  return {
+    format: "agent-flow-builder.replay-fixture.v1",
+    exportedAt: typeof value.exportedAt === "string" ? value.exportedAt : new Date().toISOString(),
+    flow: {
+      id: typeof flow.id === "string" ? flow.id : "",
+      name: typeof flow.name === "string" ? flow.name : "",
+      version: typeof flow.version === "string" ? flow.version : "",
+      nodeCount: typeof flow.nodeCount === "number" && Number.isFinite(flow.nodeCount) ? flow.nodeCount : 0,
+      edgeCount: typeof flow.edgeCount === "number" && Number.isFinite(flow.edgeCount) ? flow.edgeCount : 0,
+    },
+    scenario: normalizedScenario,
+    input: normalizedScenario.input,
+    metadata: isRecord(value.metadata) ? value.metadata : studioScenarioExecutionMetadata(normalizedScenario, activePins),
+    pins: {
+      enabled: pins.enabled === true || normalizedScenario.useNodePins,
+      activeCount: activePins.length,
+      staleCount: stalePins.length,
+      active: activePins,
+      stale: stalePins,
+    },
+  };
+}
+
+function normalizeStudioFixturePinList(value: unknown): StudioNodePin[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => normalizeStudioNodePin(item))
+    .filter((item): item is StudioNodePin => item !== null);
+}
+
+function importedStudioFixturePins(fixture: StudioScenarioReplayFixture, now: string): StudioNodePin[] {
+  const pinsByNode = new Map<string, StudioNodePin>();
+  const timestamp = Date.now();
+  [...fixture.pins.stale, ...fixture.pins.active].forEach((pin, index) => {
+    pinsByNode.set(pin.nodeId, {
+      ...pin,
+      id: `node-pin-${pin.nodeId}-${timestamp}-${index}`,
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+  return sortStudioNodePins(Array.from(pinsByNode.values()));
 }
 
 function loadStudioScenarios(flowId: string): StudioScenario[] {
