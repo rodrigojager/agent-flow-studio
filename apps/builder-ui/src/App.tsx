@@ -99,6 +99,7 @@ import {
   runtimeEvents,
   runtimeTranscript,
   sandboxStatus,
+  restoreLocalCatalogRevision,
   saveFlow,
   saveLocalCatalogItem,
   savePromptAsset,
@@ -2415,6 +2416,22 @@ export default function App() {
     }
   }
 
+  async function handleRestoreCatalogRevision(item: LocalCatalogItem, revision: LocalCatalogRevision) {
+    setStatus({ kind: "busy", message: `Restaurando ${item.name} para rev. ${revision.revision}.` });
+    try {
+      const result = await restoreLocalCatalogRevision({
+        itemId: item.id,
+        kind: item.kind,
+        revision: revision.revision,
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `${result.item.name} restaurado para rev. ${revision.revision}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleCreateFlowFromCatalogTemplate(item: LocalCatalogItem) {
     const rawId = window.prompt("ID do novo flow", `${item.id}-flow`);
     const flowId = rawId?.trim();
@@ -4194,6 +4211,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               loadState={catalogLoadState}
               onRefresh={() => refreshLocalCatalog()}
               onApply={handleApplyCatalogItem}
+              onRestoreRevision={handleRestoreCatalogRevision}
               onCreateAgentTemplate={handleCreateFlowFromCatalogTemplate}
               onSavePrompt={handleSaveSelectedPromptToCatalog}
               onSaveSchema={handleSaveSelectedSchemaToCatalog}
@@ -5826,6 +5844,7 @@ function CatalogPanel({
   loadState,
   onRefresh,
   onApply,
+  onRestoreRevision,
   onCreateAgentTemplate,
   onSavePrompt,
   onSaveSchema,
@@ -5840,6 +5859,7 @@ function CatalogPanel({
   loadState: PanelLoadState;
   onRefresh: () => void;
   onApply: (item: LocalCatalogItem, targetNodeId?: string) => void;
+  onRestoreRevision: (item: LocalCatalogItem, revision: LocalCatalogRevision) => void;
   onCreateAgentTemplate: (item: LocalCatalogItem) => void;
   onSavePrompt: () => void;
   onSaveSchema: () => void;
@@ -6012,7 +6032,8 @@ function CatalogPanel({
         {items.length ? (
           <div className="catalog-list">
             {items.map((item) => {
-              const previousRevision = latestCatalogRevision(item);
+              const revisions = catalogRevisionTimeline(item);
+              const previousRevision = revisions[0] ?? null;
               const revisionDiff = previousRevision ? catalogRevisionDiff(previousRevision, item) : [];
               return (
                 <article className="catalog-card" key={`${item.kind}-${item.id}`}>
@@ -6039,6 +6060,22 @@ function CatalogPanel({
                       <div className="catalog-history-meta">
                         <span>v{previousRevision.version}</span>
                         <span>{previousRevision.contentHash}</span>
+                      </div>
+                      <div className="catalog-history-list">
+                        {revisions.map((revision) => (
+                          <div className="catalog-history-item" key={`${item.id}-revision-${revision.revision}`}>
+                            <div>
+                              <strong>rev. {revision.revision}</strong>
+                              <span>
+                                v{revision.version} | {revision.contentHash}
+                              </span>
+                            </div>
+                            <button type="button" className="command-button" onClick={() => onRestoreRevision(item, revision)}>
+                              <RefreshCw size={14} aria-hidden="true" />
+                              Restaurar
+                            </button>
+                          </div>
+                        ))}
                       </div>
                       {revisionDiff.length ? (
                         <div className="catalog-diff">
@@ -6099,8 +6136,8 @@ function CatalogPanel({
   );
 }
 
-function latestCatalogRevision(item: LocalCatalogItem): LocalCatalogRevision | null {
-  return [...(item.history ?? [])].sort((left, right) => right.revision - left.revision)[0] ?? null;
+function catalogRevisionTimeline(item: LocalCatalogItem): LocalCatalogRevision[] {
+  return [...(item.history ?? [])].sort((left, right) => right.revision - left.revision);
 }
 
 function catalogRevisionDiff(

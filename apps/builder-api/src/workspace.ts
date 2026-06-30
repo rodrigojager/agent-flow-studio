@@ -1025,6 +1025,48 @@ export async function saveLocalCatalogItem(workspaceRoot: string, value: unknown
   };
 }
 
+export async function restoreLocalCatalogRevision(workspaceRoot: string, value: unknown): Promise<SaveLocalCatalogItemResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const input = parseRestoreCatalogRevisionInput(value);
+  const stored = await readStoredCatalogItems(root);
+  const previous = findCatalogItem(stored, input.itemId, input.kind);
+  if (!previous) {
+    throw new WorkspaceError(`Item local de catálogo não encontrado: ${input.itemId}`, 404);
+  }
+  const revision = previous.history.find((item) => item.revision === input.revision);
+  if (!revision) {
+    throw new WorkspaceError(`Revisão ${input.revision} não encontrada para ${previous.kind}/${previous.id}.`, 404);
+  }
+  const now = new Date().toISOString();
+  const restored: LocalCatalogItem = {
+    id: previous.id,
+    kind: previous.kind,
+    name: revision.name,
+    description: revision.description,
+    tags: revision.tags,
+    scope: "local",
+    source: "local",
+    version: revision.version,
+    revision: previous.revision + 1,
+    contentHash: revision.contentHash,
+    createdAt: previous.createdAt,
+    updatedAt: now,
+    ...(revision.content !== undefined ? { content: revision.content } : {}),
+    ...(revision.nodePatch !== undefined ? { nodePatch: revision.nodePatch } : {}),
+    history: [...previous.history, catalogRevisionFromItem(previous)],
+  };
+  const nextItems = sortCatalogItems([
+    ...stored.filter((existing) => catalogItemKey(existing.kind, existing.id) !== catalogItemKey(previous.kind, previous.id)),
+    restored,
+  ]);
+  await writeStoredCatalogItems(root, nextItems);
+  return {
+    status: "ok",
+    item: restored,
+    catalog: await listLocalCatalog(root),
+  };
+}
+
 export async function createFlowFromCatalogTemplate(
   workspaceRoot: string,
   value: unknown,
@@ -1176,6 +1218,12 @@ interface ApplyCatalogItemInput {
   kind?: LocalCatalogItemKind;
   targetNodeId?: string;
   id?: string;
+}
+
+interface RestoreCatalogRevisionInput {
+  itemId: string;
+  kind?: LocalCatalogItemKind;
+  revision: number;
 }
 
 interface CreateFlowFromCatalogTemplateInput extends CreateFlowInput {
@@ -1524,6 +1572,16 @@ function parseApplyCatalogItemInput(value: unknown): ApplyCatalogItemInput {
   const targetNodeId = typeof value.targetNodeId === "string" && value.targetNodeId.trim() ? value.targetNodeId.trim() : undefined;
   const id = typeof value.id === "string" && value.id.trim() ? parseAssetId(value.id, "id") : undefined;
   return { itemId, kind, targetNodeId, id };
+}
+
+function parseRestoreCatalogRevisionInput(value: unknown): RestoreCatalogRevisionInput {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Restauração de revisão deve ser objeto JSON.", 400);
+  }
+  const itemId = parseAssetId(value.itemId, "itemId");
+  const kind = value.kind === undefined ? undefined : parseCatalogKind(value.kind);
+  const revision = readCatalogRevision(value.revision);
+  return { itemId, kind, revision };
 }
 
 function parseCreateFlowFromCatalogTemplateInput(value: unknown): CreateFlowFromCatalogTemplateInput {

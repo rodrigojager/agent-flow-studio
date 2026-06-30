@@ -36,6 +36,7 @@ import {
   readGeneratedArtifactFile,
   readPrompt,
   readSchemaAsset,
+  restoreLocalCatalogRevision,
   saveLocalCatalogItem,
   saveFlow,
   savePrompt,
@@ -207,6 +208,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.get("/catalog", async () => listLocalCatalog(workspaceRoot));
 
   app.post<{ Body: unknown }>("/catalog/items", async (request) => saveLocalCatalogItem(workspaceRoot, request.body));
+
+  app.post<{ Body: unknown }>("/catalog/items/restore-revision", async (request) =>
+    restoreLocalCatalogRevision(workspaceRoot, request.body),
+  );
 
   app.post<{ Body: unknown }>("/catalog/agent-templates/create-flow", async (request) => {
     const result = await createFlowFromCatalogTemplate(workspaceRoot, request.body);

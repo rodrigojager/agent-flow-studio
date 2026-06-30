@@ -1575,6 +1575,24 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(storedPrompt.history.length, 1);
   assert.equal(storedPrompt.history[0].revision, 1);
 
+  const restoredPrompt = await app.inject({
+    method: "POST",
+    url: "/catalog/items/restore-revision",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "catalog-system",
+      kind: "prompt",
+      revision: 1,
+    },
+  });
+  assert.equal(restoredPrompt.statusCode, 200);
+  assert.equal(restoredPrompt.json().item.version, "1.0.0");
+  assert.equal(restoredPrompt.json().item.revision, 3);
+  assert.equal(restoredPrompt.json().item.contentHash, savedPrompt.json().item.contentHash);
+  assert.equal(restoredPrompt.json().item.history.length, 2);
+  assert.equal(restoredPrompt.json().item.history[1].revision, 2);
+  assert.match(restoredPrompt.json().item.history[1].content, /exemplos/);
+
   const appliedPrompt = await app.inject({
     method: "POST",
     url: "/flows/reference-interview/catalog/apply",
@@ -1590,7 +1608,7 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(appliedPrompt.json().flow.nodes.find((node: { id: string }) => node.id === "llm_step").promptId, "catalog-system");
   assert.match(
     await readFile(path.join(workspaceRoot, "flows", "reference-interview", "prompts", "catalog-system.md"), "utf-8"),
-    /exemplos/,
+    /resposta objetiva/,
   );
 
   const savedSchema = await app.inject({

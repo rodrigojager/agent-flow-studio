@@ -90,6 +90,18 @@ export async function saveLocalCatalogItem(item: {
   });
 }
 
+export async function restoreLocalCatalogRevision(item: {
+  itemId: string;
+  kind?: LocalCatalogItemKind;
+  revision: number;
+}): Promise<LocalCatalogSaveResult> {
+  return request<LocalCatalogSaveResult>("/catalog/items/restore-revision", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(item),
+  });
+}
+
 export async function applyLocalCatalogItem(
   flowId: string,
   itemId: string,
