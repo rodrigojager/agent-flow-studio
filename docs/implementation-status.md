@@ -75,7 +75,7 @@
 - Causality do Studio foi incorporada ao fluxo persistido e ao grafo da UI (`upstream`, `impact`, `cascata`) com destaque de eventos/nós no replay, incluindo trilha visual no painel de grafo.
 - Build Docker pela UI passa a expor progresso incremental por etapa em `docker compose build` e mantém log de progresso persistido no histórico operacional.
 - Studio Local ganhou painel `Contexto do nó`, acionado pelo clique/filtro de nó, reunindo status, papel causal, erro relacionado, eventos recentes, metadados do nó/LLM, prompt renderizado, input/output inferidos, estado do nó, métricas de usage/custo/duração, spans estruturados, diffs e logs correlacionados.
-- Studio Local infere diagnóstico operacional por nó, com causa provável, próximas ações e evidências derivadas de payload, safety, status, fase, snapshot e cadeia causal.
+- Studio Local infere diagnóstico operacional por nó, com causa provável, próximas ações e evidências derivadas de payload, safety, status, fase, snapshot e cadeia causal, incluindo orientações específicas por tipo de nó para LLM, safety, code, HTTP, banco, arquivo/RAG, approval, scoring e analytics.
 - Studio Local permite criar fork de checkpoint/evento a partir do `State inspector`, salvando um cenário local reexecutável com origem do run, sessão, evento, snapshot, input/output e metadata de execução para rastrear a nova sessão.
 - Causalidade ao vivo da UI foi alinhada ao backend: usa a falha mais recente, o parent executado mais próximo antes da falha e descendentes realmente observados depois da falha.
 - Ordenação de `impactedNodes` passou a seguir ordem causal/de execução, com o nó da falha primeiro e descendentes ordenados pelo primeiro evento impactado, em vez de lista alfabética.

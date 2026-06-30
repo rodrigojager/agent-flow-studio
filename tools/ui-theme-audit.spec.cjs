@@ -83,6 +83,9 @@ for (const theme of themes) {
     await expect(spansSection).toBeVisible();
     await expect(spansSection.getByText("llm_call", { exact: true })).toBeVisible();
     await expect(spansSection.getByText("168 tokens")).toBeVisible();
+    const llmDiagnosisSection = page.locator(".node-context-diagnosis", { hasText: "Diagnóstico" });
+    await expect(llmDiagnosisSection.getByText("Sem falha associada")).toBeVisible();
+    await expect(llmDiagnosisSection.getByText(/O nó LLM completou sem erro aparente/)).toBeVisible();
     await page.getByRole("button", { name: /^Criar fork$/ }).click();
     await expect(page.getByText("Fork criado a partir do evento #4.")).toBeVisible();
     const scenarioSection = page.locator(".sandbox-section", { hasText: "Cenários de teste" });

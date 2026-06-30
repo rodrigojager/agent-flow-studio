@@ -233,6 +233,16 @@ interface StudioNodeDiagnosis {
   evidence: string[];
 }
 
+interface StudioNodeDiagnosisProfile {
+  label: string;
+  noExecutionCause: string;
+  noExecutionActions: string[];
+  failureCause: string;
+  failureActions: string[];
+  okCause: string;
+  okActions: string[];
+}
+
 interface RenderedPromptPreview {
   promptId: string;
   path: string;
@@ -4464,6 +4474,7 @@ function SandboxPanel({
   const nodeInput = inferEventInput(selectedEvent, transcript);
   const nodeOutput = inferEventOutput(selectedPayload);
   const selectedNodeContext = buildStudioNodeContext(
+    flow,
     timelineNodeFilter || selectedEvent?.node || "",
     events,
     transcript,
@@ -5497,6 +5508,7 @@ function inferEventOutput(payload: Record<string, unknown>): unknown {
 }
 
 function buildStudioNodeContext(
+  flow: AgentFlow | null | undefined,
   nodeId: string,
   events: EventView[],
   transcript: MessageView[],
@@ -5511,6 +5523,7 @@ function buildStudioNodeContext(
   const nodeEvents = events.filter((event) => event.node === selectedNodeId).sort((left, right) => left.seq - right.seq);
   const latestEvent = nodeEvents.at(-1) ?? null;
   const errorEvent = nodeEvents.filter(isStudioErrorEvent).at(-1) ?? null;
+  const flowNode = findStudioFlowNode(flow, selectedNodeId);
   const latestSnapshot =
     [...stateSnapshots]
       .reverse()
@@ -5536,28 +5549,26 @@ function buildStudioNodeContext(
     logs: filterNodeLogs(selectedNodeId, latestEvent, logs),
     metrics: collectStudioNodeMetrics(nodeEvents),
     spans: collectStudioNodeSpans(nodeEvents),
-    diagnosis: diagnoseStudioNode(selectedNodeId, nodeEvents, latestEvent, errorEvent, latestSnapshot, causalAnalysis),
+    diagnosis: diagnoseStudioNode(selectedNodeId, flowNode, nodeEvents, latestEvent, errorEvent, latestSnapshot, causalAnalysis),
   };
 }
 
 function diagnoseStudioNode(
   nodeId: string,
+  flowNode: FlowNode | null,
   nodeEvents: EventView[],
   latestEvent: EventView | null,
   errorEvent: EventView | null,
   latestSnapshot: StudioStateSnapshot | null,
   causalAnalysis: StudioRunCausalAnalysis,
 ): StudioNodeDiagnosis {
+  const profile = buildStudioNodeDiagnosisProfile(flowNode, nodeId);
   if (!latestEvent) {
     return {
       severity: "warning",
       title: "Sem execução observada",
-      probableCause: "Este nó ainda não apareceu na timeline carregada, então o Studio não tem payload, estado ou diffs para explicar.",
-      nextActions: [
-        "Execute um cenário que passe por este nó.",
-        "Confira as condições das arestas de entrada no canvas.",
-        "Remova filtros da timeline se a execução já deveria estar visível.",
-      ],
+      probableCause: profile.noExecutionCause,
+      nextActions: profile.noExecutionActions,
       evidence: [],
     };
   }
@@ -5570,23 +5581,22 @@ function diagnoseStudioNode(
   const isSafetyBlock = safety?.blocked === true || reason.toLowerCase().includes("safety");
 
   if (errorEvent || isStudioErrorEvent(eventForDiagnosis)) {
+    const safetyStage = flowNode?.type === "safety_gate" && typeof flowNode.stage === "string" ? flowNode.stage : "";
     return {
       severity: "error",
       title: "Falha no nó",
       probableCause: isSafetyBlock
-        ? `O gate de safety bloqueou a execução${reason ? `: ${reason}` : "."}`
-        : `O evento ${eventForDiagnosis.event_type} marcou o nó como erro${reason ? `: ${reason}` : "."}`,
+        ? `O gate de safety bloqueou a execução${reason ? `: ${reason}` : "."}${safetyStage ? ` Etapa do nó: ${safetyStage}.` : ""}`
+        : `${profile.failureCause}${reason ? `: ${reason}` : ` O evento ${eventForDiagnosis.event_type} marcou erro sem mensagem detalhada.`}`,
       nextActions: isSafetyBlock
         ? [
             "Revise a mensagem de entrada ou o cenário que acionou o bloqueio.",
-            "Abra o payload bruto para conferir safety.blocked, reason e fase.",
+            flowNode?.type === "safety_gate"
+              ? "Confira stage, critérios e arestas de bloqueio/allow deste gate de safety."
+              : "Abra o payload bruto para conferir safety.blocked, reason e fase.",
             "Crie um fork do checkpoint para reexecutar a mesma entrada após ajustar o flow.",
           ]
-        : [
-            "Abra o payload bruto e os logs correlacionados para ver a mensagem de erro.",
-            "Confira configuração, prompt, schema, handler ou dependências do nó.",
-            "Crie um fork do checkpoint para reproduzir a falha em uma nova sessão.",
-          ],
+        : profile.failureActions,
       evidence,
     };
   }
@@ -5636,14 +5646,251 @@ function diagnoseStudioNode(
   return {
     severity: "ok",
     title: "Sem falha associada",
-    probableCause: "O último evento deste nó não indica erro e ele não está na cadeia causal de falha atual.",
-    nextActions: [
-      "Use input/output e diffs para validar se o comportamento esperado foi produzido.",
-      "Compare com outro run se houver suspeita de regressão.",
-      "Crie um fork se quiser transformar este estado em cenário reexecutável.",
-    ],
+    probableCause: profile.okCause,
+    nextActions: profile.okActions,
     evidence,
   };
+}
+
+function findStudioFlowNode(flow: AgentFlow | null | undefined, nodeId: string): FlowNode | null {
+  if (!nodeId) {
+    return null;
+  }
+  return flow?.nodes.find((node) => node.id === nodeId) ?? (nodeId === "start" ? { id: "start", type: "start" } : null);
+}
+
+function buildStudioNodeDiagnosisProfile(flowNode: FlowNode | null, nodeId: string): StudioNodeDiagnosisProfile {
+  const type = flowNode?.type ?? "runtime";
+  const label = nodeTypeOptions.find((option) => option.type === type)?.label ?? type;
+  const commonNoExecutionActions = [
+    "Execute um cenário que passe por este nó.",
+    "Confira as condições das arestas de entrada no canvas.",
+    "Remova filtros da timeline se a execução já deveria estar visível.",
+  ];
+  const commonFailureActions = [
+    "Abra o payload bruto e os logs correlacionados para ver a mensagem de erro.",
+    "Confira configuração, entrada, saída esperada e dependências do nó.",
+    "Crie um fork do checkpoint para reproduzir a falha em uma nova sessão.",
+  ];
+  const commonOkActions = [
+    "Use input/output e diffs para validar se o comportamento esperado foi produzido.",
+    "Compare com outro run se houver suspeita de regressão.",
+    "Crie um fork se quiser transformar este estado em cenário reexecutável.",
+  ];
+
+  const base: StudioNodeDiagnosisProfile = {
+    label,
+    noExecutionCause: `Este nó ${label} ainda não apareceu na timeline carregada, então o Studio não tem payload, estado ou diffs para explicar.`,
+    noExecutionActions: commonNoExecutionActions,
+    failureCause: `O nó ${label} falhou durante a execução.`,
+    failureActions: commonFailureActions,
+    okCause: `O nó ${label} não indica erro e não está na cadeia causal de falha atual.`,
+    okActions: commonOkActions,
+  };
+
+  switch (type) {
+    case "llm_prompt":
+    case "llm_structured":
+      return {
+        ...base,
+        noExecutionCause: `O nó LLM ${nodeId} ainda não recebeu uma entrada nesta run; o prompt renderizado, usage e resposta bruta só aparecem após a chamada.`,
+        noExecutionActions: [
+          "Execute um cenário que chegue ao prompt deste nó.",
+          "Confira promptId, variáveis de prompt e arestas de entrada.",
+          "Verifique adapter/modelo e env vars se a chamada deveria ter acontecido.",
+        ],
+        failureCause: "O nó LLM falhou ao renderizar prompt, chamar o adapter/modelo ou validar a resposta estruturada.",
+        failureActions: [
+          "Abra Prompt renderizado para conferir variáveis ausentes e conteúdo final.",
+          "Confira adapter, modelo, env vars, schema de saída e payload bruto da chamada.",
+          "Use o fork do checkpoint para repetir a mesma entrada depois do ajuste.",
+        ],
+        okCause: "O nó LLM completou sem erro aparente; valide prompt, resposta, usage, custo e diffs antes de aprovar o comportamento.",
+        okActions: [
+          "Revise Prompt renderizado, input/output e spans estruturados.",
+          "Compare tokens, custo e duração com um run de referência.",
+          "Crie cenário se essa resposta precisar virar regressão protegida.",
+        ],
+      };
+    case "safety_gate":
+      return {
+        ...base,
+        noExecutionCause: `O gate de safety ${nodeId} ainda não avaliou payload nesta run.`,
+        noExecutionActions: [
+          "Execute uma entrada que passe pela etapa de safety.",
+          "Confira stage, arestas de allow/block e estado usado pela condição.",
+          "Teste também um cenário permitido e um bloqueado.",
+        ],
+        failureCause: "O gate de safety bloqueou ou falhou ao avaliar o payload recebido.",
+        failureActions: [
+          "Confira safety.blocked, reason, stage e payload avaliado.",
+          "Revise as arestas de allow/block para evitar rota incorreta.",
+          "Transforme o caso em cenário para validar a política depois do ajuste.",
+        ],
+        okCause: "O gate de safety avaliou o payload sem erro; confirme se a decisão allow/block segue a política esperada.",
+        okActions: [
+          "Revise payload bruto e estado safety gravado.",
+          "Compare a decisão com um cenário oposto permitido/bloqueado.",
+          "Confira se a próxima aresta usada corresponde à decisão.",
+        ],
+      };
+    case "code":
+      return {
+        ...base,
+        noExecutionCause: `O nó Code ${nodeId} ainda não executou arquivo, inline code ou handler nesta run.`,
+        noExecutionActions: [
+          "Execute um cenário que chegue ao nó de código.",
+          "Confira linguagem, entry point, codePath/inline e inputPath.",
+          "Valide se dependências declaradas estão no contrato do nó.",
+        ],
+        failureCause: "O nó Code falhou por erro de runtime, entry point, dependência, inputPath/outputPath ou contrato de saída.",
+        failureActions: [
+          "Abra logs correlacionados e payload bruto para ver exceção/stack trace.",
+          "Confira codeLanguage, codeExecution, codeEntry, codePath e dependências.",
+          "Reexecute por fork depois de validar input/output esperados.",
+        ],
+        okCause: "O nó Code executou sem erro aparente; confirme se o output gravado no estado corresponde ao contrato esperado.",
+        okActions: [
+          "Confira output, diffs e logs do nó.",
+          "Valide se o código customizado está coberto pelo hash de aprovação.",
+          "Crie cenário para proteger transformações ou integrações críticas.",
+        ],
+      };
+    case "http_request":
+      return {
+        ...base,
+        noExecutionCause: `A chamada HTTP ${nodeId} ainda não foi disparada nesta run.`,
+        noExecutionActions: [
+          "Execute um cenário que chegue à integração HTTP.",
+          "Confira método, URL, bodyPath, responsePath e timeout.",
+          "Use mock://echo quando quiser validar o contrato sem rede externa.",
+        ],
+        failureCause: "A integração HTTP falhou por URL/método, timeout, status remoto, payload de entrada ou parsing de resposta.",
+        failureActions: [
+          "Confira method, url, bodyPath, responsePath e timeoutSeconds.",
+          "Abra payload bruto para ver status, corpo e erro retornado.",
+          "Troque para mock ou cenário fixo antes de aprovar fluxo dependente de rede.",
+        ],
+        okCause: "A chamada HTTP completou sem erro aparente; valide status, corpo retornado e caminho onde a resposta foi salva.",
+        okActions: [
+          "Revise input/output, status e responsePath.",
+          "Confirme redaction de dados sensíveis antes de exportar logs.",
+          "Compare com cenário mockado se a API externa for instável.",
+        ],
+      };
+    case "database_query":
+    case "database_save":
+      return {
+        ...base,
+        noExecutionCause: `O nó de banco ${nodeId} ainda não consultou ou gravou dados nesta run.`,
+        noExecutionActions: [
+          "Execute um cenário que chegue ao acesso de banco.",
+          "Confira table, query/dataPath/paramsPath e resultPath.",
+          "Verifique se o runtime local está com banco disponível.",
+        ],
+        failureCause: "O nó de banco falhou por query/tabela/parâmetros inválidos, indisponibilidade do banco ou contrato de resultado.",
+        failureActions: [
+          "Confira table, query, paramsPath/dataPath, maxRows e resultPath.",
+          "Abra logs do sandbox/runtime para ver erro SQL ou conexão.",
+          "Use cenário com payload mínimo para isolar schema versus dados.",
+        ],
+        okCause: "O nó de banco completou sem erro aparente; valide linhas afetadas/retornadas e diffs do estado.",
+        okActions: [
+          "Revise output, resultPath e diffs gravados.",
+          "Confirme idempotência ou duplicação quando a operação for mutável.",
+          "Compare com outro run para detectar dados dependentes de ambiente.",
+        ],
+      };
+    case "file_extract":
+    case "rag_retrieval":
+      return {
+        ...base,
+        noExecutionCause: `O nó ${label} ainda não processou arquivo, coleção ou consulta nesta run.`,
+        noExecutionActions: [
+          "Execute um cenário com arquivo/consulta disponível.",
+          "Confira sourcePath/contentPath/collectionPath/queryPath e limites de tamanho.",
+          "Valide se os assets necessários entram no pacote gerado.",
+        ],
+        failureCause: "O nó de arquivo/RAG falhou por asset ausente, formato não suportado, consulta vazia ou limite de extração/busca.",
+        failureActions: [
+          "Confira caminhos configurados, assets em files/ e payload de consulta.",
+          "Abra payload bruto para ver erro de extração, chunking ou busca.",
+          "Crie cenário com documento pequeno para validar o contrato primeiro.",
+        ],
+        okCause: "O nó de arquivo/RAG completou sem erro aparente; valide texto extraído, trechos recuperados e contexto entregue ao próximo nó.",
+        okActions: [
+          "Revise output, contextPath/resultPath e topK/chunkSize.",
+          "Compare trechos recuperados com o documento original.",
+          "Crie cenário fixo para evitar regressão de recuperação.",
+        ],
+      };
+    case "approval_gate":
+      return {
+        ...base,
+        noExecutionCause: `O approval gate ${nodeId} ainda não avaliou decisão humana ou campo de aprovação nesta run.`,
+        noExecutionActions: [
+          "Execute um cenário que produza o campo de decisão esperado.",
+          "Confira decisionPath, approvalValue e rejectionValue.",
+          "Teste explicitamente caminhos aprovado e rejeitado.",
+        ],
+        failureCause: "O approval gate falhou porque a decisão esperada não foi encontrada ou não bateu com os valores configurados.",
+        failureActions: [
+          "Confira decisionPath, approvalValue, rejectionValue e output do nó anterior.",
+          "Abra state inspector para ver onde a decisão foi gravada.",
+          "Crie cenários separados para aprovado, rejeitado e ausente.",
+        ],
+        okCause: "O approval gate avaliou a decisão sem erro aparente; confirme se a rota tomada corresponde ao valor configurado.",
+        okActions: [
+          "Revise decisionPath e a próxima aresta executada.",
+          "Compare runs aprovado/rejeitado.",
+          "Fixe o cenário se aprovação humana for crítica para o runtime final.",
+        ],
+      };
+    case "scoring":
+    case "analytics":
+      return {
+        ...base,
+        noExecutionCause: `O nó ${label} ainda não calculou métrica ou evento analítico nesta run.`,
+        noExecutionActions: [
+          "Execute um cenário que gere o payload de métrica.",
+          "Confira payloadPath, metricName, threshold e resultPath.",
+          "Valide se os campos usados existem no state inspector.",
+        ],
+        failureCause: "O nó de scoring/analytics falhou por payload ausente, métrica inválida, threshold incompatível ou resultPath incorreto.",
+        failureActions: [
+          "Confira payloadPath, metricName, threshold e resultPath.",
+          "Abra state inspector para confirmar os campos usados no cálculo.",
+          "Compare com cenário de borda abaixo/acima do threshold.",
+        ],
+        okCause: "O nó de scoring/analytics completou sem erro aparente; valide métrica calculada, threshold e evento registrado.",
+        okActions: [
+          "Revise output, métricas e diffs.",
+          "Compare com cenário de borda para validar o threshold.",
+          "Use a comparação de runs para detectar alteração de score.",
+        ],
+      };
+    case "switch":
+      return {
+        ...base,
+        noExecutionCause: `O switch ${nodeId} ainda não avaliou condições nesta run.`,
+        failureCause: "O switch falhou ou roteou de forma inesperada por condição, campo de estado ou ordem de arestas.",
+        failureActions: [
+          "Confira as condições das arestas de saída e o state usado por elas.",
+          "Abra diffs anteriores para ver se o campo esperado foi gravado.",
+          "Crie cenários para cada rota principal do switch.",
+        ],
+        okCause: "O switch avaliou condições sem erro aparente; confirme se a aresta escolhida é a rota esperada.",
+      };
+    case "human_input":
+      return {
+        ...base,
+        noExecutionCause: `O nó humano ${nodeId} ainda não recebeu mensagem nesta run.`,
+        failureCause: "O nó humano falhou por ausência de mensagem, payload inválido ou estado de sessão incompatível.",
+        okCause: "O nó humano recebeu input sem erro aparente; valide transcript e campos gravados no estado.",
+      };
+    default:
+      return base;
+  }
 }
 
 function readStudioFailureReason(payload: Record<string, unknown>): string {
