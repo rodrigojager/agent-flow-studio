@@ -1,6 +1,8 @@
 import { access, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  flowProjectFingerprint,
+  generateLangGraphSandbox,
   generateLangGraphRuntime,
   generateManifestRuntime as generateManifestRuntimeBundle,
   type ManifestAgentRuntime,
@@ -41,6 +43,41 @@ export interface GenerateResult {
   flowPath: string;
   outDir: string;
   absoluteOutDir: string;
+}
+
+export interface LangGraphSandboxApproval {
+  status: "approved";
+  flowId: string;
+  flowVersion: string;
+  flowHash: string;
+  sandboxOutDir: string;
+  approvedFor: "fastapi-runtime";
+  approvalPath: string;
+  approvedAt: string;
+}
+
+export interface LangGraphSandboxApprovalStatus {
+  status: "approved" | "missing" | "outdated" | "invalid";
+  flowId: string;
+  flowVersion: string;
+  flowHash: string;
+  sandboxOutDir?: string;
+  approvedFor?: "fastapi-runtime";
+  approvalPath: string;
+  approvedAt?: string;
+  reason: string;
+  details?: unknown;
+}
+
+export interface ApprovedGenerateResult extends GenerateResult {
+  approval: LangGraphSandboxApproval;
+}
+
+interface GeneratedProjectMetadata {
+  target?: string;
+  flowId?: string;
+  flowVersion?: string;
+  flowHash?: string;
 }
 
 export interface GenerateManifestResult {
@@ -162,8 +199,9 @@ export interface GeneratedArtifactArchive {
 const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
 const GENERATED_ARTIFACT_MAX_FILES = 1000;
 const GENERATED_ARTIFACT_MAX_PREVIEW_BYTES = 512 * 1024;
-const GENERATED_ARTIFACT_IGNORED_DIRS = new Set([".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modules"]);
-const GENERATED_ARTIFACT_IGNORED_EXTENSIONS = new Set([".pyc", ".pyo"]);
+const GENERATED_ARTIFACT_IGNORED_DIRS = new Set([".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modules", ".langgraph_api"]);
+const GENERATED_ARTIFACT_IGNORED_EXTENSIONS = new Set([".pyc", ".pyo", ".db", ".sqlite", ".sqlite3"]);
+const GENERATED_ARTIFACT_IGNORED_FILES = new Set([".env"]);
 
 export class WorkspaceError extends Error {
   constructor(
@@ -1339,7 +1377,11 @@ async function collectGeneratedArtifactFiles(
       }
       continue;
     }
-    if (!entry.isFile() || GENERATED_ARTIFACT_IGNORED_EXTENSIONS.has(path.extname(entry.name))) {
+    if (
+      !entry.isFile() ||
+      GENERATED_ARTIFACT_IGNORED_FILES.has(entry.name) ||
+      GENERATED_ARTIFACT_IGNORED_EXTENSIONS.has(path.extname(entry.name))
+    ) {
       continue;
     }
     const fileStat = await stat(path.join(artifactRoot, relativePath));
@@ -1523,6 +1565,183 @@ export async function generateRuntime(
   };
 }
 
+export async function generateLangGraphSandboxArtifact(
+  workspaceRoot: string,
+  flowId: string,
+  requestedOutDir?: string,
+): Promise<GenerateResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const loaded = await loadFlowById(root, flowId);
+  const outDir = requestedOutDir?.trim() || `generated/${loaded.flow.id}-langgraph-sandbox`;
+  const absoluteOutDir = safeResolve(root, outDir);
+  await mkdir(path.dirname(absoluteOutDir), { recursive: true });
+  await generateLangGraphSandbox({
+    flow: loaded.flow,
+    flowRoot: loaded.flowRoot,
+    outDir: absoluteOutDir,
+  });
+  return {
+    flowId: loaded.flow.id,
+    flowPath: loaded.relativePath,
+    outDir: toWorkspaceRelative(root, absoluteOutDir),
+    absoluteOutDir,
+  };
+}
+
+export async function approveLangGraphSandbox(
+  workspaceRoot: string,
+  flowId: string,
+  requestedOutDir?: string,
+): Promise<LangGraphSandboxApproval> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const loaded = await loadFlowById(root, flowId);
+  const outDir = requestedOutDir?.trim() || `generated/${loaded.flow.id}-langgraph-sandbox`;
+  const absoluteOutDir = safeResolve(root, outDir);
+  const metadata = await readGeneratedProjectMetadata(absoluteOutDir);
+  const expectedHash = await flowProjectFingerprint(loaded.flow, loaded.flowRoot);
+
+  if (metadata.target !== "langgraph-sandbox") {
+    throw new WorkspaceError("O artefato informado não é um pacote LangGraph sandbox.", 409, metadata);
+  }
+  if (metadata.flowId !== loaded.flow.id || metadata.flowVersion !== loaded.flow.version || metadata.flowHash !== expectedHash) {
+    throw new WorkspaceError(
+      "O pacote LangGraph sandbox não corresponde ao flow atual. Gere e teste o sandbox novamente antes de aprovar.",
+      409,
+      {
+        current: { flowId: loaded.flow.id, flowVersion: loaded.flow.version, flowHash: expectedHash },
+        sandbox: metadata,
+      },
+    );
+  }
+
+  const approvalDir = path.join(loaded.flowRoot, ".agent-flow");
+  await mkdir(approvalDir, { recursive: true });
+  const approvalPath = path.join(approvalDir, "langgraph-sandbox-approval.json");
+  const approval: LangGraphSandboxApproval = {
+    status: "approved",
+    flowId: loaded.flow.id,
+    flowVersion: loaded.flow.version,
+    flowHash: expectedHash,
+    sandboxOutDir: toWorkspaceRelative(root, absoluteOutDir),
+    approvedFor: "fastapi-runtime",
+    approvalPath: toWorkspaceRelative(root, approvalPath),
+    approvedAt: new Date().toISOString(),
+  };
+  await writeFile(approvalPath, `${JSON.stringify(approval, null, 2)}\n`, "utf-8");
+  return approval;
+}
+
+export async function readLangGraphSandboxApprovalStatus(
+  workspaceRoot: string,
+  flowId: string,
+): Promise<LangGraphSandboxApprovalStatus> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const loaded = await loadFlowById(root, flowId);
+  const approvalPath = path.join(loaded.flowRoot, ".agent-flow", "langgraph-sandbox-approval.json");
+  const expectedHash = await flowProjectFingerprint(loaded.flow, loaded.flowRoot);
+  const base: Omit<LangGraphSandboxApprovalStatus, "status" | "reason" | "details"> = {
+    flowId: loaded.flow.id,
+    flowVersion: loaded.flow.version,
+    flowHash: expectedHash,
+    approvalPath: toWorkspaceRelative(root, approvalPath),
+  };
+
+  let rawApproval: unknown;
+  try {
+    rawApproval = JSON.parse(await readFile(approvalPath, "utf-8"));
+  } catch (error) {
+    return {
+      ...base,
+      status: "missing",
+      reason: "Não há aprovação de sandbox registrada para este flow.",
+      details: error instanceof Error ? error.message : error,
+    };
+  }
+
+  const approval = parseLangGraphSandboxApproval(rawApproval);
+  if (!approval) {
+    return {
+      ...base,
+      status: "invalid",
+      reason: "Arquivo de aprovação inválido ou inconsistente.",
+      details: rawApproval,
+    };
+  }
+
+  if (
+    approval.status !== "approved" ||
+    approval.flowId !== loaded.flow.id ||
+    approval.flowVersion !== loaded.flow.version ||
+    approval.flowHash !== expectedHash
+  ) {
+    return {
+      ...base,
+      ...approval,
+      status: "outdated",
+      reason: "Aprovação existente não corresponde ao flow atual.",
+      details: {
+        approval,
+        expected: {
+          flowId: loaded.flow.id,
+          flowVersion: loaded.flow.version,
+          flowHash: expectedHash,
+        },
+      },
+    };
+  }
+
+  let sandboxMetadata: GeneratedProjectMetadata;
+  try {
+    const sandboxOutDir = safeResolve(root, approval.sandboxOutDir);
+    sandboxMetadata = await readGeneratedProjectMetadata(sandboxOutDir);
+    if (sandboxMetadata.target !== "langgraph-sandbox" || sandboxMetadata.flowHash !== expectedHash) {
+      return {
+        ...base,
+        ...approval,
+        status: "outdated",
+        reason: "O sandbox aprovado não corresponde ao flow atual.",
+        details: sandboxMetadata,
+      };
+    }
+  } catch (error) {
+    return {
+      ...base,
+      ...approval,
+      status: "outdated",
+      reason: "Arquivo de metadados do sandbox não encontrado ou inválido.",
+      details: error instanceof Error ? error.message : error,
+    };
+  }
+
+  return {
+    ...approval,
+    status: "approved",
+    reason: "Sandbox aprovado para geração da API Docker.",
+    details: undefined,
+  };
+}
+
+export async function generateApprovedRuntime(
+  workspaceRoot: string,
+  flowId: string,
+  requestedOutDir?: string,
+): Promise<ApprovedGenerateResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const loaded = await loadFlowById(root, flowId);
+  const status = await readLangGraphSandboxApprovalStatus(root, flowId);
+  if (status.status !== "approved") {
+    throw approvalStatusToWorkspaceError(status);
+  }
+  const approval = status as LangGraphSandboxApproval;
+  const result = await generateRuntime(root, flowId, requestedOutDir);
+  await writeFile(
+    path.join(result.absoluteOutDir, ".agent-flow", "langgraph-sandbox-approval.json"),
+    `${JSON.stringify(approval, null, 2)}\n`,
+    "utf-8",
+  );
+  return { ...result, approval };
+}
+
 export async function generateRuntimeManifest(
   workspaceRoot: string,
   requestedOutDir?: string,
@@ -1549,4 +1768,108 @@ export async function generateRuntimeManifest(
       routePrefix: agent.routePrefix,
     })),
   };
+}
+
+async function readGeneratedProjectMetadata(absoluteOutDir: string): Promise<GeneratedProjectMetadata> {
+  const metadataPath = path.join(absoluteOutDir, ".agent-flow", "generated-meta.json");
+  let raw: string;
+  try {
+    raw = await readFile(metadataPath, "utf-8");
+  } catch (error) {
+    throw new WorkspaceError(
+      "Gere o pacote LangGraph sandbox antes de aprovar essa versão do flow.",
+      409,
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("metadata não é objeto");
+    }
+    return parsed as GeneratedProjectMetadata;
+  } catch (error) {
+    throw new WorkspaceError(
+      "O metadado do artefato gerado não é JSON válido.",
+      422,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+async function readCurrentLangGraphApproval(
+  root: string,
+  loaded: LoadedFlow,
+): Promise<LangGraphSandboxApproval> {
+  const status = await readLangGraphSandboxApprovalStatus(root, loaded.flow.id);
+  if (status.status !== "approved") {
+    throw approvalStatusToWorkspaceError(status);
+  }
+  return {
+    status: "approved",
+    flowId: status.flowId,
+    flowVersion: status.flowVersion,
+    flowHash: status.flowHash,
+    sandboxOutDir: status.sandboxOutDir!,
+    approvedFor: status.approvedFor ?? "fastapi-runtime",
+    approvalPath: status.approvalPath,
+    approvedAt: status.approvedAt ?? "",
+  };
+}
+
+function parseLangGraphSandboxApproval(value: unknown): LangGraphSandboxApproval | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value.status !== "approved") {
+    return null;
+  }
+  if (typeof value.flowId !== "string" || typeof value.flowVersion !== "string" || typeof value.flowHash !== "string") {
+    return null;
+  }
+  if (typeof value.sandboxOutDir !== "string" || typeof value.approvalPath !== "string") {
+    return null;
+  }
+  if (typeof value.approvedFor !== "string" || value.approvedFor !== "fastapi-runtime") {
+    return null;
+  }
+  if (typeof value.approvedAt !== "string") {
+    return null;
+  }
+  return {
+    status: "approved",
+    flowId: value.flowId,
+    flowVersion: value.flowVersion,
+    flowHash: value.flowHash,
+    sandboxOutDir: value.sandboxOutDir,
+    approvedFor: value.approvedFor,
+    approvalPath: value.approvalPath,
+    approvedAt: value.approvedAt,
+  };
+}
+
+function approvalStatusToWorkspaceError(status: LangGraphSandboxApprovalStatus): WorkspaceError {
+  if (status.status === "approved") {
+    return new WorkspaceError("Aprovação LangGraph inválida para esta operação.", 409, status);
+  }
+  if (status.status === "missing") {
+    return new WorkspaceError(
+      "Aprove o sandbox LangSmith/LangGraph desta versão antes de gerar o runtime FastAPI/Docker aprovado.",
+      409,
+      status,
+    );
+  }
+  if (status.status === "invalid") {
+    return new WorkspaceError(
+      "A aprovação LangSmith/LangGraph está inválida para esta versão. Corrija ou gere e aprove novamente.",
+      409,
+      status,
+    );
+  }
+  return new WorkspaceError(
+    "A aprovação LangSmith/LangGraph está desatualizada para o flow atual. Gere, teste e aprove novamente.",
+    409,
+    status,
+  );
 }

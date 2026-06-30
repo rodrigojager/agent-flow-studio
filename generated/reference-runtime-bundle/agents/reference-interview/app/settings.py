@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     agent_api_key: str = ""
     auto_create_tables: bool = True
     log_level: str = "INFO"
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,6 +1,6 @@
 # Status de Implementação
 
-Última atualização: 2026-06-29.
+Última atualização: 2026-06-30.
 
 ## Implementado
 
@@ -45,20 +45,48 @@
 - Codegen LangGraph monta o grafo gerado a partir dos nós e arestas do `agent.flow.json`, com handlers por tipo de nó e eventos baseados nos nós realmente executados.
 - Codegen LangGraph executa nós dedicados de `switch` e `human_input`, incluindo condições simples com `and`, comparações de estado e eventos operacionais específicos.
 - Flow Spec, Builder UI e Codegen LangGraph possuem suporte inicial a nós avançados determinísticos `http_request`, `transform_json`, `database_query`, `database_save`, `file_extract` e `rag_retrieval`, com configuração visual, execução no runtime gerado, suporte a `mock://echo` para testes sem rede, tabela genérica `agent_node_records` para gravações JSON, cópia de assets de `files/` para `app/files/`, extração de texto/Markdown/PDF opcional via `pypdf`, busca lexical RAG local e eventos próprios em `/events`.
+- Flow Spec, Builder UI e Codegen LangGraph possuem suporte inicial a nós `approval_gate`, `scoring` e `analytics`, com configuração visual, execução no runtime gerado e eventos próprios em `/events`.
 - Codegen LangGraph valida adapters LLM pelo catálogo, gera runtime apenas com o adapter selecionado e respeita overrides de adapter/modelo em nós LLM.
-- Codegen possui testes end-to-end com flow simplificado sem `deterministic_gate`, flow com `switch`/`human_input`, flow com `http_request`/`transform_json`, flow com `database_query`/`database_save`, flow com `file_extract`/`rag_retrieval` e bundle multiagente, gerando runtimes temporários e executando pytest nos artefatos gerados.
+- Codegen possui testes end-to-end com flow simplificado sem `deterministic_gate`, flow com `switch`/`human_input`, flow com `http_request`/`transform_json`, flow com `database_query`/`database_save`, flow com `file_extract`/`rag_retrieval`, flow com `approval_gate`/`scoring`/`analytics` e bundle multiagente, gerando runtimes temporários e executando pytest nos artefatos gerados.
 - Flow Spec define `RuntimeManifest` para agrupamento monoagente ou multiagente, com agentes referenciando `agent.flow.json` por `flowPath`.
 - Codegen gera bundle a partir de `runtime.manifest.json`, com metadados, README e um runtime independente por agente em `generated/reference-runtime-bundle/agents/`.
 - Codegen gera app FastAPI raiz para manifestos `multiagent`, montando os agentes em um único processo pelos `routePrefix` e preservando idempotência por prefixo de rota.
 - Builder API lê, valida e gera bundles por manifesto via rotas `/runtime-manifest`, `/runtime-manifest/validate` e `/runtime-manifest/generate`.
 - Builder UI possui aba `Runtime` para carregar `runtime.manifest.json`, exibir agentes, validar o manifesto e gerar bundle por manifesto via Builder API.
 - Sandbox local inicial: Builder API inicia/para o runtime gerado, lista runtimes em memória, acompanha status/logs e aceita porta configurável; Builder UI permite iniciar/parar/atualizar, acompanhar logs recentes, escolher porta e acionar criação de sessão, turnos, finalização, transcript e events.
+- Codegen gera um artefato separado de sandbox LangSmith/LangGraph em `generated/reference-interview-langgraph-sandbox/`, com `langgraph.json`, `app/langgraph_app.py:graph`, `.env.example` com variáveis LangSmith, README próprio, testes de entrypoint LangGraph e dependência `langgraph-cli[inmem]` isolada do runtime FastAPI.
+- Artefatos gerados incluem `.agent-flow/generated-meta.json` com target e hash determinístico do projeto do agente, cobrindo `agent.flow.json`, prompts, schemas, arquivos em `files/` e código customizado referenciado por `codePath`.
+- Builder API expõe `/flows/{flowId}/generate-langgraph-sandbox`, `/flows/{flowId}/approve-langgraph-sandbox` e `/flows/{flowId}/generate-approved-runtime`, recusando gerar runtime aprovado quando o sandbox não foi gerado/aprovado ou quando o hash do flow/assets mudou.
+- Builder UI expõe a sequência visual `LangGraph` -> `Aprovar` -> `API Docker`, separando o pacote de validação LangSmith/LangGraph do runtime final FastAPI/Docker.
+- Builder API expõe controle operacional do runtime Docker final aprovado por `/docker-runtime/status`, `/docker-runtime/prepare-env`, `/docker-runtime/configure-ports`, `/docker-runtime/build`, `/docker-runtime/up`, `/docker-runtime/down`, `/docker-runtime/smoke` e `/docker-runtime/inspect`, validando que o artefato está em `generated/`, possui target `fastapi-runtime`, `Dockerfile`, `docker-compose.yml` e flow embutido antes de executar comandos.
+- Builder API aceita `runtimeUrl` local para status, comandos e smoke test, permitindo testar uma porta customizada do runtime final sem alterar o Builder.
+- Builder API persiste histórico operacional local do runtime Docker em `.agent-flow/docker-runtime-history/`, expõe `/docker-runtime/history` e mantém esse histórico fora do artefato exportável.
+- Builder UI mostra controles `Status`, `Inspecionar`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down` no painel `Artefato` quando o pacote carregado é a API Docker final, com input de Runtime URL, edição visual das portas API/Postgres/Redis do `docker-compose.yml`, links para `/docs` e `/openapi.json`, serviços de `docker compose ps`, logs recentes, histórico operacional, auto-atualização opt-in, status da última operação, painel de progresso de build e resumo do smoke test.
+- Plano mestre de implementação documentado em `docs/master-implementation-plan.md`, consolidando objetivo final, base já implementada, decisões, superfícies de produto, arquitetura alvo, fases, critérios de aceite e checklist anti-regressão.
+- Paridade ProUp documentada em `docs/proup-capability-parity.md`, registrando as capacidades que a ferramenta precisa conseguir recriar e a politica de escape hatch para evitar engessamento visual.
+- Flow Spec, Builder UI e Codegen LangGraph possuem contrato inicial para nós `code` customizados, com linguagem, modo de execução, arquivo, entry point, dependências, input path, result path e código inline. O codegen copia assets de `codePath` para `app/code/`, inclui esses arquivos no hash de aprovação, executa Python nativo por arquivo/inline e JavaScript por arquivo/inline via runner Node no runtime gerado, instala Node no Dockerfile final e registra `custom_code_executed`, `custom_code_declared` ou `custom_code_failed` em `/events`.
+- Plano do Studio Local 100% local documentado em `docs/local-studio-plan.md`, cobrindo fluxo contínuo `Builder Visual -> Studio Local -> Aprovar Versão -> API Docker`, tema claro/escuro, grafo, runs, state inspector, node IO, timeline, logs e traces locais.
+- Especificações de UI/UX do Studio Local documentadas em `docs/ux/`, cobrindo pesquisa de referências LangSmith/LangGraph Studio e n8n, varredura navegada com `agent-browser`, análise crua de screenshots logados, decisões de produto/UX para evitar regressões, regras visuais/comportamentais observadas, matriz de inputs e elementos de IA, interface alvo, modelo de interação, design system claro/escuro e roadmap visual.
+- Builder UI possui tema claro/escuro persistente por `localStorage`, com tokens CSS para superfícies principais, canvas, inspector, controles, timeline e nós executados.
+- Painel `Studio` inicial integrado ao Builder UI substitui o antigo painel cru de sandbox, mantendo start/stop/refresh do runtime e adicionando visão de run, métricas da sessão, timeline de eventos, seleção de evento, Node IO inferido, payload bruto, state inspector, transcript, eventos brutos, runtimes ativos e logs.
+- Builder API persiste snapshots iniciais de runs locais do Studio em `flows/{flowId}/.agent-flow/studio-runs/`, expõe `/flows/{flowId}/studio-runs` e `/flows/{flowId}/studio-runs/{runId}`, salvando sessão, transcript, events, logs, métricas, snapshots derivados de state por evento e diffs incrementais.
+- Builder UI lista runs locais no painel `Studio`, salva snapshots após avanço de sessão/turno/finalização e permite recarregar um run persistido para replay básico da timeline, Node IO, transcript, state inspector e diff do evento selecionado.
+- Comparação de runs do Studio ganhou diffs semânticos por nó (state/output), filtro por nó e metadados de cenário para comparação (esquerda/direita/alterado).
+- Causality do Studio foi incorporada ao fluxo persistido e ao grafo da UI (`upstream`, `impact`, `cascata`) com destaque de eventos/nós no replay, incluindo trilha visual no painel de grafo.
+- Build Docker pela UI passa a expor progresso incremental por etapa em `docker compose build` e mantém log de progresso persistido no histórico operacional.
+- Studio Local ganhou painel `Contexto do nó`, acionado pelo clique/filtro de nó, reunindo status, papel causal, erro relacionado, eventos recentes, input/output inferidos, estado do nó, diffs e logs correlacionados.
+- Causalidade ao vivo da UI foi alinhada ao backend: usa a falha mais recente, o parent executado mais próximo antes da falha e descendentes realmente observados depois da falha.
+- Ordenação de `impactedNodes` passou a seguir ordem causal/de execução, com o nó da falha primeiro e descendentes ordenados pelo primeiro evento impactado, em vez de lista alfabética.
+- Topbar do Builder/Studio passou a conter overflow de toolbar localmente, evitando alargar o documento em viewport desktop comum.
+- Docker Runtime Manager atualiza progresso de `docker compose build` enquanto o comando ainda está rodando, via callback de streaming no runner padrão e registro em memória consultável por `/docker-runtime/status`.
+- Builder UI consulta `/docker-runtime/status` durante `Build`, mesmo com a operação ocupada, para atualizar painel de progresso/logs antes da resposta final do comando.
 
 ## Verificado
 
 ```bash
 npm run validate:flow
 npm run codegen:reference
+npm run codegen:sandbox
 npm run codegen:manifest
 npm run typecheck
 npm run test:baseline
@@ -79,14 +107,72 @@ Também foi validado localmente:
 - Builder UI servindo HTML em `http://127.0.0.1:5173`.
 - Builder API listando e validando `reference-interview` via HTTP.
 - Sandbox em `http://127.0.0.1:8090`, com smoke test de `POST /sessions`, `start`, `turn`, `transcript` e `events`.
+- Builder API validando a promoção LangSmith/LangGraph: sem aprovação retorna 409, após aprovação gera runtime aprovado com `.agent-flow/langgraph-sandbox-approval.json`.
+- Sandbox LangGraph validado em venv isolada `.venv/langgraph`, sem instalar `langgraph-cli` no ambiente FastAPI do runtime final: `pytest` do pacote sandbox passou, `langgraph --version` retornou 0.4.30 e `langgraph dev --no-browser --host 127.0.0.1 --port 2024 --no-reload --allow-blocking` subiu `/docs` em smoke temporário.
+- Container final validado com `docker compose up -d --build` em `generated/reference-interview-runtime/`; `/health` respondeu `db_ok=true` e `cache_ok=true`, e o smoke HTTP criou sessão, executou `start`, `turn`, retornou `ECHO` e gravou eventos.
+- Dockerfile final com runner Node validado por `docker compose build api` em `generated/reference-interview-runtime/` e `docker run --rm reference-interview-runtime-api node --version`, retornando `v20.19.2`.
+- Builder UI validado em navegador local em `http://127.0.0.1:5173`: tema escuro aplicado, painel `Studio` aberto, runtime local ativo em `http://127.0.0.1:8090`, sessão criada, turno enviado, timeline/state inspector atualizados e tema claro reaplicado pelo toggle.
+- Builder API validada com runner Docker falso em `npm run test:builder-api`, cobrindo status/configure-ports/prepare-env/build/up/down/inspect/history do runtime aprovado sem executar Docker real.
+- Rota `/docker-runtime/status` validada por `app.inject` no workspace real para `generated/reference-interview-runtime`, retornando target `fastapi-runtime`, recurso `sessions`, `Dockerfile`, compose, portas API/Postgres/Redis e links `http://127.0.0.1:8080/docs` e `/openapi.json`.
+- Rota `/docker-runtime/status` validada por `app.inject` com `runtimeUrl=http://127.0.0.1:9000`, retornando links customizados para `http://127.0.0.1:9000/docs` e `/openapi.json`.
+- Rota `/docker-runtime/history` validada por `app.inject` no workspace real para `generated/reference-interview-runtime`, retornando lista vazia quando ainda não há histórico local.
+- Rotas de runs locais do Studio validadas em `npm run test:builder-api`, cobrindo lista vazia, gravação de snapshot, snapshotCount, diff por node, listagem de resumo, carregamento completo e arquivo persistido em `.agent-flow/studio-runs/`.
+- Rota `/flows/reference-interview/studio-runs` validada por `app.inject` no workspace real, retornando `200` e lista vazia quando ainda não há snapshot local.
+- `npm run typecheck`, `npm run test:builder-api` e `npm --workspace @agent-flow-builder/builder-ui run build` passaram após o painel `Contexto do nó` e a nova ordenação causal.
+- Builder UI validado via Playwright em `http://127.0.0.1:5173` com viewport `1440x900`: aba `Studio` abriu, clique no nó `start` preencheu `Contexto do nó` com 4 cards, tema alternou entre escuro/claro preservando o painel e `body.scrollWidth` permaneceu dentro do viewport.
+- `npm run test:builder-api` cobre progresso incremental do Docker build: enquanto o `POST /docker-runtime/build` ainda está pendente, `GET /docker-runtime/status` retorna `lastOperation=build`, `lastStatus=running` e `progress` já preenchido.
 
 ## Ainda não implementado
 
-- Codegen genérico para recursos avançados futuros como approval, scoring e analytics.
+- Studio Local: evoluir o drill-down do nó com prompt renderizado, custos/tokens quando existirem, spans estruturados e reexecução/fork por checkpoint.
+- Tema claro e escuro ainda precisa de auditoria visual completa em todas as telas e viewports, embora o sistema persistente por tokens já exista nas superfícies principais.
 - Edição visual avançada de metadados de prompts/schemas e ergonomia refinada do canvas.
+- Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
 - Jobs pós-finalização com worker.
 - Streaming.
 - Autenticação avançada.
-- Nós avançados como approval gate, scoring e analytics.
+- Integração opcional com LangSmith Cloud pelo Builder UI, caso o usuário queira publicar/deployar fora do modo 100% local.
+
+## Próximos Passos (ciclo atual)
+
+Para chegar ao objetivo completo de "studio local + aprovação + API Docker" sem regressão de capacidade, a sequência recomendada é:
+
+1. **Refino do pipeline Docker (Alta prioridade)**
+   - adicionar cancelamento/abort visual para build longo;
+   - filtrar histórico/progresso por etapa e severidade (info/warn/error);
+   - melhorar percentuais quando o output do Docker não fornece contagem explícita.
+
+2. **Auditoria visual completa de tema claro/escuro (Alta prioridade)**
+   - validar todas as abas principais em desktop e viewport menor;
+   - corrigir contraste, overflow e estados vazios/erro/loading que ainda escaparem;
+   - registrar checklist manual objetivo para evitar regressão visual.
+
+3. **Canvas/produtos de trabalho refinados (Média prioridade)**
+   - grupos colapsáveis, atalhos e estado dirty/stale por nó/aresta;
+   - edição visual de metadados e esquemas no painel lateral sem precisar abrir JSON;
+   - atalhos de fluxo (Ctrl+S, Ctrl+Enter, A, F, Esc, filtros).
+
+4. **Cenários + pinning avançado (Média prioridade)**
+   - consolidar cenários nomeados por agente/run;
+   - pinning de payload e output por nó com indicador visual;
+   - reexecução determinística com histórico de comparação.
+
+5. **Adapters de código não nativos (Média/Longo prazo)**
+   - adicionar contrato de execução HTTP/MCP/sidecar;
+   - mapa de segurança (timeout, retry, payload whitelist, redaction);
+   - logs por nó no Studio Local e inclusão no hash de aprovação.
+
+6. **Multiagente operacional**
+   - rota/agent_id estável no runtime e no Studio;
+   - trace e histórico por agente no UI.
+
+## Regras de bloqueio até fechamento de uma fase
+
+- Nenhuma etapa pode ser marcada "concluída" enquanto não cumprir:
+  - paridade da capacidade equivalente à de um fluxo de referência real (ProUp/semântica de conversa);
+  - aprovação por hash válida para geração do runtime final;
+  - evidência local de debug (run+timeline+state diff+node IO);
+  - tema claro e escuro testado no fluxo alvo;
+  - fluxo completo sem troca para ferramentas externas no caminho principal.

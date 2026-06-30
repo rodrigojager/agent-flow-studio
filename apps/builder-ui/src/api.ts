@@ -1,4 +1,5 @@
 import type {
+  ApprovedGenerateResult,
   CreatedFlowWorkspace,
   EventView,
   FlowAssetContent,
@@ -8,11 +9,18 @@ import type {
   FlowWorkspaceExport,
   FlowWorkspaceImportResult,
   GenerateResult,
+  LangGraphSandboxApproval,
+  DockerRuntimeOperationResult,
+  DockerRuntimeHistory,
+  DockerRuntimeHistoryQuery,
+  DockerRuntimePortUpdate,
+  DockerRuntimeStatus,
   GeneratedArtifactFileContent,
   GeneratedArtifactListing,
   AgentFlow,
   LlmAdapterCatalogResult,
   LoadedFlow,
+  LangGraphSandboxApprovalStatus,
   MessageView,
   LoadedRuntimeManifest,
   RuntimeManifestGenerateResult,
@@ -20,6 +28,11 @@ import type {
   SandboxListResult,
   SandboxStatus,
   SessionView,
+  StudioRunList,
+  StudioRunRecord,
+  StudioRunQuery,
+  StudioRunComparison,
+  StudioRunExport,
   ValidationResult,
 } from "./types.ts";
 
@@ -139,6 +152,38 @@ export async function generateFlow(flowId: string, outDir?: string): Promise<Gen
   });
 }
 
+export async function generateLangGraphSandbox(flowId: string, outDir?: string): Promise<GenerateResult> {
+  return request<GenerateResult>(`/flows/${encodeURIComponent(flowId)}/generate-langgraph-sandbox`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ outDir }),
+  });
+}
+
+export async function approveLangGraphSandbox(flowId: string, outDir?: string): Promise<LangGraphSandboxApproval> {
+  const result = await request<{ status: "ok"; approval: LangGraphSandboxApproval }>(
+    `/flows/${encodeURIComponent(flowId)}/approve-langgraph-sandbox`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ outDir }),
+    },
+  );
+  return result.approval;
+}
+
+export async function readLangGraphSandboxApprovalStatus(flowId: string): Promise<LangGraphSandboxApprovalStatus> {
+  return request<LangGraphSandboxApprovalStatus>(`/flows/${encodeURIComponent(flowId)}/langgraph-sandbox-approval-status`);
+}
+
+export async function generateApprovedRuntime(flowId: string, outDir?: string): Promise<ApprovedGenerateResult> {
+  return request<ApprovedGenerateResult>(`/flows/${encodeURIComponent(flowId)}/generate-approved-runtime`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ outDir }),
+  });
+}
+
 export async function listGeneratedArtifact(outDir: string): Promise<GeneratedArtifactListing> {
   return request<GeneratedArtifactListing>(`/artifacts?${generatedArtifactQuery(outDir)}`);
 }
@@ -156,6 +201,57 @@ export async function downloadGeneratedArtifactArchive(outDir: string): Promise<
     throw await responseError(response);
   }
   return response.blob();
+}
+
+export async function dockerRuntimeStatus(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeStatus> {
+  return request<DockerRuntimeStatus>(`/docker-runtime/status?${generatedArtifactQuery(outDir, undefined, runtimeUrl)}`);
+}
+
+export async function dockerRuntimeHistory(
+  outDir: string,
+  runtimeUrl?: string,
+  limit = 20,
+  filters: Omit<DockerRuntimeHistoryQuery, "limit"> = {},
+): Promise<DockerRuntimeHistory> {
+  return request<DockerRuntimeHistory>(
+    `/docker-runtime/history?${generatedRuntimeHistoryQuery(outDir, runtimeUrl, limit, filters)}`,
+  );
+}
+
+export async function dockerRuntimeBuild(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("build", outDir, runtimeUrl);
+}
+
+export async function dockerRuntimePrepareEnv(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("prepare-env", outDir, runtimeUrl);
+}
+
+export async function dockerRuntimeConfigurePorts(
+  outDir: string,
+  ports: DockerRuntimePortUpdate,
+  runtimeUrl?: string,
+): Promise<DockerRuntimeOperationResult> {
+  return request<DockerRuntimeOperationResult>("/docker-runtime/configure-ports", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ outDir, ports, runtimeUrl }),
+  });
+}
+
+export async function dockerRuntimeUp(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("up", outDir, runtimeUrl);
+}
+
+export async function dockerRuntimeDown(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("down", outDir, runtimeUrl);
+}
+
+export async function dockerRuntimeSmoke(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("smoke", outDir, runtimeUrl);
+}
+
+export async function dockerRuntimeInspect(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+  return dockerRuntimeCommand("inspect", outDir, runtimeUrl);
 }
 
 export async function loadRuntimeManifest(): Promise<LoadedRuntimeManifest> {
@@ -279,9 +375,89 @@ export async function runtimeEvents(runtimeUrl: string, resourceName: string, se
   return runtimeRequest<EventView[]>(runtimeUrl, `/${resourceName}/${sessionId}/events`);
 }
 
+export async function listStudioRuns(flowId: string, query: StudioRunQuery = {}): Promise<StudioRunList> {
+  const params = new URLSearchParams();
+  if (query.q) {
+    params.set("q", query.q);
+  }
+  if (query.status) {
+    params.set("status", query.status);
+  }
+  if (query.phase) {
+    params.set("phase", query.phase);
+  }
+  if (query.hasErrors !== undefined) {
+    params.set("hasErrors", query.hasErrors ? "true" : "false");
+  }
+  if (query.isComplete !== undefined) {
+    params.set("isComplete", query.isComplete ? "true" : "false");
+  }
+  if (query.node) {
+    params.set("node", query.node);
+  }
+  if (query.minDurationMs !== undefined) {
+    params.set("minDurationMs", String(query.minDurationMs));
+  }
+  if (query.maxDurationMs !== undefined) {
+    params.set("maxDurationMs", String(query.maxDurationMs));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<StudioRunList>(`/flows/${encodeURIComponent(flowId)}/studio-runs${suffix}`);
+}
+
+export async function loadStudioRun(flowId: string, runId: string): Promise<StudioRunRecord> {
+  return request<StudioRunRecord>(`/flows/${encodeURIComponent(flowId)}/studio-runs/${encodeURIComponent(runId)}`);
+}
+
+export async function exportStudioRun(flowId: string, runId: string): Promise<StudioRunExport> {
+  return request<StudioRunExport>(`/flows/${encodeURIComponent(flowId)}/studio-runs/${encodeURIComponent(runId)}/export`);
+}
+
+export async function compareStudioRuns(
+  flowId: string,
+  leftRunId: string,
+  rightRunId: string,
+): Promise<StudioRunComparison> {
+  const params = new URLSearchParams({
+    left: leftRunId,
+    right: rightRunId,
+  });
+  return request<StudioRunComparison>(`/flows/${encodeURIComponent(flowId)}/studio-runs/compare?${params.toString()}`);
+}
+
+export async function saveStudioRun(
+  flowId: string,
+  payload: {
+    runtimeUrl: string;
+    resourceName: string;
+    session: SessionView;
+    transcript: MessageView[];
+    events: EventView[];
+    logs: string[];
+  },
+): Promise<StudioRunRecord> {
+  return request<StudioRunRecord>(`/flows/${encodeURIComponent(flowId)}/studio-runs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${builderApiUrl()}${path}`, init);
   return parseResponse<T>(response);
+}
+
+async function dockerRuntimeCommand(
+  operation: "prepare-env" | "build" | "up" | "down" | "smoke" | "inspect",
+  outDir: string,
+  runtimeUrl?: string,
+): Promise<DockerRuntimeOperationResult> {
+  return request<DockerRuntimeOperationResult>(`/docker-runtime/${operation}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ outDir, runtimeUrl }),
+  });
 }
 
 async function runtimeRequest<T>(runtimeUrl: string, path: string, init?: RequestInit): Promise<T> {
@@ -298,10 +474,44 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return payload as T;
 }
 
-function generatedArtifactQuery(outDir: string, filePath?: string): string {
+function generatedArtifactQuery(outDir: string, filePath?: string, runtimeUrl?: string): string {
   const params = new URLSearchParams({ outDir });
   if (filePath) {
     params.set("path", filePath);
+  }
+  if (runtimeUrl) {
+    params.set("runtimeUrl", runtimeUrl);
+  }
+  return params.toString();
+}
+
+function generatedRuntimeHistoryQuery(
+  outDir: string,
+  runtimeUrl: string | undefined,
+  limit: number,
+  filters: Omit<DockerRuntimeHistoryQuery, "limit">,
+): string {
+  const params = new URLSearchParams({ outDir, limit: String(limit) });
+  if (runtimeUrl) {
+    params.set("runtimeUrl", runtimeUrl);
+  }
+  if (filters.operation) {
+    params.set("operation", filters.operation);
+  }
+  if (filters.status) {
+    params.set("status", filters.status);
+  }
+  if (filters.ok !== undefined) {
+    params.set("ok", filters.ok ? "true" : "false");
+  }
+  if (filters.search) {
+    params.set("search", filters.search);
+  }
+  if (filters.from) {
+    params.set("from", filters.from);
+  }
+  if (filters.to) {
+    params.set("to", filters.to);
   }
   return params.toString();
 }

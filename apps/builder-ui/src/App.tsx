@@ -19,6 +19,7 @@ import {
 } from "@xyflow/react";
 import {
   AlertCircle,
+  BarChart3,
   Boxes,
   CheckCircle2,
   CircleDot,
@@ -26,6 +27,7 @@ import {
   Download,
   FileText,
   FileJson,
+  Gauge,
   GitBranch,
   Play,
   Plus,
@@ -33,13 +35,20 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Moon,
+  Pin,
+  Save,
   Sparkles,
+  Sun,
   Terminal,
   Trash2,
   Upload,
+  UserCheck,
+  GitCompare,
 } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 import {
+  approveLangGraphSandbox,
   builderApiUrl,
   createFlowWorkspace,
   createRuntimeSession,
@@ -47,20 +56,36 @@ import {
   createSchemaAsset,
   deletePromptAsset,
   deleteSchemaAsset,
+  dockerRuntimeBuild,
+  dockerRuntimeConfigurePorts,
+  dockerRuntimeDown,
+  dockerRuntimeHistory,
+  dockerRuntimeInspect,
+  dockerRuntimePrepareEnv,
+  dockerRuntimeSmoke,
+  dockerRuntimeStatus,
+  dockerRuntimeUp,
   downloadGeneratedArtifactArchive,
+  compareStudioRuns,
+  exportStudioRun,
   exportFlowWorkspace,
   finishRuntimeSession,
+  generateApprovedRuntime,
   generateFlow,
+  generateLangGraphSandbox,
   generateRuntimeManifest,
   importFlowWorkspace,
   listGeneratedArtifact,
   listFlows,
   listLlmAdapters,
   listSandboxes,
+  listStudioRuns,
   loadFlow,
   loadPromptAsset,
   loadRuntimeManifest,
   loadSchemaAsset,
+  loadStudioRun,
+  readLangGraphSandboxApprovalStatus,
   readGeneratedArtifactFile,
   runtimeEvents,
   runtimeTranscript,
@@ -68,6 +93,7 @@ import {
   saveFlow,
   savePromptAsset,
   saveSchemaAsset,
+  saveStudioRun,
   sendRuntimeTurn,
   startRuntimeSession,
   startSandbox,
@@ -83,9 +109,18 @@ import type {
   FlowNode,
   FlowSummary,
   FlowWorkspaceExport,
+  ApprovedGenerateResult,
+  DockerRuntimeHistory,
+  DockerRuntimeHistoryQuery,
+  DockerRuntimeOperation,
+  DockerRuntimeOperationResult,
+  DockerRuntimeStatus,
   GenerateResult,
   GeneratedArtifactFileContent,
   GeneratedArtifactListing,
+  DockerRuntimeOperationStatus,
+  LangGraphSandboxApproval,
+  LangGraphSandboxApprovalStatus,
   LlmAdapterCatalogItem,
   LoadedFlow,
   LoadedRuntimeManifest,
@@ -94,16 +129,58 @@ import type {
   RuntimeManifestValidationResult,
   SandboxStatus,
   SessionView,
+  StudioRunSummary,
+  StudioRunComparison,
+  StudioRunQuery,
+  StudioRunCausalAnalysis,
+  StudioStateSnapshot,
   ValidationResult,
 } from "./types.ts";
 import "./styles.css";
 
 type InspectorTab = "properties" | "files" | "validation" | "json" | "artifact" | "runtime" | "sandbox";
 type StatusKind = "idle" | "ok" | "error" | "busy";
+type ThemeMode = "light" | "dark";
+
+interface DockerHistoryFilterForm {
+  operation: DockerRuntimeOperation | "";
+  status: DockerRuntimeOperationStatus | "";
+  ok: "" | "true" | "false";
+  search: string;
+  from: string;
+  to: string;
+  limit: string;
+}
 
 interface StatusState {
   kind: StatusKind;
   message: string;
+}
+
+interface StudioScenario {
+  id: string;
+  label: string;
+  input: string;
+  tags: string[];
+  isPinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string | null;
+}
+
+interface StudioNodeDebugContext {
+  nodeId: string;
+  status: string;
+  causalRole: string;
+  events: EventView[];
+  latestEvent: EventView | null;
+  errorEvent: EventView | null;
+  latestSnapshot: StudioStateSnapshot | null;
+  nodeState: unknown;
+  input: unknown;
+  output: unknown;
+  diffs: StudioStateSnapshot["diff"];
+  logs: string[];
 }
 
 const nodeTypeOptions = [
@@ -120,12 +197,37 @@ const nodeTypeOptions = [
   { type: "database_save", label: "DB Save", icon: Download },
   { type: "file_extract", label: "Arquivo", icon: FileText },
   { type: "rag_retrieval", label: "RAG", icon: Search },
+  { type: "approval_gate", label: "Approval", icon: UserCheck },
+  { type: "scoring", label: "Scoring", icon: Gauge },
+  { type: "analytics", label: "Analytics", icon: BarChart3 },
   { type: "end", label: "End", icon: CircleDot },
 ] as const;
 
 const palette = nodeTypeOptions;
+const themeStorageKey = "agent-flow-builder.theme";
+const scenarioStorageKeyPrefix = "agent-flow-builder.studio-scenarios.";
+const dockerHistoryOperationOptions: DockerRuntimeOperation[] = [
+  "prepare_env",
+  "configure_ports",
+  "build",
+  "up",
+  "down",
+  "smoke",
+  "inspect",
+];
+const dockerHistoryStatusOptions: DockerRuntimeOperationStatus[] = ["idle", "running", "success", "error"];
+const dockerHistoryFilterDefaults: DockerHistoryFilterForm = {
+  operation: "",
+  status: "",
+  ok: "",
+  search: "",
+  from: "",
+  to: "",
+  limit: "20",
+};
 
 export default function App() {
+  const [theme, setTheme] = useState<ThemeMode>(() => readStoredTheme());
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [selectedFlowId, setSelectedFlowId] = useState<string>("");
   const [loadedFlow, setLoadedFlow] = useState<LoadedFlow | null>(null);
@@ -137,9 +239,30 @@ export default function App() {
   const [sandbox, setSandbox] = useState<SandboxStatus | null>(null);
   const [activeSandboxes, setActiveSandboxes] = useState<SandboxStatus[]>([]);
   const [sandboxPort, setSandboxPort] = useState("8090");
+  const [langGraphApprovalStatus, setLangGraphApprovalStatus] = useState<LangGraphSandboxApprovalStatus | null>(null);
   const [runtimeSession, setRuntimeSession] = useState<SessionView | null>(null);
   const [transcript, setTranscript] = useState<MessageView[]>([]);
   const [runtimeEventsData, setRuntimeEventsData] = useState<EventView[]>([]);
+  const [studioStateSnapshots, setStudioStateSnapshots] = useState<StudioStateSnapshot[]>([]);
+  const [selectedStudioEventSeq, setSelectedStudioEventSeq] = useState<number | null>(null);
+  const [studioTimelineNodeFilter, setStudioTimelineNodeFilter] = useState("");
+  const [studioRunCausalAnalysis, setStudioRunCausalAnalysis] = useState<StudioRunCausalAnalysis | null>(null);
+  const [studioRuns, setStudioRuns] = useState<StudioRunSummary[]>([]);
+  const [selectedStudioRunId, setSelectedStudioRunId] = useState("");
+  const [studioRunSearch, setStudioRunSearch] = useState("");
+  const [studioRunNodeFilter, setStudioRunNodeFilter] = useState("");
+  const [studioRunStatusFilter, setStudioRunStatusFilter] = useState("");
+  const [studioRunPhaseFilter, setStudioRunPhaseFilter] = useState("");
+  const [studioRunHasErrorsOnly, setStudioRunHasErrorsOnly] = useState(false);
+  const [studioRunCompletionFilter, setStudioRunCompletionFilter] = useState<"" | "complete" | "incomplete">("");
+  const [studioRunMinDurationMsFilter, setStudioRunMinDurationMsFilter] = useState("");
+  const [studioRunMaxDurationMsFilter, setStudioRunMaxDurationMsFilter] = useState("");
+  const [studioRunCompareRunId, setStudioRunCompareRunId] = useState("");
+  const [studioRunComparison, setStudioRunComparison] = useState<StudioRunComparison | null>(null);
+  const [studioScenarios, setStudioScenarios] = useState<StudioScenario[]>([]);
+  const [studioSelectedScenarioId, setStudioSelectedScenarioId] = useState("");
+  const [studioScenarioLabel, setStudioScenarioLabel] = useState("");
+  const [studioScenarioTags, setStudioScenarioTags] = useState("");
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
   const [flowValidation, setFlowValidation] = useState<ValidationResult | null>(null);
@@ -148,6 +271,19 @@ export default function App() {
   const [artifactListing, setArtifactListing] = useState<GeneratedArtifactListing | null>(null);
   const [artifactContent, setArtifactContent] = useState<GeneratedArtifactFileContent | null>(null);
   const [selectedArtifactPath, setSelectedArtifactPath] = useState("");
+  const [dockerRuntimeStatusData, setDockerRuntimeStatusData] = useState<DockerRuntimeStatus | null>(null);
+  const [dockerRuntimeOperation, setDockerRuntimeOperation] = useState<DockerRuntimeOperationResult | null>(null);
+  const [dockerRuntimeBusy, setDockerRuntimeBusy] = useState<DockerRuntimeOperation | "refresh" | null>(null);
+  const [dockerRuntimeUrl, setDockerRuntimeUrl] = useState("http://127.0.0.1:8080");
+  const [dockerRuntimeHistoryData, setDockerRuntimeHistoryData] = useState<DockerRuntimeHistory | null>(null);
+  const [dockerAutoRefresh, setDockerAutoRefresh] = useState(false);
+  const [dockerHistoryFilterDraft, setDockerHistoryFilterDraft] =
+    useState<DockerHistoryFilterForm>({ ...dockerHistoryFilterDefaults });
+  const [dockerHistoryFilterApplied, setDockerHistoryFilterApplied] =
+    useState<DockerHistoryFilterForm>({ ...dockerHistoryFilterDefaults });
+  const [dockerApiPort, setDockerApiPort] = useState("8080");
+  const [dockerPostgresPort, setDockerPostgresPort] = useState("5433");
+  const [dockerRedisPort, setDockerRedisPort] = useState("6380");
   const [manifestOutDir, setManifestOutDir] = useState("");
   const [selectedPromptId, setSelectedPromptId] = useState("");
   const [selectedSchemaId, setSelectedSchemaId] = useState("");
@@ -161,6 +297,10 @@ export default function App() {
     message: "Builder API aguardando ação.",
   });
   const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem(themeStorageKey, theme);
+  }, [theme]);
 
   const refreshFlows = useCallback(async (silent = false) => {
     if (!silent) {
@@ -246,12 +386,49 @@ export default function App() {
     [selectedFlowId],
   );
 
+  const refreshStudioRuns = useCallback(
+    async (flowId = selectedFlowId, query: StudioRunQuery = {}): Promise<StudioRunSummary[]> => {
+    if (!flowId) {
+      setStudioRuns([]);
+      setSelectedStudioRunId("");
+      return [];
+    }
+    const result = await listStudioRuns(flowId, query);
+    setStudioRuns(result.runs);
+    setSelectedStudioRunId((current) => (current && result.runs.some((run) => run.id === current) ? current : result.runs[0]?.id ?? ""));
+    if (studioRunCompareRunId && !result.runs.some((run) => run.id === studioRunCompareRunId)) {
+      setStudioRunCompareRunId("");
+      setStudioRunComparison(null);
+    }
+    return result.runs;
+  }, [selectedFlowId]);
+
   useEffect(() => {
     if (!selectedFlowId) {
       setLoadedFlow(null);
+      setLangGraphApprovalStatus(null);
       setArtifactListing(null);
       setArtifactContent(null);
       setSelectedArtifactPath("");
+      setDockerRuntimeStatusData(null);
+      setDockerRuntimeOperation(null);
+      setDockerRuntimeBusy(null);
+      setDockerRuntimeHistoryData(null);
+      setRuntimeSession(null);
+      setTranscript([]);
+      setRuntimeEventsData([]);
+      setStudioStateSnapshots([]);
+      setStudioRunCausalAnalysis(null);
+      setStudioRuns([]);
+      setSelectedStudioRunId("");
+      setStudioRunCompletionFilter("");
+      setStudioTimelineNodeFilter("");
+      setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
+      setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
+      setStudioScenarios([]);
+      setStudioSelectedScenarioId("");
+      setStudioScenarioLabel("");
+      setStudioScenarioTags("");
       return;
     }
     let active = true;
@@ -262,10 +439,38 @@ export default function App() {
         if (!active) {
           return;
         }
-        const [nextSandbox, listResult] = await Promise.all([sandboxStatus(loaded.flow.id), listSandboxes()]);
+        setStudioRunSearch("");
+        setStudioRunStatusFilter("");
+        setStudioRunPhaseFilter("");
+        setStudioRunNodeFilter("");
+        setStudioRunMinDurationMsFilter("");
+        setStudioRunMaxDurationMsFilter("");
+        setStudioRunHasErrorsOnly(false);
+        setStudioRunCompletionFilter("");
+        setStudioRunCompareRunId("");
+        setStudioRunComparison(null);
+        const scenarios = loadStudioScenarios(loaded.flow.id);
+        setStudioScenarios(scenarios);
+        const selectedScenario = scenarios.find((scenario) => scenario.isPinned) ?? scenarios[0] ?? null;
+        setStudioSelectedScenarioId(selectedScenario?.id ?? "");
+        if (selectedScenario) {
+          setStudioScenarioLabel(selectedScenario.label);
+          setStudioScenarioTags(selectedScenario.tags.join(", "));
+          setUserMessage(selectedScenario.input);
+        } else {
+          setStudioScenarioLabel("");
+          setStudioScenarioTags("");
+        }
+        const [nextSandbox, listResult, runList, approvalStatus] = await Promise.all([
+          sandboxStatus(loaded.flow.id),
+          listSandboxes(),
+          listStudioRuns(loaded.flow.id),
+          readLangGraphSandboxApprovalStatus(loaded.flow.id),
+        ]);
         if (!active) {
           return;
         }
+        setLangGraphApprovalStatus(approvalStatus);
         setLoadedFlow(loaded);
         setDraftFlow(loaded.flow);
         setIsDirty(false);
@@ -281,9 +486,19 @@ export default function App() {
         setArtifactListing(null);
         setArtifactContent(null);
         setSelectedArtifactPath("");
+        setDockerRuntimeStatusData(null);
+        setDockerRuntimeOperation(null);
+        setDockerRuntimeBusy(null);
+        setDockerRuntimeHistoryData(null);
+        setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
+        setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
         setRuntimeSession(null);
         setTranscript([]);
         setRuntimeEventsData([]);
+        setStudioStateSnapshots([]);
+        setStudioRunCausalAnalysis(null);
+        setStudioRuns(runList.runs);
+        setSelectedStudioRunId(runList.runs[0]?.id ?? "");
         setSandbox(nextSandbox);
         setActiveSandboxes(listResult.sandboxes);
         setStatus({ kind: "ok", message: `${loaded.flow.name} carregado.` });
@@ -300,6 +515,33 @@ export default function App() {
         setArtifactListing(null);
         setArtifactContent(null);
         setSelectedArtifactPath("");
+        setDockerRuntimeStatusData(null);
+        setDockerRuntimeOperation(null);
+        setDockerRuntimeBusy(null);
+        setDockerRuntimeHistoryData(null);
+        setStudioStateSnapshots([]);
+        setStudioRunCausalAnalysis(null);
+        setStudioRuns([]);
+        setSelectedStudioRunId("");
+        setStudioRunSearch("");
+        setStudioRunStatusFilter("");
+        setStudioRunPhaseFilter("");
+        setStudioRunNodeFilter("");
+        setStudioRunMinDurationMsFilter("");
+        setStudioRunMaxDurationMsFilter("");
+        setStudioRunHasErrorsOnly(false);
+        setStudioRunCompletionFilter("");
+        setStudioRunCompareRunId("");
+        setStudioRunComparison(null);
+        setStudioTimelineNodeFilter("");
+        setStudioScenarios([]);
+        setStudioSelectedScenarioId("");
+        setStudioScenarioLabel("");
+        setStudioScenarioTags("");
+        setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
+        setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
+        setUserMessage("");
+        setLangGraphApprovalStatus(null);
         setStatus({ kind: "error", message: errorMessage(error) });
       }
     }
@@ -318,6 +560,83 @@ export default function App() {
     }, 2500);
     return () => window.clearInterval(timer);
   }, [inspectorTab, refreshSandboxState, sandbox?.running, selectedFlowId]);
+
+  useEffect(() => {
+    if (
+      !dockerAutoRefresh ||
+      inspectorTab !== "artifact" ||
+      !artifactListing ||
+      !artifactLooksLikeDockerRuntime(artifactListing) ||
+      dockerRuntimeBusy !== null
+    ) {
+      return;
+    }
+    let active = true;
+    async function pollDockerRuntime() {
+      try {
+        const result = await dockerRuntimeInspect(artifactListing!.outDir, dockerRuntimeUrl);
+        if (!active) {
+          return;
+        }
+        setDockerRuntimeStatusData(result);
+        setDockerRuntimeOperation(result);
+        setDockerRuntimeUrl(result.runtimeUrl);
+        syncDockerPortFields(result);
+        await refreshDockerHistoryData(artifactListing!.outDir, result.runtimeUrl);
+      } catch {
+        // Auto-refresh is best-effort; explicit actions still surface errors in the status bar.
+      }
+    }
+    const timer = window.setInterval(() => {
+      void pollDockerRuntime();
+    }, 7000);
+    void pollDockerRuntime();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+    }, [artifactListing, dockerAutoRefresh, dockerRuntimeBusy, dockerRuntimeUrl, dockerHistoryFilterApplied, inspectorTab]);
+
+  useEffect(() => {
+    if (
+      inspectorTab !== "artifact" ||
+      dockerRuntimeBusy !== "build" ||
+      !artifactListing ||
+      !artifactLooksLikeDockerRuntime(artifactListing)
+    ) {
+      return;
+    }
+    let active = true;
+    async function pollBuildProgress() {
+      try {
+        const result = await dockerRuntimeStatus(artifactListing!.outDir, dockerRuntimeUrl);
+        if (!active) {
+          return;
+        }
+        setDockerRuntimeStatusData(result);
+        setDockerRuntimeUrl(result.runtimeUrl);
+        syncDockerPortFields(result);
+        if (result.lastOperation === "build" || result.progress?.length) {
+          setDockerRuntimeOperation({
+            ...result,
+            operation: "build",
+            ok: result.lastStatus === "success",
+            message: result.lastStatus === "running" ? "Build Docker final em andamento." : dockerRuntimeStatusLabel(result, "build"),
+          });
+        }
+      } catch {
+        // The action request owns the visible error; polling only refreshes progress opportunistically.
+      }
+    }
+    const timer = window.setInterval(() => {
+      void pollBuildProgress();
+    }, 1200);
+    void pollBuildProgress();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [artifactListing, dockerRuntimeBusy, dockerRuntimeUrl, inspectorTab]);
 
   useEffect(() => {
     if (!selectedFlowId || !selectedPromptId) {
@@ -371,9 +690,61 @@ export default function App() {
     };
   }, [selectedFlowId, selectedSchemaId]);
 
+  const studioTimelineEvents = useMemo(() => {
+    if (!studioTimelineNodeFilter) {
+      return runtimeEventsData;
+    }
+    return runtimeEventsData.filter((event) => event.node === studioTimelineNodeFilter);
+  }, [runtimeEventsData, studioTimelineNodeFilter]);
+
+  useEffect(() => {
+    if (!studioTimelineEvents.length) {
+      setSelectedStudioEventSeq(null);
+      return;
+    }
+    if (selectedStudioEventSeq !== null && studioTimelineEvents.some((event) => event.seq === selectedStudioEventSeq)) {
+      return;
+    }
+    setSelectedStudioEventSeq(studioTimelineEvents.at(-1)?.seq ?? null);
+  }, [runtimeEventsData, selectedStudioEventSeq, studioTimelineEvents]);
+
+  const selectedStudioEvent = useMemo(() => {
+    if (!studioTimelineEvents.length) {
+      return null;
+    }
+    if (selectedStudioEventSeq === null) {
+      return studioTimelineEvents.at(-1) ?? null;
+    }
+    return studioTimelineEvents.find((event) => event.seq === selectedStudioEventSeq) ?? studioTimelineEvents.at(-1) ?? null;
+  }, [runtimeEventsData, selectedStudioEventSeq, studioTimelineEvents]);
+
+  const studioRunCausalContext = useMemo(
+    () => studioRunCausalAnalysis ?? buildStudioRunCausalAnalysis(draftFlow, runtimeEventsData),
+    [draftFlow, runtimeEventsData, studioRunCausalAnalysis],
+  );
+
+  const selectedStateSnapshot = useMemo(() => {
+    if (!studioStateSnapshots.length || !selectedStudioEvent) {
+      return null;
+    }
+    return studioStateSnapshots.find((snapshot) => snapshot.seq === selectedStudioEvent.seq) ?? studioStateSnapshots.at(-1) ?? null;
+  }, [selectedStudioEvent, studioStateSnapshots]);
+
+  const activeStudioNodeId = selectedStudioEvent?.node ?? runtimeEventsData.at(-1)?.node ?? "";
+  const canGenerateApprovedRuntime = langGraphApprovalStatus?.status === "approved";
+  const langGraphApprovalLabel = langGraphApprovalStatusLabel(langGraphApprovalStatus);
+  const langGraphApprovalClass = langGraphApprovalStatusClass(langGraphApprovalStatus);
+
   const graph = useMemo(
-    () => toReactFlowGraph(draftFlow ?? undefined, selectedNodeId, selectedEdgeId),
-    [draftFlow, selectedNodeId, selectedEdgeId],
+    () => toReactFlowGraph(
+      draftFlow ?? undefined,
+      selectedNodeId,
+      selectedEdgeId,
+      runtimeEventsData,
+      activeStudioNodeId,
+      studioRunCausalContext,
+    ),
+    [activeStudioNodeId, draftFlow, runtimeEventsData, selectedEdgeId, selectedNodeId, studioRunCausalContext],
   );
 
   const selectedNode = useMemo(() => {
@@ -399,11 +770,22 @@ export default function App() {
     return draftFlow.edges[selectedEdgeIndex] ?? null;
   }, [draftFlow, selectedEdgeIndex]);
 
-  const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
-    setSelectedNodeId(node.id);
-    setSelectedEdgeId("");
-    setInspectorTab("properties");
-  }, []);
+  const onNodeClick: NodeMouseHandler = useCallback(
+    (_event, node) => {
+      setSelectedNodeId(node.id);
+      setSelectedEdgeId("");
+      if (inspectorTab === "sandbox") {
+        setStudioTimelineNodeFilter(node.id);
+        const latestNodeEvent = runtimeEventsData.filter((event) => event.node === node.id).at(-1);
+        if (latestNodeEvent) {
+          setSelectedStudioEventSeq(latestNodeEvent.seq);
+        }
+        return;
+      }
+      setInspectorTab("properties");
+    },
+    [inspectorTab, runtimeEventsData],
+  );
 
   const onEdgeClick: EdgeMouseHandler = useCallback((_event, edge) => {
     setSelectedNodeId("");
@@ -1025,9 +1407,97 @@ export default function App() {
     }
   }
 
+  const dockerHistoryFilterHasChanges = useMemo(() => {
+    return (
+      dockerHistoryFilterDraft.operation !== dockerHistoryFilterApplied.operation ||
+      dockerHistoryFilterDraft.status !== dockerHistoryFilterApplied.status ||
+      dockerHistoryFilterDraft.ok !== dockerHistoryFilterApplied.ok ||
+      dockerHistoryFilterDraft.search !== dockerHistoryFilterApplied.search ||
+      dockerHistoryFilterDraft.from !== dockerHistoryFilterApplied.from ||
+      dockerHistoryFilterDraft.to !== dockerHistoryFilterApplied.to ||
+      dockerHistoryFilterDraft.limit !== dockerHistoryFilterApplied.limit
+    );
+  }, [dockerHistoryFilterDraft, dockerHistoryFilterApplied]);
+
+function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: number; query: Omit<DockerRuntimeHistoryQuery, "limit"> } {
+    const parsedLimit = parsePositiveInteger(filters.limit);
+    if (filters.limit.trim() && parsedLimit === undefined) {
+      throw new Error("limit deve ser inteiro positivo.");
+    }
+    const from = toIsoDateTime(filters.from);
+    const to = toIsoDateTime(filters.to);
+    if (from && to && new Date(from) > new Date(to)) {
+      throw new Error("from deve ser anterior ou igual a to.");
+    }
+    return {
+      limit: parsedLimit ?? 20,
+      query: {
+        operation: filters.operation || undefined,
+        status: filters.status || undefined,
+        ok: filters.ok === "true" ? true : filters.ok === "false" ? false : undefined,
+        search: filters.search.trim() || undefined,
+        from,
+        to,
+      },
+    };
+  }
+
+  function clearDockerHistoryFilter() {
+    setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
+    setDockerHistoryFilterApplied({ ...dockerHistoryFilterDefaults });
+    if (!artifactListing || !artifactLooksLikeDockerRuntime(artifactListing)) {
+      setDockerRuntimeHistoryData(null);
+      return;
+    }
+    void refreshDockerHistoryData(artifactListing.outDir, dockerRuntimeUrl);
+    setStatus({ kind: "ok", message: "Filtro de histórico Docker limpo." });
+  }
+
+  async function applyDockerHistoryFilter() {
+    try {
+      buildDockerHistoryQuery(dockerHistoryFilterDraft);
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+      return;
+    }
+    setDockerHistoryFilterApplied(dockerHistoryFilterDraft);
+    if (!artifactListing || !artifactLooksLikeDockerRuntime(artifactListing)) {
+      setStatus({ kind: "ok", message: "Filtro de histórico Docker aplicado." });
+      return;
+    }
+    await refreshDockerHistoryData(artifactListing.outDir, dockerRuntimeUrl);
+    setStatus({ kind: "ok", message: "Filtro de histórico Docker aplicado." });
+  }
+
+  async function refreshDockerHistoryData(outDir: string, runtimeUrl: string) {
+    try {
+      const { limit, query } = buildDockerHistoryQuery(dockerHistoryFilterApplied);
+      const history = await dockerRuntimeHistory(outDir, runtimeUrl, limit, query);
+      setDockerRuntimeHistoryData(history);
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function refreshGeneratedArtifact(outDir: string, preferredPath?: string): Promise<GeneratedArtifactListing> {
     const listing = await listGeneratedArtifact(outDir);
     setArtifactListing(listing);
+    setDockerRuntimeOperation(null);
+    if (artifactLooksLikeDockerRuntime(listing)) {
+      try {
+        const status = await dockerRuntimeStatus(listing.outDir, dockerRuntimeUrl);
+        setDockerRuntimeStatusData(status);
+        setDockerRuntimeUrl(status.runtimeUrl);
+        syncDockerPortFields(status);
+        await refreshDockerHistoryData(listing.outDir, status.runtimeUrl);
+      } catch {
+        setDockerRuntimeStatusData(null);
+        setDockerRuntimeHistoryData(null);
+      }
+    } else {
+      setDockerRuntimeStatusData(null);
+      setDockerRuntimeHistoryData(null);
+    }
     const nextPath =
       (preferredPath && listing.files.some((file) => file.path === preferredPath) ? preferredPath : "") ||
       (listing.files.some((file) => file.path === "README.md") ? "README.md" : "") ||
@@ -1056,6 +1526,84 @@ export default function App() {
     } catch (error) {
       setArtifactContent(null);
       setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleRefreshDockerRuntime() {
+    if (!artifactListing) {
+      return;
+    }
+    setDockerRuntimeBusy("refresh");
+    setStatus({ kind: "busy", message: `Atualizando status Docker de ${artifactListing.outDir}.` });
+    try {
+      const result = await dockerRuntimeStatus(artifactListing.outDir, dockerRuntimeUrl);
+      setDockerRuntimeStatusData(result);
+      setDockerRuntimeUrl(result.runtimeUrl);
+      syncDockerPortFields(result);
+      await refreshDockerHistoryData(artifactListing.outDir, result.runtimeUrl);
+      setStatus({ kind: "ok", message: `Runtime Docker pronto para ${result.outDir}.` });
+    } catch (error) {
+      setDockerRuntimeStatusData(null);
+      setStatus({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setDockerRuntimeBusy(null);
+    }
+  }
+
+  async function handleDockerRuntimeAction(operation: DockerRuntimeOperation) {
+    if (!artifactListing) {
+      return;
+    }
+    const label = dockerOperationLabel(operation);
+    setDockerRuntimeBusy(operation);
+    setStatus({ kind: "busy", message: `${label} em ${artifactListing.outDir}.` });
+    try {
+      const result = await runDockerRuntimeOperation(operation, artifactListing.outDir, dockerRuntimeUrl);
+      setDockerRuntimeOperation(result);
+      setDockerRuntimeStatusData(result);
+      setDockerRuntimeUrl(result.runtimeUrl);
+      syncDockerPortFields(result);
+      await refreshDockerHistoryData(artifactListing.outDir, result.runtimeUrl);
+      setStatus({ kind: result.ok ? "ok" : "error", message: result.message });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setDockerRuntimeBusy(null);
+    }
+  }
+
+  function syncDockerPortFields(result: DockerRuntimeStatus) {
+    setDockerApiPort(String(result.ports.api?.hostPort ?? 8080));
+    setDockerPostgresPort(String(result.ports.postgres?.hostPort ?? 5433));
+    setDockerRedisPort(String(result.ports.redis?.hostPort ?? 6380));
+  }
+
+  async function handleConfigureDockerPorts() {
+    if (!artifactListing) {
+      return;
+    }
+    setDockerRuntimeBusy("configure_ports");
+    setStatus({ kind: "busy", message: `Atualizando portas Docker de ${artifactListing.outDir}.` });
+    try {
+      const result = await dockerRuntimeConfigurePorts(
+        artifactListing.outDir,
+        {
+          api: parsePortInput(dockerApiPort, "API"),
+          postgres: parsePortInput(dockerPostgresPort, "Postgres"),
+          redis: parsePortInput(dockerRedisPort, "Redis"),
+        },
+        dockerRuntimeUrl,
+      );
+      setDockerRuntimeOperation(result);
+      setDockerRuntimeStatusData(result);
+      setDockerRuntimeUrl(result.runtimeUrl);
+      syncDockerPortFields(result);
+      await refreshDockerHistoryData(artifactListing.outDir, result.runtimeUrl);
+      setStatus({ kind: "ok", message: result.message });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setDockerRuntimeBusy(null);
     }
   }
 
@@ -1089,11 +1637,57 @@ export default function App() {
     }
   }
 
-  async function handleGenerate() {
+  async function refreshLangGraphApprovalStatus(flowId: string) {
+    try {
+      const status = await readLangGraphSandboxApprovalStatus(flowId);
+      setLangGraphApprovalStatus(status);
+      return;
+    } catch (error) {
+      const loaded = draftFlow ?? loadedFlow?.flow;
+      const flowIdFromCurrent = loaded?.id ?? flowId;
+      setLangGraphApprovalStatus({
+        status: "invalid",
+        flowId: flowIdFromCurrent,
+        flowVersion: loaded?.version ?? "-",
+        flowHash: "",
+        approvalPath: "",
+        reason: errorMessage(error),
+        details: error,
+      });
+    }
+  }
+
+  async function handleGenerateApprovedRuntime() {
     if (!selectedFlowId) {
       return;
     }
-    setStatus({ kind: "busy", message: `Gerando runtime de ${selectedFlowId}.` });
+    if (isDirty || promptDirty || schemaDirty) {
+      setStatus({
+        kind: "error",
+        message: "Salve as alterações, gere/teste o pacote LangGraph e aprove o sandbox antes de criar a API Docker.",
+      });
+      return;
+    }
+    setStatus({ kind: "busy", message: `Gerando API Docker aprovada de ${selectedFlowId}.` });
+    try {
+      const result = await generateApprovedRuntime(selectedFlowId);
+      await refreshLangGraphApprovalStatus(selectedFlowId);
+      const listing = await refreshGeneratedArtifact(result.outDir, "README.md");
+      setInspectorTab("artifact");
+      setStatus({
+        kind: "ok",
+        message: `${approvedRuntimeMessage(result)} ${listing.files.length} arquivo(s) prontos.`,
+      });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleGenerateLangGraphSandbox() {
+    if (!selectedFlowId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Gerando pacote LangGraph de ${selectedFlowId}.` });
     try {
       if (isDirty && draftFlow) {
         const saved = await saveFlow(selectedFlowId, draftFlow);
@@ -1103,10 +1697,42 @@ export default function App() {
         setFlowValidation(null);
       }
       await saveDirtyAssets();
-      const result = await generateFlow(selectedFlowId);
-      const listing = await refreshGeneratedArtifact(result.outDir, "README.md");
+      const result = await generateLangGraphSandbox(selectedFlowId);
+      await refreshLangGraphApprovalStatus(selectedFlowId);
+      const listing = await refreshGeneratedArtifact(result.outDir, "langgraph.json");
       setInspectorTab("artifact");
-      setStatus({ kind: "ok", message: `${generateMessage(result)} ${listing.files.length} arquivo(s) prontos.` });
+      setStatus({ kind: "ok", message: `${langGraphSandboxMessage(result)} ${listing.files.length} arquivo(s) prontos.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleApproveLangGraphSandbox() {
+    if (!selectedFlowId) {
+      return;
+    }
+    if (isDirty || promptDirty || schemaDirty) {
+      setStatus({
+        kind: "error",
+        message: "Salve as alterações, gere/teste o pacote LangGraph e aprove somente a versão validada no LangSmith.",
+      });
+      return;
+    }
+    setStatus({ kind: "busy", message: `Aprovando sandbox LangGraph de ${selectedFlowId}.` });
+    try {
+      const approval = await approveLangGraphSandbox(selectedFlowId);
+      setLangGraphApprovalStatus({
+        status: "approved",
+        flowId: approval.flowId,
+        flowVersion: approval.flowVersion,
+        flowHash: approval.flowHash,
+        sandboxOutDir: approval.sandboxOutDir,
+        approvedFor: approval.approvedFor,
+        approvalPath: approval.approvalPath,
+        approvedAt: approval.approvedAt,
+        reason: "Aprovação registrada para geração da API Docker.",
+      });
+      setStatus({ kind: "ok", message: approvalMessage(approval) });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
@@ -1160,6 +1786,8 @@ export default function App() {
       setRuntimeSession(null);
       setTranscript([]);
       setRuntimeEventsData([]);
+      setStudioStateSnapshots([]);
+      setStudioRunCausalAnalysis(null);
       setInspectorTab("sandbox");
       setStatus({ kind: "ok", message: `Sandbox ativo em ${result.url}.` });
     } catch (error) {
@@ -1180,6 +1808,8 @@ export default function App() {
       setRuntimeSession(null);
       setTranscript([]);
       setRuntimeEventsData([]);
+      setStudioStateSnapshots([]);
+      setStudioRunCausalAnalysis(null);
       setStatus({ kind: "ok", message: "Sandbox parado." });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -1201,6 +1831,333 @@ export default function App() {
     ]);
     setTranscript(nextTranscript);
     setRuntimeEventsData(nextEvents);
+    setStudioRunCausalAnalysis(null);
+    setSelectedStudioEventSeq(nextEvents.at(-1)?.seq ?? null);
+    try {
+      const saved = await saveStudioRun(draftFlow.id, {
+        runtimeUrl: sandbox.url,
+        resourceName: draftFlow.api.resourceName,
+        session,
+        transcript: nextTranscript,
+        events: nextEvents,
+        logs: sandbox.logs ?? [],
+      });
+        setStudioStateSnapshots(saved.stateSnapshots);
+      await refreshStudioRuns(draftFlow.id, buildStudioRunQuery());
+      setSelectedStudioRunId(saved.id);
+    } catch {
+      // Runtime execution should stay usable even if local trace persistence fails.
+    }
+  }
+
+  function buildStudioRunQuery(): StudioRunQuery {
+    const minDurationMs = parseStudioRunDurationInput(studioRunMinDurationMsFilter);
+    const maxDurationMs = parseStudioRunDurationInput(studioRunMaxDurationMsFilter);
+    const isComplete =
+      studioRunCompletionFilter === "complete"
+        ? true
+        : studioRunCompletionFilter === "incomplete"
+          ? false
+          : undefined;
+    return {
+      q: studioRunSearch.trim() || undefined,
+      node: studioRunNodeFilter.trim() || undefined,
+      status: studioRunStatusFilter || undefined,
+      phase: studioRunPhaseFilter || undefined,
+      hasErrors: studioRunHasErrorsOnly ? true : undefined,
+      isComplete,
+      minDurationMs,
+      maxDurationMs,
+    };
+  }
+
+  async function handleRefreshStudioRuns() {
+    if (!selectedFlowId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: "Atualizando runs locais." });
+    try {
+      const query = buildStudioRunQuery();
+      const runs = await refreshStudioRuns(selectedFlowId, query);
+      setStatus({ kind: "ok", message: `${runs.length} run(s) locais carregados.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleExportStudioRun() {
+    if (!selectedFlowId || !selectedStudioRunId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: "Exportando run local." });
+    try {
+      const exported = await exportStudioRun(selectedFlowId, selectedStudioRunId);
+      downloadJsonFile(`studio-run-${selectedStudioRunId}.json`, exported);
+      setStatus({ kind: "ok", message: `Run ${selectedStudioRunId} exportado.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleCompareStudioRuns() {
+    if (!selectedFlowId || !selectedStudioRunId || !studioRunCompareRunId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: "Comparando runs locais." });
+    try {
+      const comparison = await compareStudioRuns(selectedFlowId, studioRunCompareRunId, selectedStudioRunId);
+      setStudioRunComparison(comparison);
+      setStatus({ kind: "ok", message: `Comparação: ${comparison.leftRunId} x ${comparison.rightRunId}.` });
+    } catch (error) {
+      setStudioRunComparison(null);
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  function handleExportStudioRunComparison() {
+    if (!studioRunComparison) {
+      return;
+    }
+    setStatus({ kind: "busy", message: "Exportando comparação de runs." });
+    const fileName = `studio-run-comparison-${studioRunComparison.leftRunId}-vs-${studioRunComparison.rightRunId}.json`;
+    downloadJsonFile(fileName, studioRunComparison);
+    setStatus({ kind: "ok", message: `Comparação ${studioRunComparison.leftRunId} x ${studioRunComparison.rightRunId} exportada.` });
+  }
+
+  function handleClearStudioRunComparison() {
+    setStudioRunComparison(null);
+    setStudioRunCompareRunId("");
+  }
+
+  async function handleLoadStudioRun(runId: string) {
+    if (!selectedFlowId) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Carregando run ${runId}.` });
+    try {
+      const run = await loadStudioRun(selectedFlowId, runId);
+      setRuntimeSession(run.session);
+      setTranscript(run.transcript);
+      setRuntimeEventsData(run.events);
+      setStudioStateSnapshots(run.stateSnapshots);
+      setStudioRunCausalAnalysis(run.causalAnalysis);
+      setStudioTimelineNodeFilter("");
+      setSelectedStudioEventSeq(run.events.at(-1)?.seq ?? null);
+      setSelectedStudioRunId(run.id);
+      if (run.runtimeUrl) {
+        setSandbox((current) => current ?? {
+          flowId: run.flowId,
+          running: false,
+          port: null,
+          pid: null,
+          url: run.runtimeUrl,
+          docsUrl: `${run.runtimeUrl.replace(/\/$/, "")}/docs`,
+          runtimeDir: null,
+          logs: run.logs,
+        });
+      }
+      setStatus({ kind: "ok", message: `Run ${run.sessionId} carregado do histórico local.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  function resetScenarioForm() {
+    setStudioScenarioLabel("");
+    setStudioScenarioTags("");
+  }
+
+  function persistStudioScenarios(flowId: string, scenarios: StudioScenario[]): void {
+    window.localStorage.setItem(scenarioStorageKey(flowId), JSON.stringify(scenarios));
+    setStudioScenarios(scenarios);
+  }
+
+  function syncStudioScenarioSelection(scenarios: StudioScenario[], selectedId: string): StudioScenario | null {
+    return scenarios.find((scenario) => scenario.id === selectedId) ?? scenarios[0] ?? null;
+  }
+
+  async function ensureSandboxRunningForScenario(): Promise<SandboxStatus> {
+    if (!selectedFlowId) {
+      throw new Error("Selecione um fluxo para executar cenário.");
+    }
+    if (sandbox?.running && sandbox.url) {
+      return sandbox;
+    }
+    const port = parseSandboxPort(sandboxPort);
+    const started = await startSandbox(selectedFlowId, port);
+    setSandbox(started);
+    setActiveSandboxes((await listSandboxes()).sandboxes);
+    setRuntimeSession(null);
+    setTranscript([]);
+    setRuntimeEventsData([]);
+    setStudioStateSnapshots([]);
+    setStudioRunCausalAnalysis(null);
+    return started;
+  }
+
+  async function handleSaveStudioScenario() {
+    if (!selectedFlowId) {
+      return;
+    }
+    const input = userMessage.trim();
+    if (!input) {
+      setStatus({ kind: "error", message: "Informe um texto de entrada para salvar o cenário." });
+      return;
+    }
+    const label = studioScenarioLabel.trim() || `Cenário ${studioScenarios.length + 1}`;
+    const tags = splitTags(studioScenarioTags);
+    const now = new Date().toISOString();
+    const nextScenarios = [...studioScenarios];
+
+    if (studioSelectedScenarioId) {
+      const index = nextScenarios.findIndex((item) => item.id === studioSelectedScenarioId);
+      if (index === -1) {
+        setStatus({ kind: "error", message: "Cenário selecionado não encontrado." });
+        return;
+      }
+      const existing = nextScenarios[index];
+      nextScenarios[index] = {
+        ...existing,
+        label,
+        input,
+        tags,
+        updatedAt: now,
+      };
+    } else {
+      const created: StudioScenario = {
+        id: `scenario-${Date.now()}`,
+        label,
+        input,
+        tags,
+        isPinned: false,
+        createdAt: now,
+        updatedAt: now,
+        lastUsedAt: null,
+      };
+      nextScenarios.unshift(created);
+      setStudioSelectedScenarioId(created.id);
+    }
+
+    persistStudioScenarios(selectedFlowId, sortScenarios(nextScenarios));
+    setStudioScenarioLabel(label);
+    setStudioScenarioTags(tags.join(", "));
+    setStatus({ kind: "ok", message: "Cenário salvo." });
+  }
+
+  function handleSelectStudioScenario(scenarioId: string) {
+    const scenarios = [...studioScenarios];
+    const selected = syncStudioScenarioSelection(scenarios, scenarioId);
+    if (selected) {
+      setStudioSelectedScenarioId(selected.id);
+      setStudioScenarioLabel(selected.label);
+      setStudioScenarioTags(selected.tags.join(", "));
+      setUserMessage(selected.input);
+      setStatus({ kind: "ok", message: `Cenário "${selected.label}" selecionado.` });
+    } else {
+      setStudioSelectedScenarioId("");
+      resetScenarioForm();
+    }
+  }
+
+  function toggleStudioScenarioPin() {
+    if (!selectedFlowId || !studioSelectedScenarioId) {
+      return;
+    }
+    const pinned = studioScenarios.some((scenario) => scenario.id === studioSelectedScenarioId && scenario.isPinned);
+    const nextScenarios = studioScenarios.map((scenario) => ({
+      ...scenario,
+      isPinned: scenario.id === studioSelectedScenarioId ? !pinned : false,
+    }));
+    persistStudioScenarios(selectedFlowId, sortScenarios(nextScenarios));
+  }
+
+  function handleDeleteStudioScenario() {
+    if (!selectedFlowId || !studioSelectedScenarioId) {
+      return;
+    }
+    const nextScenarios = studioScenarios.filter((scenario) => scenario.id !== studioSelectedScenarioId);
+    const afterDelete = sortScenarios(nextScenarios);
+    const nextPinned = afterDelete.find((scenario) => scenario.isPinned)?.id ?? afterDelete[0]?.id ?? "";
+    persistStudioScenarios(selectedFlowId, afterDelete);
+    setStudioSelectedScenarioId(nextPinned);
+    const selected = syncStudioScenarioSelection(afterDelete, nextPinned);
+    if (selected) {
+      setStudioScenarioLabel(selected.label);
+      setStudioScenarioTags(selected.tags.join(", "));
+      setUserMessage(selected.input);
+      setStatus({ kind: "ok", message: "Cenário removido." });
+    } else {
+      setStudioScenarioLabel("");
+      setStudioScenarioTags("");
+      setStatus({ kind: "ok", message: "Cenário removido." });
+    }
+    if (!selected) {
+      resetScenarioForm();
+    }
+  }
+
+  async function handleRunStudioScenario() {
+    if (!selectedFlowId || !draftFlow) {
+      return;
+    }
+    const selected = syncStudioScenarioSelection(studioScenarios, studioSelectedScenarioId);
+    if (!selected) {
+      setStatus({ kind: "error", message: "Selecione um cenário para executar." });
+      return;
+    }
+    const message = selected.input.trim();
+    if (!message) {
+      setStatus({ kind: "error", message: "O cenário selecionado não tem mensagem." });
+      return;
+    }
+    setStatus({ kind: "busy", message: `Executando cenário \"${selected.label}\".` });
+    try {
+      const runningSandbox = await ensureSandboxRunningForScenario();
+      if (!runningSandbox.url) {
+        setStatus({ kind: "error", message: "URL do sandbox indisponível para execução do cenário." });
+        return;
+      }
+      const resourceName = draftFlow.api.resourceName;
+      const sandboxUrl = runningSandbox.url;
+      const created = await createRuntimeSession(sandboxUrl, resourceName);
+      if (!created.session.session_id) {
+        setStatus({ kind: "error", message: "Sessão de execução não retornou ID." });
+        return;
+      }
+      const createdSessionId = created.session.session_id;
+      const started = await startRuntimeSession(sandboxUrl, resourceName, createdSessionId);
+      if (!started.session.session_id) {
+        setStatus({ kind: "error", message: "Sessão de execução não iniciou corretamente." });
+        return;
+      }
+      setRuntimeSession(started.session);
+      setUserMessage(message);
+      setTranscript(started.messages);
+      const result = await sendRuntimeTurn(sandboxUrl, resourceName, createdSessionId, message);
+      setRuntimeSession(result.session);
+      await refreshRuntimeData(result.session);
+      await refreshSandboxState(selectedFlowId, true);
+      const now = new Date().toISOString();
+      const updated = studioScenarios.map((scenario) => ({
+        ...scenario,
+        lastUsedAt: scenario.id === selected.id ? now : scenario.lastUsedAt,
+      }));
+      persistStudioScenarios(selectedFlowId, updated);
+      setStudioSelectedScenarioId(selected.id);
+      setStatus({ kind: "ok", message: result.assistant_message.text || "Cenário executado." });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  function handleRunPinnedScenario() {
+    const pinned = studioScenarios.find((scenario) => scenario.isPinned);
+    if (!pinned) {
+      setStatus({ kind: "error", message: "Não há cenário fixado para execução rápida." });
+      return;
+    }
+    setStudioSelectedScenarioId(pinned.id);
+    void handleRunStudioScenario();
   }
 
   async function handleCreateRuntimeSession() {
@@ -1260,7 +2217,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-theme={theme}>
       <header className="topbar">
         <div className="brand-block">
           <div className="brand-mark">
@@ -1290,6 +2247,15 @@ export default function App() {
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+            title={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
+            aria-label={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
+          >
+            {theme === "dark" ? <Sun size={17} aria-hidden="true" /> : <Moon size={17} aria-hidden="true" />}
+          </button>
           <button type="button" className="icon-button" onClick={() => refreshFlows()} title="Atualizar flows">
             <RefreshCw size={17} aria-hidden="true" />
           </button>
@@ -1317,13 +2283,42 @@ export default function App() {
             <FileJson size={17} aria-hidden="true" />
             {isDirty ? "Salvar" : "Salvo"}
           </button>
-          <button type="button" className="command-button primary" onClick={handleGenerate} disabled={!selectedFlowId}>
-            <Terminal size={17} aria-hidden="true" />
-            Gerar
+          <button
+            type="button"
+            className="command-button"
+            onClick={handleGenerateLangGraphSandbox}
+            disabled={!selectedFlowId}
+            title="Gerar pacote LangGraph para LangSmith"
+          >
+            <GitBranch size={17} aria-hidden="true" />
+            LangGraph
           </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={handleApproveLangGraphSandbox}
+            disabled={!selectedFlowId}
+            title="Aprovar o sandbox testado no LangSmith"
+          >
+            <UserCheck size={17} aria-hidden="true" />
+            Aprovar
+          </button>
+          <button
+            type="button"
+            className="command-button primary"
+            onClick={handleGenerateApprovedRuntime}
+            disabled={!selectedFlowId || !canGenerateApprovedRuntime}
+            title={canGenerateApprovedRuntime ? "Gerar runtime FastAPI/Docker aprovado" : langGraphApprovalLabel}
+          >
+            <Terminal size={17} aria-hidden="true" />
+            API Docker
+          </button>
+          <span className={langGraphApprovalClass} title={langGraphApprovalStatus?.reason}>
+            {langGraphApprovalLabel}
+          </span>
           <button type="button" className="command-button" onClick={handleStartSandbox} disabled={!selectedFlowId}>
             <Send size={17} aria-hidden="true" />
-            Sandbox
+            Studio
           </button>
         </div>
       </header>
@@ -1404,6 +2399,9 @@ export default function App() {
             onPaneClick={() => {
               setSelectedNodeId("");
               setSelectedEdgeId("");
+              if (inspectorTab === "sandbox") {
+                setStudioTimelineNodeFilter("");
+              }
             }}
             onConnect={handleConnect}
             onReconnect={handleReconnect}
@@ -1468,7 +2466,7 @@ export default function App() {
               className={inspectorTab === "sandbox" ? "active" : ""}
               onClick={() => setInspectorTab("sandbox")}
             >
-              Sandbox
+              Studio
             </button>
           </div>
 
@@ -1541,9 +2539,33 @@ export default function App() {
               listing={artifactListing}
               content={artifactContent}
               selectedPath={selectedArtifactPath}
+              dockerStatus={dockerRuntimeStatusData}
+              dockerOperation={dockerRuntimeOperation}
+              dockerBusy={dockerRuntimeBusy}
+              dockerRuntimeUrl={dockerRuntimeUrl}
+              dockerApiPort={dockerApiPort}
+              dockerPostgresPort={dockerPostgresPort}
+              dockerRedisPort={dockerRedisPort}
+              dockerHistory={dockerRuntimeHistoryData}
+              dockerAutoRefresh={dockerAutoRefresh}
+              onDockerRuntimeUrlChange={setDockerRuntimeUrl}
+              onDockerApiPortChange={setDockerApiPort}
+              onDockerPostgresPortChange={setDockerPostgresPort}
+              onDockerRedisPortChange={setDockerRedisPort}
+              onDockerAutoRefreshChange={setDockerAutoRefresh}
               onSelectFile={handleSelectArtifactFile}
               onRefresh={handleRefreshArtifact}
               onDownload={handleDownloadArtifact}
+              onRefreshDocker={handleRefreshDockerRuntime}
+              onConfigureDockerPorts={handleConfigureDockerPorts}
+              onDockerAction={handleDockerRuntimeAction}
+              dockerHistoryFilterDraft={dockerHistoryFilterDraft}
+              dockerHistoryFilterHasChanges={dockerHistoryFilterHasChanges}
+              dockerHistoryOperationOptions={dockerHistoryOperationOptions}
+              dockerHistoryStatusOptions={dockerHistoryStatusOptions}
+              onDockerHistoryFilterDraftChange={setDockerHistoryFilterDraft}
+              onDockerHistoryApply={applyDockerHistoryFilter}
+              onDockerHistoryClear={clearDockerHistoryFilter}
             />
           ) : inspectorTab === "runtime" ? (
             <RuntimeManifestPanel
@@ -1565,9 +2587,56 @@ export default function App() {
               session={runtimeSession}
               transcript={transcript}
               events={runtimeEventsData}
+              timelineEvents={studioTimelineEvents}
+              timelineNodeFilter={studioTimelineNodeFilter}
+              selectedEvent={selectedStudioEvent}
+              selectedStateSnapshot={selectedStateSnapshot}
+              stateSnapshots={studioStateSnapshots}
+              studioRunCausalAnalysis={studioRunCausalContext}
+              studioRuns={studioRuns}
+              selectedRunId={selectedStudioRunId}
+              selectedCompareRunId={studioRunCompareRunId}
               userMessage={userMessage}
+              studioRunSearch={studioRunSearch}
+              studioRunNodeFilter={studioRunNodeFilter}
+              studioRunStatusFilter={studioRunStatusFilter}
+              studioRunPhaseFilter={studioRunPhaseFilter}
+              studioRunMinDurationMsFilter={studioRunMinDurationMsFilter}
+              studioRunMaxDurationMsFilter={studioRunMaxDurationMsFilter}
+              studioRunHasErrorsOnly={studioRunHasErrorsOnly}
+              studioRunCompletionFilter={studioRunCompletionFilter}
+              studioRunComparison={studioRunComparison}
+              studioScenarios={studioScenarios}
+              studioSelectedScenarioId={studioSelectedScenarioId}
+              studioScenarioLabel={studioScenarioLabel}
+              studioScenarioTags={studioScenarioTags}
               setSandboxPort={setSandboxPort}
               setUserMessage={setUserMessage}
+              onStudioRunSearchChange={setStudioRunSearch}
+              onStudioRunNodeFilterChange={setStudioRunNodeFilter}
+              onStudioRunStatusFilterChange={setStudioRunStatusFilter}
+              onStudioRunPhaseFilterChange={setStudioRunPhaseFilter}
+              onStudioRunMinDurationMsFilterChange={setStudioRunMinDurationMsFilter}
+              onStudioRunMaxDurationMsFilterChange={setStudioRunMaxDurationMsFilter}
+              onStudioRunHasErrorsOnlyChange={setStudioRunHasErrorsOnly}
+              onStudioRunCompletionFilterChange={setStudioRunCompletionFilter}
+              onStudioRunCompareRunIdChange={setStudioRunCompareRunId}
+              onExportComparison={handleExportStudioRunComparison}
+              onClearComparison={handleClearStudioRunComparison}
+              onSelectEvent={setSelectedStudioEventSeq}
+              onTimelineNodeFilterChange={setStudioTimelineNodeFilter}
+              onRefreshRuns={handleRefreshStudioRuns}
+              onLoadRun={handleLoadStudioRun}
+              onExportRun={handleExportStudioRun}
+              onCompareRuns={handleCompareStudioRuns}
+              onStudioScenarioSave={handleSaveStudioScenario}
+              onStudioScenarioSelect={handleSelectStudioScenario}
+              onStudioScenarioRun={handleRunStudioScenario}
+              onStudioPinnedScenarioRun={handleRunPinnedScenario}
+              onStudioScenarioPin={toggleStudioScenarioPin}
+              onStudioScenarioDelete={handleDeleteStudioScenario}
+              onStudioScenarioLabelChange={setStudioScenarioLabel}
+              onStudioScenarioTagsChange={setStudioScenarioTags}
               onStartSandbox={handleStartSandbox}
               onStopSandbox={handleStopSandbox}
               onRefreshSandbox={handleRefreshSandbox}
@@ -1634,6 +2703,9 @@ function NodeInspector({
   const isDatabaseSaveNode = node.type === "database_save";
   const isFileExtractNode = node.type === "file_extract";
   const isRagNode = node.type === "rag_retrieval";
+  const isApprovalNode = node.type === "approval_gate";
+  const isScoringNode = node.type === "scoring";
+  const isAnalyticsNode = node.type === "analytics";
   return (
     <div className="inspector-body">
       <div className="edit-group">
@@ -1756,10 +2828,90 @@ function NodeInspector({
             </>
           ) : null}
           {isCodeNode ? (
-            <label>
-              <span>Handler</span>
-              <input value={node.handler ?? ""} onChange={(event) => onNodeFieldChange(node.id, "handler", event.target.value)} />
-            </label>
+            <>
+              <label>
+                <span>Handler legado</span>
+                <input value={node.handler ?? ""} onChange={(event) => onNodeFieldChange(node.id, "handler", event.target.value)} />
+              </label>
+              <label>
+                <span>Linguagem</span>
+                <select
+                  value={node.codeLanguage ?? "python"}
+                  onChange={(event) => onNodeFieldChange(node.id, "codeLanguage", event.target.value)}
+                >
+                  <option value="python">Python</option>
+                  <option value="typescript">TypeScript</option>
+                  <option value="javascript">JavaScript</option>
+                  <option value="external">Externa</option>
+                </select>
+              </label>
+              <label>
+                <span>Modo de execução</span>
+                <select
+                  value={node.codeExecution ?? "native"}
+                  onChange={(event) => onNodeFieldChange(node.id, "codeExecution", event.target.value)}
+                >
+                  <option value="native">Runtime nativo</option>
+                  <option value="inline">Inline</option>
+                  <option value="file">Arquivo</option>
+                  <option value="http">HTTP tool</option>
+                  <option value="mcp">MCP tool</option>
+                  <option value="sidecar">Sidecar</option>
+                  <option value="runtime_adapter">Adapter futuro</option>
+                </select>
+              </label>
+              <label>
+                <span>Code path</span>
+                <input
+                  value={node.codePath ?? ""}
+                  placeholder="code/generate_questions.py"
+                  onChange={(event) => onNodeFieldChange(node.id, "codePath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Entry point</span>
+                <input
+                  value={node.codeEntry ?? ""}
+                  placeholder="run"
+                  onChange={(event) => onNodeFieldChange(node.id, "codeEntry", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Input path</span>
+                <input
+                  value={node.inputPath ?? ""}
+                  placeholder="state.content"
+                  onChange={(event) => onNodeFieldChange(node.id, "inputPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Result path</span>
+                <input
+                  value={node.resultPath ?? ""}
+                  placeholder={`custom.${node.id}`}
+                  onChange={(event) => onNodeFieldChange(node.id, "resultPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Dependências</span>
+                <textarea
+                  value={node.codeDependencies ?? ""}
+                  placeholder={`requests==2.32.0\nbeautifulsoup4`}
+                  onChange={(event) => onNodeFieldChange(node.id, "codeDependencies", event.target.value)}
+                  rows={3}
+                />
+              </label>
+              <label>
+                <span>Código inline</span>
+                <textarea
+                  value={node.codeInline ?? ""}
+                  placeholder={`def run(input, context):\n    return {"ok": True}`}
+                  onChange={(event) => onNodeFieldChange(node.id, "codeInline", event.target.value)}
+                  rows={8}
+                  spellCheck={false}
+                />
+              </label>
+            </>
           ) : null}
           {isHttpNode ? (
             <>
@@ -1918,6 +3070,86 @@ function NodeInspector({
               </label>
             </>
           ) : null}
+          {isApprovalNode ? (
+            <>
+              <label>
+                <span>Decision path</span>
+                <input
+                  value={node.decisionPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "decisionPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Approval value</span>
+                <input
+                  value={node.approvalValue ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "approvalValue", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Rejection value</span>
+                <input
+                  value={node.rejectionValue ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "rejectionValue", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Result path</span>
+                <input
+                  value={node.resultPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "resultPath", event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
+          {isScoringNode ? (
+            <>
+              <label>
+                <span>Input path</span>
+                <input value={node.inputPath ?? ""} onChange={(event) => onNodeFieldChange(node.id, "inputPath", event.target.value)} />
+              </label>
+              <label>
+                <span>Result path</span>
+                <input
+                  value={node.resultPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "resultPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Threshold</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={node.threshold ?? ""}
+                  onChange={(event) => onNodeNumberFieldChange(node.id, "threshold", event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
+          {isAnalyticsNode ? (
+            <>
+              <label>
+                <span>Metric name</span>
+                <input value={node.metricName ?? ""} onChange={(event) => onNodeFieldChange(node.id, "metricName", event.target.value)} />
+              </label>
+              <label>
+                <span>Payload path</span>
+                <input
+                  value={node.payloadPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "payloadPath", event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Result path</span>
+                <input
+                  value={node.resultPath ?? ""}
+                  onChange={(event) => onNodeFieldChange(node.id, "resultPath", event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
           <label>
             <span>Stage</span>
             <select value={node.stage ?? ""} onChange={(event) => onNodeFieldChange(node.id, "stage", event.target.value)}>
@@ -2050,6 +3282,8 @@ function AssetsPanel({
 }) {
   const [newPromptId, setNewPromptId] = useState("");
   const [newSchemaId, setNewSchemaId] = useState("");
+  const selectedPrompt = flow?.prompts.find((prompt) => prompt.id === selectedPromptId) ?? null;
+  const selectedSchema = flow?.schemas.find((schema) => schema.id === selectedSchemaId) ?? null;
   if (!flow) {
     return (
       <div className="empty-state">
@@ -2094,10 +3328,11 @@ function AssetsPanel({
         <select className="asset-select" value={selectedPromptId} onChange={(event) => onPromptSelect(event.target.value)}>
           {flow.prompts.map((prompt) => (
             <option value={prompt.id} key={prompt.id}>
-              {prompt.id} · {prompt.path}
+              {prompt.id}
             </option>
           ))}
         </select>
+        {selectedPrompt ? <small className="asset-path">{selectedPrompt.path}</small> : null}
         <textarea
           className="asset-editor prompt-editor"
           value={promptContent}
@@ -2143,10 +3378,11 @@ function AssetsPanel({
         <select className="asset-select" value={selectedSchemaId} onChange={(event) => onSchemaSelect(event.target.value)}>
           {flow.schemas.map((schema) => (
             <option value={schema.id} key={schema.id}>
-              {schema.id} · {schema.path}
+              {schema.id}
             </option>
           ))}
         </select>
+        {selectedSchema ? <small className="asset-path">{selectedSchema.path}</small> : null}
         <textarea
           className="asset-editor schema-editor"
           value={schemaContent}
@@ -2252,17 +3488,74 @@ function GeneratedArtifactPanel({
   listing,
   content,
   selectedPath,
+  dockerStatus,
+  dockerOperation,
+  dockerBusy,
+  dockerRuntimeUrl,
+  dockerApiPort,
+  dockerPostgresPort,
+  dockerRedisPort,
+  dockerHistory,
+  dockerAutoRefresh,
+  onDockerRuntimeUrlChange,
+  onDockerApiPortChange,
+  onDockerPostgresPortChange,
+  onDockerRedisPortChange,
+  onDockerAutoRefreshChange,
   onSelectFile,
   onRefresh,
   onDownload,
+  onRefreshDocker,
+  onConfigureDockerPorts,
+  onDockerAction,
+  dockerHistoryFilterDraft,
+  dockerHistoryFilterHasChanges,
+  dockerHistoryOperationOptions,
+  dockerHistoryStatusOptions,
+  onDockerHistoryFilterDraftChange,
+  onDockerHistoryApply,
+  onDockerHistoryClear,
 }: {
   listing: GeneratedArtifactListing | null;
   content: GeneratedArtifactFileContent | null;
   selectedPath: string;
+  dockerStatus: DockerRuntimeStatus | null;
+  dockerOperation: DockerRuntimeOperationResult | null;
+  dockerBusy: DockerRuntimeOperation | "refresh" | null;
+  dockerRuntimeUrl: string;
+  dockerApiPort: string;
+  dockerPostgresPort: string;
+  dockerRedisPort: string;
+  dockerHistory: DockerRuntimeHistory | null;
+  dockerAutoRefresh: boolean;
+  onDockerRuntimeUrlChange: (value: string) => void;
+  onDockerApiPortChange: (value: string) => void;
+  onDockerPostgresPortChange: (value: string) => void;
+  onDockerRedisPortChange: (value: string) => void;
+  onDockerAutoRefreshChange: (value: boolean) => void;
   onSelectFile: (path: string) => void;
   onRefresh: () => void;
   onDownload: () => void;
+  onRefreshDocker: () => void;
+  onConfigureDockerPorts: () => void;
+  onDockerAction: (operation: DockerRuntimeOperation) => void;
+  dockerHistoryFilterDraft: DockerHistoryFilterForm;
+  dockerHistoryFilterHasChanges: boolean;
+  dockerHistoryOperationOptions: readonly DockerRuntimeOperation[];
+  dockerHistoryStatusOptions: readonly DockerRuntimeOperationStatus[];
+  onDockerHistoryFilterDraftChange: (next: DockerHistoryFilterForm) => void;
+  onDockerHistoryApply: () => Promise<void>;
+  onDockerHistoryClear: () => void;
 }) {
+  const buildProgress = useMemo(() => {
+    if (dockerOperation?.operation === "build" && dockerOperation.progress?.length) {
+      return dockerOperation.progress;
+    }
+    const buildEntries = dockerHistory?.entries ?? [];
+    const latestBuild = buildEntries.find((entry) => entry.operation === "build" && (entry.progress?.length ?? 0) > 0);
+    return latestBuild?.progress ?? [];
+  }, [dockerHistory, dockerOperation]);
+
   if (!listing) {
     return (
       <div className="empty-state">
@@ -2294,6 +3587,311 @@ function GeneratedArtifactPanel({
           </button>
         </div>
       </section>
+
+      {artifactLooksLikeDockerRuntime(listing) ? (
+        <section className="sandbox-section">
+          <div className="sandbox-header">
+            <strong>API Docker final</strong>
+            <span className={`runtime-pill ${dockerRuntimePillClass(dockerStatus)}`}>
+              {dockerRuntimeStatusLabel(dockerStatus, dockerBusy)}
+            </span>
+          </div>
+          <dl className="kv-list inspector-list">
+            <Field label="Recurso" value={dockerStatus?.resourceName ?? "-"} />
+            <Field label="Flow" value={dockerStatus?.flowId ?? "-"} />
+            <Field label="Env local" value={dockerStatus?.envFile ? ".env encontrado" : "copie .env.example para .env antes de subir"} />
+          </dl>
+          <label className="docker-runtime-url">
+            <span>Runtime URL</span>
+            <input
+              value={dockerRuntimeUrl}
+              onChange={(event) => onDockerRuntimeUrlChange(event.target.value)}
+              placeholder="http://127.0.0.1:8080"
+            />
+          </label>
+          <div className="docker-port-grid">
+            <label>
+              <span>API</span>
+              <input
+                inputMode="numeric"
+                value={dockerApiPort}
+                onChange={(event) => onDockerApiPortChange(event.target.value)}
+                placeholder="8080"
+              />
+            </label>
+            <label>
+              <span>Postgres</span>
+              <input
+                inputMode="numeric"
+                value={dockerPostgresPort}
+                onChange={(event) => onDockerPostgresPortChange(event.target.value)}
+                placeholder="5433"
+              />
+            </label>
+            <label>
+              <span>Redis</span>
+              <input
+                inputMode="numeric"
+                value={dockerRedisPort}
+                onChange={(event) => onDockerRedisPortChange(event.target.value)}
+                placeholder="6380"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className="command-button full-width"
+            onClick={onConfigureDockerPorts}
+            disabled={dockerBusy !== null}
+          >
+            <Terminal size={16} aria-hidden="true" />
+            Aplicar portas no compose
+          </button>
+          <label className="docker-auto-refresh">
+            <input
+              type="checkbox"
+              checked={dockerAutoRefresh}
+              onChange={(event) => onDockerAutoRefreshChange(event.target.checked)}
+            />
+            <span>Auto-atualizar status e logs</span>
+          </label>
+          <div className="sandbox-actions">
+            <button
+              type="button"
+              className="command-button"
+              onClick={onRefreshDocker}
+              disabled={dockerBusy !== null}
+            >
+              <RefreshCw size={16} aria-hidden="true" />
+              Status
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={() => onDockerAction("inspect")}
+              disabled={dockerBusy !== null}
+            >
+              <Search size={16} aria-hidden="true" />
+              Inspecionar
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={() => onDockerAction("prepare_env")}
+              disabled={dockerBusy !== null}
+            >
+              <FileText size={16} aria-hidden="true" />
+              Preparar .env
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={() => onDockerAction("build")}
+              disabled={dockerBusy !== null}
+            >
+              <Terminal size={16} aria-hidden="true" />
+              Build
+            </button>
+            <button
+              type="button"
+              className="command-button primary"
+              onClick={() => onDockerAction("up")}
+              disabled={dockerBusy !== null}
+            >
+              <Play size={16} aria-hidden="true" />
+              Up
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={() => onDockerAction("smoke")}
+              disabled={dockerBusy !== null}
+            >
+              <ShieldCheck size={16} aria-hidden="true" />
+              Smoke
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={() => onDockerAction("down")}
+              disabled={dockerBusy !== null}
+            >
+              <CircleDot size={16} aria-hidden="true" />
+              Down
+            </button>
+          </div>
+          {dockerStatus ? (
+            <div className="artifact-runtime-links">
+              <a href={dockerStatus.docsUrl} target="_blank" rel="noreferrer">
+                Docs
+              </a>
+              <a href={dockerStatus.openapiUrl} target="_blank" rel="noreferrer">
+                OpenAPI
+              </a>
+            </div>
+          ) : null}
+          {dockerOperation?.smoke ? (
+            <div className="runtime-item">
+              <strong>Smoke test</strong>
+              <span>
+                Sessão {dockerOperation.smoke.sessionId}; transcript {dockerOperation.smoke.transcriptCount}; eventos{" "}
+                {dockerOperation.smoke.eventsCount}.
+              </span>
+            </div>
+          ) : null}
+          {dockerStatus?.inspection?.containers.length ? (
+            <div className="docker-service-list">
+              {dockerStatus.inspection.containers.map((service, index) => (
+                <div className="docker-service-row" key={`${service.name ?? service.service ?? "service"}-${index}`}>
+                  <strong>{service.service ?? service.name ?? "service"}</strong>
+                  <span>{service.state ?? service.status ?? "-"}</span>
+                  <small>{service.ports ?? "-"}</small>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {dockerStatus?.logs.length ? (
+            <pre className="mini-json artifact-preview">{dockerStatus.logs.join("\n")}</pre>
+          ) : null}
+          {buildProgress.length ? (
+            <div className="docker-progress">
+              <strong>Progresso do build</strong>
+              <div className="docker-progress-list">
+                {buildProgress.map((step) => (
+                  <div className="docker-progress-row" key={`${step.timestamp}-${step.line}`}>
+                    <div className="docker-progress-header">
+                      <strong>{step.stage}</strong>
+                      <span className={`docker-progress-status ${dockerProgressClass(step.status)}`}>{step.status}</span>
+                    </div>
+                    <p>{step.message}</p>
+                    {typeof step.percent === "number" ? (
+                      <div className="progress-track">
+                        <div className="progress-fill" style={{ width: `${step.percent}%` }} />
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <div className="docker-history-toolbar">
+            <label className="docker-history-filter-input">
+              <span>Operação</span>
+              <select
+                value={dockerHistoryFilterDraft.operation}
+                onChange={(event) =>
+                  onDockerHistoryFilterDraftChange({
+                    ...dockerHistoryFilterDraft,
+                    operation: event.target.value as DockerRuntimeOperation | "",
+                  })
+                }
+              >
+                <option value="">Todas</option>
+                {dockerHistoryOperationOptions.map((operation) => (
+                  <option value={operation} key={`docker-history-operation-${operation}`}>
+                    {operation}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Status</span>
+              <select
+                value={dockerHistoryFilterDraft.status}
+                onChange={(event) =>
+                  onDockerHistoryFilterDraftChange({
+                    ...dockerHistoryFilterDraft,
+                    status: event.target.value as DockerRuntimeOperationStatus | "",
+                  })
+                }
+              >
+                <option value="">Todos</option>
+                {dockerHistoryStatusOptions.map((status) => (
+                  <option value={status} key={`docker-history-status-${status}`}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Resultado</span>
+              <select
+                value={dockerHistoryFilterDraft.ok}
+                onChange={(event) =>
+                  onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, ok: event.target.value as "" | "true" | "false" })
+                }
+              >
+                <option value="">Todos</option>
+                <option value="true">ok</option>
+                <option value="false">erro</option>
+              </select>
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Busca</span>
+              <input
+                value={dockerHistoryFilterDraft.search}
+                onChange={(event) => onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, search: event.target.value })}
+                placeholder="operacao, status ou texto"
+              />
+            </label>
+            <label className="docker-history-filter-input">
+              <span>De</span>
+              <input
+                type="datetime-local"
+                step="1"
+                value={dockerHistoryFilterDraft.from}
+                onChange={(event) => onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, from: event.target.value })}
+                placeholder="2026-01-01T00:00:00"
+              />
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Até</span>
+              <input
+                type="datetime-local"
+                step="1"
+                value={dockerHistoryFilterDraft.to}
+                onChange={(event) => onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, to: event.target.value })}
+                placeholder="2026-01-01T23:59:59"
+              />
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Limite</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={dockerHistoryFilterDraft.limit}
+                onChange={(event) => onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, limit: event.target.value })}
+              />
+            </label>
+            <div className="timeline-toolbar">
+              <button
+                type="button"
+                className="command-button"
+                onClick={onDockerHistoryApply}
+                disabled={!dockerHistoryFilterHasChanges}
+              >
+                Aplicar
+              </button>
+              <button type="button" className="command-button" onClick={onDockerHistoryClear}>
+                Limpar
+              </button>
+            </div>
+          </div>
+          {dockerHistory?.entries.length ? (
+            <div className="docker-history-list">
+              {dockerHistory.entries.slice(0, 8).map((entry) => (
+                <div className="docker-history-row" key={entry.id}>
+                  <strong>{dockerOperationName(entry.operation)}</strong>
+                  <span className={entry.ok ? "history-ok" : "history-error"}>{entry.ok ? "ok" : "erro"}</span>
+                  <small>{formatDateTime(entry.finishedAt)}</small>
+                  <p>{entry.message}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="sandbox-section">
         <div className="sandbox-header">
@@ -2462,15 +4060,62 @@ function SandboxPanel({
   session,
   transcript,
   events,
+  timelineEvents,
+  timelineNodeFilter,
+  selectedEvent,
+  selectedStateSnapshot,
+  stateSnapshots,
+  studioRunCausalAnalysis,
+  studioRuns,
+  selectedRunId,
+  selectedCompareRunId,
+  studioRunCompletionFilter,
+  studioRunNodeFilter,
+  studioScenarios,
+  studioSelectedScenarioId,
+  studioScenarioLabel,
+  studioScenarioTags,
   userMessage,
+  studioRunSearch,
+  studioRunStatusFilter,
+  studioRunPhaseFilter,
+  studioRunMinDurationMsFilter,
+  studioRunMaxDurationMsFilter,
+  studioRunHasErrorsOnly,
+  studioRunComparison,
   setSandboxPort,
   setUserMessage,
+  onStudioRunSearchChange,
+  onStudioRunNodeFilterChange,
+  onStudioRunStatusFilterChange,
+  onStudioRunPhaseFilterChange,
+  onStudioRunMinDurationMsFilterChange,
+  onStudioRunMaxDurationMsFilterChange,
+  onStudioRunHasErrorsOnlyChange,
+  onStudioRunCompletionFilterChange,
+  onStudioRunCompareRunIdChange,
+  onStudioScenarioSave,
+  onStudioScenarioSelect,
+  onStudioScenarioRun,
+  onStudioPinnedScenarioRun,
+  onStudioScenarioPin,
+  onStudioScenarioDelete,
+  onStudioScenarioLabelChange,
+  onStudioScenarioTagsChange,
+  onExportComparison,
+  onClearComparison,
+  onSelectEvent,
+  onTimelineNodeFilterChange,
+  onRefreshRuns,
+  onLoadRun,
+  onExportRun,
   onStartSandbox,
   onStopSandbox,
   onRefreshSandbox,
   onCreateSession,
   onSendTurn,
   onFinishSession,
+  onCompareRuns,
 }: {
   flow: AgentFlow | null;
   sandbox: SandboxStatus | null;
@@ -2479,9 +4124,56 @@ function SandboxPanel({
   session: SessionView | null;
   transcript: MessageView[];
   events: EventView[];
+  timelineEvents: EventView[];
+  timelineNodeFilter: string;
+  selectedEvent: EventView | null;
+  selectedStateSnapshot: StudioStateSnapshot | null;
+  stateSnapshots: StudioStateSnapshot[];
+  studioRunCausalAnalysis: StudioRunCausalAnalysis;
+  studioRuns: StudioRunSummary[];
+  selectedRunId: string;
+  selectedCompareRunId: string;
+  studioRunCompletionFilter: "" | "complete" | "incomplete";
+  studioRunComparison: StudioRunComparison | null;
+  studioScenarios: StudioScenario[];
+  studioSelectedScenarioId: string;
+  studioScenarioLabel: string;
+  studioScenarioTags: string;
   userMessage: string;
+  studioRunSearch: string;
+  studioRunNodeFilter: string;
+  studioRunStatusFilter: string;
+  studioRunPhaseFilter: string;
+  studioRunMinDurationMsFilter: string;
+  studioRunMaxDurationMsFilter: string;
+  studioRunHasErrorsOnly: boolean;
   setSandboxPort: (value: string) => void;
   setUserMessage: (value: string) => void;
+  onStudioRunSearchChange: (value: string) => void;
+  onStudioRunNodeFilterChange: (value: string) => void;
+  onStudioRunStatusFilterChange: (value: string) => void;
+  onStudioRunPhaseFilterChange: (value: string) => void;
+  onStudioRunMinDurationMsFilterChange: (value: string) => void;
+  onStudioRunMaxDurationMsFilterChange: (value: string) => void;
+  onStudioRunHasErrorsOnlyChange: (value: boolean) => void;
+  onStudioRunCompletionFilterChange: (value: "" | "complete" | "incomplete") => void;
+  onStudioRunCompareRunIdChange: (value: string) => void;
+  onExportComparison: () => void;
+  onClearComparison: () => void;
+  onStudioScenarioSave: () => void;
+  onStudioScenarioSelect: (scenarioId: string) => void;
+  onStudioScenarioRun: () => void;
+  onStudioPinnedScenarioRun: () => void;
+  onStudioScenarioPin: () => void;
+  onStudioScenarioDelete: () => void;
+  onStudioScenarioLabelChange: (value: string) => void;
+  onStudioScenarioTagsChange: (value: string) => void;
+  onSelectEvent: (seq: number) => void;
+  onTimelineNodeFilterChange: (value: string) => void;
+  onRefreshRuns: () => void;
+  onLoadRun: (runId: string) => void;
+  onExportRun: () => void;
+  onCompareRuns: () => void;
   onStartSandbox: () => void;
   onStopSandbox: () => void;
   onRefreshSandbox: () => void;
@@ -2490,11 +4182,30 @@ function SandboxPanel({
   onFinishSession: () => void;
 }) {
   const running = Boolean(sandbox?.running && sandbox.url);
+  const executedNodes = Array.from(new Set(events.map((event) => event.node).filter((node): node is string => Boolean(node))));
+  const timelineNodeOptions = Array.from(new Set(timelineEvents.map((event) => event.node).filter((node): node is string => Boolean(node)))).sort();
+  const selectedPayload = selectedEvent?.payload ?? {};
+  const nodeInput = inferEventInput(selectedEvent, transcript);
+  const nodeOutput = inferEventOutput(selectedPayload);
+  const selectedNodeContext = buildStudioNodeContext(
+    timelineNodeFilter || selectedEvent?.node || "",
+    events,
+    transcript,
+    stateSnapshots,
+    sandbox?.logs ?? [],
+    studioRunCausalAnalysis,
+  );
+  const hasCausalAnalysis = studioRunCausalAnalysis.failedNode !== null;
+  const selectedScenario = studioScenarios.find((scenario) => scenario.id === studioSelectedScenarioId);
+  const pinnedScenario = studioScenarios.find((scenario) => scenario.isPinned);
+  const nodeFilterOptions = Array.from(
+    new Set(["start", "end", ...((flow?.nodes ?? []).map((node) => node.id))]),
+  ).sort();
   return (
     <div className="sandbox-body">
       <section className="sandbox-section">
         <div className="sandbox-header">
-          <strong>{flow?.id ?? "flow"}</strong>
+          <strong>Studio Local · {flow?.id ?? "flow"}</strong>
           <span className={running ? "runtime-pill running" : "runtime-pill"}>{running ? "ativo" : "parado"}</span>
         </div>
         <dl className="kv-list inspector-list">
@@ -2537,21 +4248,371 @@ function SandboxPanel({
 
       <section className="sandbox-section">
         <div className="sandbox-header">
-          <strong>Runtimes</strong>
-          <span>{sandboxes.length}</span>
+          <strong>Cenários de teste</strong>
+          <span>{studioScenarios.length}</span>
         </div>
-        <div className="runtime-list compact-list">
-          {sandboxes.length ? (
-            sandboxes.map((item) => (
-              <article className="runtime-item" key={`${item.flowId}-${item.port ?? "none"}`}>
-                <strong>{item.flowId}</strong>
-                <span>{item.running ? `ativo em ${item.url}` : "parado"} - PID {item.pid ?? "-"}</span>
-              </article>
+        <div className="studio-scenario-controls">
+          <label>
+            <span className="visually-hidden">Selecionar cenário</span>
+            <select
+              value={studioSelectedScenarioId}
+              onChange={(event) => onStudioScenarioSelect(event.target.value)}
+            >
+              <option value="">Novo cenário</option>
+              {studioScenarios.map((scenario) => (
+                <option key={scenario.id} value={scenario.id}>
+                  {scenario.label}
+                  {scenario.isPinned ? " (fixo)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedScenario?.isPinned ? <span className="studio-scenario-pin">fixado</span> : null}
+        </div>
+        <div className="edit-group">
+          <label>
+            <span>Nome</span>
+            <input value={studioScenarioLabel} onChange={(event) => onStudioScenarioLabelChange(event.target.value)} />
+          </label>
+          <label>
+            <span>Tags (separadas por vírgula)</span>
+            <input value={studioScenarioTags} onChange={(event) => onStudioScenarioTagsChange(event.target.value)} />
+          </label>
+        </div>
+        <div className="sandbox-actions">
+          <button
+            type="button"
+            className="command-button"
+            onClick={onStudioScenarioSave}
+            disabled={!userMessage.trim()}
+          >
+            <Save size={16} aria-hidden="true" />
+            Salvar
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onStudioScenarioPin}
+            disabled={!studioSelectedScenarioId}
+          >
+            <Pin size={16} aria-hidden="true" />
+            {pinnedScenario ? (selectedScenario?.isPinned ? "Desafixar" : "Fixar") : "Fixar"}
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onStudioScenarioRun}
+            disabled={!studioSelectedScenarioId}
+          >
+            <Play size={16} aria-hidden="true" />
+            Executar selecionado
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onStudioPinnedScenarioRun}
+            disabled={!pinnedScenario}
+          >
+            <Play size={16} aria-hidden="true" />
+            Executar fixado
+          </button>
+          <button
+            type="button"
+            className="command-button danger"
+            onClick={onStudioScenarioDelete}
+            disabled={!studioSelectedScenarioId}
+          >
+            <Trash2 size={16} aria-hidden="true" />
+            Remover
+          </button>
+        </div>
+        {selectedScenario ? (
+          <article className="runtime-item">
+            <strong>{selectedScenario.label}</strong>
+            <small>{selectedScenario.tags.join(", ") || "Sem tags"} · Atualizado em {formatDateTime(selectedScenario.updatedAt)}</small>
+            <span>Último uso: {selectedScenario.lastUsedAt ? formatDateTime(selectedScenario.lastUsedAt) : "nunca"}</span>
+          </article>
+        ) : (
+          <article className="runtime-item">
+            <strong>Nenhum cenário selecionado</strong>
+            <span>Digite a mensagem e salve para criar um novo cenário.</span>
+          </article>
+        )}
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Run atual</strong>
+          <span>{session?.session_id ? session.session_id.slice(0, 8) : "sem sessão"}</span>
+        </div>
+        <div className="studio-metrics">
+          <Field label="Status" value={session?.status ?? "-"} />
+          <Field label="Fase" value={session?.phase ?? "-"} />
+          <Field label="Turno" value={session ? `${session.turn}/${session.max_turns}` : "-"} />
+          <Field label="Nós" value={String(executedNodes.length)} />
+          <Field label="Eventos" value={String(events.length)} />
+          <Field label="Mensagens" value={String(transcript.length)} />
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Runs locais</strong>
+          <span>{studioRuns.length}</span>
+        </div>
+        <div className="studio-run-controls">
+          <label>
+            <span className="visually-hidden">Comparar com run</span>
+            <select
+              value={selectedCompareRunId}
+              onChange={(event) => onStudioRunCompareRunIdChange(event.target.value)}
+              disabled={studioRuns.length < 2}
+            >
+              <option value="">Comparar com...</option>
+              {studioRuns.map((run) => (
+                <option key={`compare-${run.id}`} value={run.id}>
+                  {run.sessionId}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onCompareRuns}
+            disabled={!selectedCompareRunId || !selectedRunId || selectedCompareRunId === selectedRunId}
+          >
+            <GitCompare size={16} aria-hidden="true" />
+            Comparar
+          </button>
+          <button type="button" className="command-button" onClick={onExportComparison} disabled={!studioRunComparison}>
+            <Download size={16} aria-hidden="true" />
+            Exportar comparação
+          </button>
+          <button type="button" className="command-button" onClick={onClearComparison} disabled={!studioRunComparison}>
+            <Trash2 size={16} aria-hidden="true" />
+            Limpar
+          </button>
+          <input
+            className="search-input"
+            type="text"
+            placeholder="Buscar por sessão, status, fase..."
+            value={studioRunSearch}
+            onChange={(event) => onStudioRunSearchChange(event.target.value)}
+          />
+          <input
+            className="search-input"
+            type="text"
+            list="studio-run-node-filter-options"
+            placeholder="Filtrar por nó..."
+            value={studioRunNodeFilter}
+            onChange={(event) => onStudioRunNodeFilterChange(event.target.value)}
+          />
+          <label>
+            <span className="visually-hidden">Filtrar por status</span>
+            <select value={studioRunStatusFilter} onChange={(event) => onStudioRunStatusFilterChange(event.target.value)}>
+              <option value="">Todos</option>
+              <option value="created">created</option>
+              <option value="running">running</option>
+              <option value="completed">completed</option>
+              <option value="error">error</option>
+            </select>
+          </label>
+          <label>
+            <span className="visually-hidden">Filtrar por fase</span>
+            <select value={studioRunPhaseFilter} onChange={(event) => onStudioRunPhaseFilterChange(event.target.value)}>
+              <option value="">Todas</option>
+              <option value="created">created</option>
+              <option value="collecting">collecting</option>
+              <option value="processing">processing</option>
+              <option value="finalizing">finalizing</option>
+              <option value="completed">completed</option>
+              <option value="error">error</option>
+            </select>
+          </label>
+          <input
+            className="search-input"
+            type="number"
+            inputMode="numeric"
+            min="0"
+            placeholder="Duração mínima (ms)"
+            value={studioRunMinDurationMsFilter}
+            onChange={(event) => onStudioRunMinDurationMsFilterChange(event.target.value)}
+          />
+          <input
+            className="search-input"
+            type="number"
+            inputMode="numeric"
+            min="0"
+            placeholder="Duração máxima (ms)"
+            value={studioRunMaxDurationMsFilter}
+            onChange={(event) => onStudioRunMaxDurationMsFilterChange(event.target.value)}
+          />
+          <label>
+            <span className="visually-hidden">Filtrar por finalização</span>
+            <select
+              value={studioRunCompletionFilter}
+              onChange={(event) => onStudioRunCompletionFilterChange(event.target.value as "" | "complete" | "incomplete")}
+            >
+              <option value="">Todas</option>
+              <option value="complete">Concluídas</option>
+              <option value="incomplete">Incompletas</option>
+            </select>
+          </label>
+          <label className="studio-run-error-filter">
+            <input
+              type="checkbox"
+              checked={studioRunHasErrorsOnly}
+              onChange={(event) => onStudioRunHasErrorsOnlyChange(event.target.checked)}
+            />
+            <span>Somente erros</span>
+          </label>
+        </div>
+        <datalist id="studio-run-node-filter-options">
+          {nodeFilterOptions.map((nodeId) => (
+            <option key={`studio-run-node-filter-${nodeId}`} value={nodeId} />
+          ))}
+        </datalist>
+        <div className="sandbox-actions">
+          <button type="button" className="command-button" onClick={onRefreshRuns}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Atualizar
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onExportRun}
+            disabled={!selectedRunId}
+          >
+            <Download size={16} aria-hidden="true" />
+            Exportar selecionado
+          </button>
+        </div>
+        <div className="studio-run-list">
+          {studioRunComparison ? (
+            <article className="runtime-item studio-comparison-item">
+              <strong>Comparação</strong>
+              <span>
+                {studioRunComparison.leftRunId} vs {studioRunComparison.rightRunId}
+              </span>
+              <div className="studio-comparison-grid">
+                <div>
+                  <strong>status</strong>
+                  <span>{studioRunComparison.metrics.statusChanged ? "diferente" : "igual"}</span>
+                </div>
+                <div>
+                  <strong>fase</strong>
+                  <span>{studioRunComparison.metrics.phaseChanged ? "diferente" : "igual"}</span>
+                </div>
+                <div>
+                  <strong>finalizado</strong>
+                  <span>{studioRunComparison.metrics.isCompleteChanged ? "diferente" : "igual"}</span>
+                </div>
+                <div>
+                  <strong>nodes</strong>
+                  <span>
+                    {studioRunComparison.left.nodeCount} para {studioRunComparison.right.nodeCount} (
+                    {studioRunComparison.metrics.nodeCountDelta >= 0 ? "+" : ""}
+                    {studioRunComparison.metrics.nodeCountDelta})
+                  </span>
+                </div>
+                <div>
+                  <strong>eventos</strong>
+                  <span>
+                    {studioRunComparison.left.eventCount} para {studioRunComparison.right.eventCount} (
+                    {studioRunComparison.metrics.eventCountDelta >= 0 ? "+" : ""}
+                    {studioRunComparison.metrics.eventCountDelta})
+                  </span>
+                </div>
+                <div>
+                  <strong>erros</strong>
+                  <span>
+                    {studioRunComparison.left.errorCount} para {studioRunComparison.right.errorCount} (
+                    {studioRunComparison.metrics.errorCountDelta >= 0 ? "+" : ""}
+                    {studioRunComparison.metrics.errorCountDelta})
+                  </span>
+                </div>
+                <div>
+                  <strong>mensagens</strong>
+                  <span>
+                    {studioRunComparison.left.messageCount} para {studioRunComparison.right.messageCount} (
+                    {studioRunComparison.metrics.messageCountDelta >= 0 ? "+" : ""}
+                    {studioRunComparison.metrics.messageCountDelta})
+                  </span>
+                </div>
+                <div>
+                  <strong>duração</strong>
+                  <span>
+                    {formatRunDuration(studioRunComparison.metrics.durationMsLeft)} para{" "}
+                    {formatRunDuration(studioRunComparison.metrics.durationMsRight)}
+                  </span>
+                </div>
+              </div>
+              <small>
+                Só no {studioRunComparison.leftRunId}: {studioRunComparison.leftOnlyNodes.join(", ") || "-"} <br />
+                Só no {studioRunComparison.rightRunId}: {studioRunComparison.rightOnlyNodes.join(", ") || "-"} <br />
+                Runtime URL: {studioRunComparison.metrics.runtimeUrlChanged ? "diferente" : "igual"}
+              </small>
+              <small>
+                Em comum: {studioRunComparison.nodeDiff.both.length} nós · Mudanças:{" "}
+                {studioRunComparison.nodeComparisons.filter((item) => item.changed).length}
+              </small>
+              {studioRunComparison.nodeComparisons.some((node) => node.inLeft && node.inRight && node.changed) ? (
+                <details>
+                  <summary>Detalhar diffs semânticos dos nós em comum</summary>
+                  <div className="studio-node-diff-list">
+                    {studioRunComparison.nodeComparisons
+                      .filter((node) => node.inLeft && node.inRight && node.changed)
+                      .slice(0, 8)
+                      .map((node) => (
+                        <div key={`node-comparison-${node.nodeId}`}>
+                          <strong>{node.nodeId}</strong>
+                          <span>
+                            state {node.stateDiff.length} · output {node.outputDiff.length} · left#{node.left.seq ?? "-"} → right#
+                            {node.right.seq ?? "-"}
+                          </span>
+                          <pre className="mini-json">
+                            {JSON.stringify(
+                              {
+                                leftState: node.left,
+                                rightState: node.right,
+                                stateDiff: node.stateDiff.slice(0, 4),
+                                outputDiff: node.outputDiff.slice(0, 4),
+                              },
+                              null,
+                              2,
+                            )}
+                          </pre>
+                        </div>
+                      ))}
+                  </div>
+                </details>
+              ) : null}
+            </article>
+          ) : null}
+          {studioRuns.length ? (
+            studioRuns.slice(0, 12).map((run) => (
+              <button
+                type="button"
+                className={`studio-run-item ${run.id === selectedRunId ? "selected" : ""}`}
+                key={run.id}
+                onClick={() => onLoadRun(run.id)}
+              >
+                <span className="studio-run-main">
+                  <strong>{run.sessionId}</strong>
+                  <small>
+                    {run.phase} · {run.status} · {formatDateTime(run.updatedAt)}
+                  </small>
+                </span>
+                <span className="studio-run-metrics">
+                  {run.eventCount} ev · {run.nodeCount} nós
+                </span>
+              </button>
             ))
           ) : (
             <article className="runtime-item">
-              <strong>Nenhum runtime ativo</strong>
-              <span>Sem runtime local para o flow selecionado.</span>
+              <strong>Nenhum run persistido</strong>
+              <span>Execute uma sessão no sandbox para salvar o primeiro snapshot local.</span>
             </article>
           )}
         </div>
@@ -2583,6 +4644,243 @@ function SandboxPanel({
 
       <section className="sandbox-section">
         <div className="sandbox-header">
+          <strong>Timeline</strong>
+              <span>{timelineEvents.length}</span>
+            </div>
+            <div className="timeline-toolbar">
+              <label>
+                <span className="visually-hidden">Filtrar timeline por nó</span>
+                <select
+                  value={timelineNodeFilter}
+                  onChange={(event) => onTimelineNodeFilterChange(event.target.value)}
+                  title="Filtrar eventos por nó"
+                >
+                  <option value="">Todos</option>
+                  {timelineNodeOptions.map((nodeId) => (
+                    <option value={nodeId} key={`timeline-node-filter-${nodeId}`}>
+                      {nodeId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="command-button"
+                onClick={() => onTimelineNodeFilterChange("")}
+                disabled={!timelineNodeFilter}
+              >
+                Limpar filtro
+              </button>
+            </div>
+            <div className="timeline-list">
+              {timelineEvents.length ? (
+                timelineEvents.map((event) => (
+                  <button
+                    type="button"
+                    className={`timeline-item ${selectedEvent?.seq === event.seq ? "selected" : ""} ${studioEventCausalClass(event, studioRunCausalAnalysis)}`}
+                    key={event.seq}
+                    onClick={() => onSelectEvent(event.seq)}
+                  >
+                <span className="timeline-seq">#{event.seq}</span>
+                <span className="timeline-main">
+                  <strong>{event.event_type}</strong>
+                  <small>{event.node ?? "runtime"}</small>
+                </span>
+                <span className="timeline-turn">t{String(event.payload.turn ?? "-")}</span>
+              </button>
+            ))
+              ) : (
+                <article className="runtime-item">
+                  <strong>Nenhum evento ainda</strong>
+                  <span>Crie uma sessão e envie um turno para registrar a execução local.</span>
+                </article>
+              )}
+            </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Cadeia causal</strong>
+          <span>{hasCausalAnalysis ? "com falha" : "sem falha"}</span>
+        </div>
+        {hasCausalAnalysis ? (
+          <div className="causal-grid">
+            <div>
+              <strong>Falha</strong>
+              <pre className="mini-json">{studioRunCausalAnalysis.failedEventType ?? "-"}</pre>
+              <small>Nó: {studioRunCausalAnalysis.failedNode ?? "-"}</small>
+              <small>Evento: #{studioRunCausalAnalysis.failedEventSeq ?? "-"}</small>
+            </div>
+            <div>
+              <strong>Origem (upstream)</strong>
+              <div className="causal-path">
+                {studioRunCausalAnalysis.upstreamPath.length ? studioRunCausalAnalysis.upstreamPath.join(" → ") : "-"}
+              </div>
+            </div>
+            <div>
+              <strong>Impactados</strong>
+              <div className="causal-path">
+                {studioRunCausalAnalysis.impactedNodes.length ? studioRunCausalAnalysis.impactedNodes.join(", ") : "-"}
+              </div>
+            </div>
+            <div>
+              <strong>Trajetória de impacto</strong>
+              <div className="causal-path">
+                {studioRunCausalAnalysis.impactPath.length ? studioRunCausalAnalysis.impactPath.join(" → ") : "-"}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <article className="runtime-item">
+            <strong>Nenhuma falha registrada</strong>
+            <span>Abra a timeline para executar e gerar a cadeia de impacto após um evento com erro.</span>
+          </article>
+        )}
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Node IO</strong>
+          <span>{selectedEvent?.node ?? "-"}</span>
+        </div>
+        {selectedEvent ? (
+          <div className="node-io-grid">
+            <div>
+              <strong>Input inferido</strong>
+              <pre className="mini-json">{formatInspectorValue(nodeInput)}</pre>
+            </div>
+            <div>
+              <strong>Output</strong>
+              <pre className="mini-json">{formatInspectorValue(nodeOutput)}</pre>
+            </div>
+            <div className="node-io-wide">
+              <strong>Payload do evento</strong>
+              <pre className="mini-json">{formatInspectorValue(selectedPayload)}</pre>
+            </div>
+          </div>
+        ) : (
+          <article className="runtime-item">
+            <strong>Nenhum evento selecionado</strong>
+            <span>A timeline seleciona o último evento automaticamente quando há execução.</span>
+          </article>
+        )}
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Contexto do nó</strong>
+          <span>{selectedNodeContext?.nodeId ?? "sem nó"}</span>
+        </div>
+        {selectedNodeContext ? (
+          <div className="node-context-stack">
+            <div className="node-context-grid">
+              <article className="node-context-card">
+                <strong>Status</strong>
+                <span className={nodeContextStatusClass(selectedNodeContext.status)}>
+                  {selectedNodeContext.status}
+                </span>
+                <small>
+                  {selectedNodeContext.events.length} evento(s) · último #{selectedNodeContext.latestEvent?.seq ?? "-"}
+                </small>
+              </article>
+              <article className="node-context-card">
+                <strong>Causalidade</strong>
+                <span>{selectedNodeContext.causalRole}</span>
+                <small>
+                  falha #{studioRunCausalAnalysis.failedEventSeq ?? "-"} · {studioRunCausalAnalysis.failedNode ?? "-"}
+                </small>
+              </article>
+              <article className="node-context-card">
+                <strong>Erro relacionado</strong>
+                <span>{selectedNodeContext.errorEvent?.event_type ?? "-"}</span>
+                <small>evento #{selectedNodeContext.errorEvent?.seq ?? "-"}</small>
+              </article>
+              <article className="node-context-card">
+                <strong>Snapshot</strong>
+                <span>#{selectedNodeContext.latestSnapshot?.seq ?? "-"}</span>
+                <small>{selectedNodeContext.diffs.length} diff(s) do nó</small>
+              </article>
+            </div>
+
+            <div className="node-context-events">
+              {selectedNodeContext.events.slice(-6).map((event) => (
+                <button
+                  type="button"
+                  className={`node-context-event ${selectedEvent?.seq === event.seq ? "selected" : ""}`}
+                  key={`node-context-${event.seq}`}
+                  onClick={() => onSelectEvent(event.seq)}
+                >
+                  <span>#{event.seq}</span>
+                  <strong>{event.event_type}</strong>
+                  <small>{String(event.payload.status ?? event.payload.phase ?? "-")}</small>
+                </button>
+              ))}
+            </div>
+
+            <div className="node-io-grid">
+              <div>
+                <strong>Input do nó</strong>
+                <pre className="mini-json">{formatInspectorValue(selectedNodeContext.input)}</pre>
+              </div>
+              <div>
+                <strong>Output do nó</strong>
+                <pre className="mini-json">{formatInspectorValue(selectedNodeContext.output)}</pre>
+              </div>
+              <div className="node-io-wide">
+                <strong>Estado do nó</strong>
+                <pre className="mini-json">{formatInspectorValue(selectedNodeContext.nodeState)}</pre>
+              </div>
+            </div>
+
+            {selectedNodeContext.diffs.length ? (
+              <div className="state-diff-list">
+                {selectedNodeContext.diffs.slice(0, 8).map((entry, index) => (
+                  <article className="state-diff-row" key={`node-context-diff-${entry.path}-${index}`}>
+                    <strong>{entry.kind}</strong>
+                    <span>{entry.path}</span>
+                    <small>{formatDiffValue(entry.after)}</small>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
+            {selectedNodeContext.logs.length ? (
+              <div className="node-context-logs">
+                {selectedNodeContext.logs.map((line, index) => (
+                  <code key={`node-context-log-${index}`}>{line}</code>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <article className="runtime-item">
+            <strong>Nenhum nó filtrado</strong>
+            <span>Clique em um nó no grafo enquanto estiver no Studio para abrir o contexto operacional dele.</span>
+          </article>
+        )}
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>State inspector</strong>
+          <span>{selectedStateSnapshot ? `#${selectedStateSnapshot.seq}` : session?.is_complete ? "completa" : "ativa"}</span>
+        </div>
+        <pre className="mini-json">{formatInspectorValue(selectedStateSnapshot?.state ?? session ?? { status: "no_session" })}</pre>
+        {selectedStateSnapshot?.diff.length ? (
+          <div className="state-diff-list">
+            {selectedStateSnapshot.diff.slice(0, 12).map((entry, index) => (
+              <article className="state-diff-row" key={`${entry.path}-${index}`}>
+                <strong>{entry.kind}</strong>
+                <span>{entry.path}</span>
+                <small>{formatDiffValue(entry.after)}</small>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
           <strong>Transcript</strong>
           <span>{transcript.length}</span>
         </div>
@@ -2601,7 +4899,7 @@ function SandboxPanel({
 
       <section className="sandbox-section">
         <div className="sandbox-header">
-          <strong>Events</strong>
+          <strong>Eventos brutos</strong>
           <span>{events.length}</span>
         </div>
         <div className="runtime-list compact-list">
@@ -2611,6 +4909,28 @@ function SandboxPanel({
               <span>{event.node ?? "-"}</span>
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>Runtimes</strong>
+          <span>{sandboxes.length}</span>
+        </div>
+        <div className="runtime-list compact-list">
+          {sandboxes.length ? (
+            sandboxes.map((item) => (
+              <article className="runtime-item" key={`${item.flowId}-${item.port ?? "none"}`}>
+                <strong>{item.flowId}</strong>
+                <span>{item.running ? `ativo em ${item.url}` : "parado"} - PID {item.pid ?? "-"}</span>
+              </article>
+            ))
+          ) : (
+            <article className="runtime-item">
+              <strong>Nenhum runtime ativo</strong>
+              <span>Sem runtime local para o flow selecionado.</span>
+            </article>
+          )}
         </div>
       </section>
 
@@ -2636,14 +4956,665 @@ function Field({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function toReactFlowGraph(flow: AgentFlow | undefined, selectedNodeId: string, selectedEdgeId: string): { nodes: Node[]; edges: Edge[] } {
+function readStoredTheme(): ThemeMode {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+  const value = window.localStorage.getItem(themeStorageKey);
+  if (value === "dark" || value === "light") {
+    return value;
+  }
+  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
+}
+
+function langGraphApprovalStatusLabel(status: LangGraphSandboxApprovalStatus | null): string {
+  if (!status) {
+    return "Aprovação: desconhecida";
+  }
+  if (status.status === "approved") {
+    return "Aprovação: aprovada";
+  }
+  if (status.status === "missing") {
+    return "Aprovação: pendente";
+  }
+  if (status.status === "outdated") {
+    return "Aprovação: desatualizada";
+  }
+  return "Aprovação: inválida";
+}
+
+function langGraphApprovalStatusClass(status: LangGraphSandboxApprovalStatus | null): string {
+  if (!status) {
+    return "approval-pill approval-pill-unknown";
+  }
+  if (status.status === "approved") {
+    return "approval-pill approval-pill-ok";
+  }
+  if (status.status === "missing") {
+    return "approval-pill approval-pill-pending";
+  }
+  if (status.status === "outdated") {
+    return "approval-pill approval-pill-outdated";
+  }
+  return "approval-pill approval-pill-error";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatInspectorValue(value: unknown): string {
+  if (value === undefined || value === null || value === "") {
+    return "-";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+  function formatDiffValue(value: unknown): string {
+  if (value === undefined) {
+    return "removido";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function formatRunDuration(valueMs: number | null): string {
+  if (valueMs === null || !Number.isFinite(valueMs) || valueMs < 0) {
+    return "-";
+  }
+  if (valueMs === 0) {
+    return "0ms";
+  }
+  const safeMs = Math.round(valueMs);
+  const seconds = Math.floor(safeMs / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`;
+  }
+  if (seconds > 0) {
+    const ms = safeMs % 1000;
+    if (ms === 0) {
+      return `${seconds}s`;
+    }
+    return `${seconds}.${String(ms).padStart(3, "0")}s`;
+  }
+  return `${safeMs}ms`;
+}
+
+function inferEventInput(event: EventView | null, transcript: MessageView[]): unknown {
+  if (!event) {
+    return null;
+  }
+  const payload = event.payload;
+  const custom = isRecord(payload.custom) ? payload.custom : null;
+  if (custom && isRecord(custom.contract) && typeof custom.contract.input_path === "string") {
+    return { input_path: custom.contract.input_path };
+  }
+  const lastUserMessage = [...transcript].reverse().find((message) => message.role === "user");
+  if (lastUserMessage) {
+    return { role: "user", content: lastUserMessage.content };
+  }
+  return { event_type: event.event_type, node: event.node ?? null };
+}
+
+function inferEventOutput(payload: Record<string, unknown>): unknown {
+  const custom = isRecord(payload.custom) ? payload.custom : null;
+  if (custom && "output" in custom) {
+    return custom.output;
+  }
+  for (const key of ["llm", "http", "transform", "database", "file", "rag", "approval", "score", "analytics", "safety"]) {
+    const value = payload[key];
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return {
+    status: payload.status,
+    phase: payload.phase,
+    turn: payload.turn,
+  };
+}
+
+function buildStudioNodeContext(
+  nodeId: string,
+  events: EventView[],
+  transcript: MessageView[],
+  stateSnapshots: StudioStateSnapshot[],
+  logs: string[],
+  causalAnalysis: StudioRunCausalAnalysis,
+): StudioNodeDebugContext | null {
+  const selectedNodeId = nodeId.trim();
+  if (!selectedNodeId) {
+    return null;
+  }
+  const nodeEvents = events.filter((event) => event.node === selectedNodeId).sort((left, right) => left.seq - right.seq);
+  const latestEvent = nodeEvents.at(-1) ?? null;
+  const errorEvent = nodeEvents.filter(isStudioErrorEvent).at(-1) ?? null;
+  const latestSnapshot =
+    [...stateSnapshots]
+      .reverse()
+      .find((snapshot) => snapshot.node === selectedNodeId || snapshotHasNode(snapshot, selectedNodeId)) ?? null;
+  const nodeState = latestSnapshot ? readSnapshotNodeState(latestSnapshot, selectedNodeId) : null;
+  const nodeOutput = latestSnapshot ? readSnapshotNodeOutput(latestSnapshot, selectedNodeId) : undefined;
+  const relatedDiffs = latestSnapshot
+    ? latestSnapshot.diff.filter((entry) => isNodeRelatedDiff(entry.path, selectedNodeId))
+    : [];
+
+  return {
+    nodeId: selectedNodeId,
+    status: readNodeContextStatus(latestEvent, latestSnapshot),
+    causalRole: readNodeCausalRole(selectedNodeId, causalAnalysis),
+    events: nodeEvents,
+    latestEvent,
+    errorEvent,
+    latestSnapshot,
+    nodeState,
+    input: inferEventInput(latestEvent, transcript),
+    output: nodeOutput !== undefined ? nodeOutput : latestEvent ? inferEventOutput(latestEvent.payload) : null,
+    diffs: relatedDiffs.length ? relatedDiffs : latestSnapshot?.diff.slice(0, 6) ?? [],
+    logs: filterNodeLogs(selectedNodeId, latestEvent, logs),
+  };
+}
+
+function snapshotHasNode(snapshot: StudioStateSnapshot, nodeId: string): boolean {
+  const nodes = snapshot.state.nodes;
+  return isRecord(nodes) && nodeId in nodes;
+}
+
+function readSnapshotNodeState(snapshot: StudioStateSnapshot, nodeId: string): unknown {
+  const nodes = snapshot.state.nodes;
+  return isRecord(nodes) ? nodes[nodeId] ?? null : null;
+}
+
+function readSnapshotNodeOutput(snapshot: StudioStateSnapshot, nodeId: string): unknown {
+  const outputs = snapshot.state.outputs;
+  return isRecord(outputs) ? outputs[nodeId] : undefined;
+}
+
+function isNodeRelatedDiff(pathName: string, nodeId: string): boolean {
+  return pathName === `nodes.${nodeId}` ||
+    pathName.startsWith(`nodes.${nodeId}.`) ||
+    pathName === `outputs.${nodeId}` ||
+    pathName.startsWith(`outputs.${nodeId}.`) ||
+    pathName === "current.node";
+}
+
+function readNodeContextStatus(event: EventView | null, snapshot: StudioStateSnapshot | null): string {
+  if (!event) {
+    return "sem evento";
+  }
+  if (isStudioErrorEvent(event)) {
+    return "error";
+  }
+  if (typeof event.payload.status === "string" && event.payload.status.trim()) {
+    return event.payload.status;
+  }
+  return snapshot?.status ?? "observado";
+}
+
+function readNodeCausalRole(nodeId: string, causalAnalysis: StudioRunCausalAnalysis): string {
+  if (causalAnalysis.failedNode === nodeId) {
+    return "origem da falha";
+  }
+  if (causalAnalysis.upstreamPath.includes(nodeId)) {
+    return "upstream";
+  }
+  if (causalAnalysis.impactedNodes.includes(nodeId)) {
+    return "impactado";
+  }
+  return "fora da cadeia";
+}
+
+function nodeContextStatusClass(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized.includes("error") || normalized.includes("fail") || normalized.includes("blocked")) {
+    return "runtime-pill stopped";
+  }
+  if (normalized.includes("success") || normalized.includes("ok") || normalized.includes("complete")) {
+    return "runtime-pill running";
+  }
+  return "runtime-pill";
+}
+
+function filterNodeLogs(nodeId: string, latestEvent: EventView | null, logs: string[]): string[] {
+  const eventType = latestEvent?.event_type.toLowerCase();
+  const node = nodeId.toLowerCase();
+  const matched = logs.filter((line) => {
+    const lower = line.toLowerCase();
+    return lower.includes(node) || (eventType ? lower.includes(eventType) : false);
+  });
+  return (matched.length ? matched : logs).slice(-6);
+}
+
+type StudioNodeExecutionStatus = "queued" | "running" | "success" | "error" | "skipped" | "blocked";
+
+interface StudioNodeExecutionState {
+  status: StudioNodeExecutionStatus;
+  seq: number;
+  eventType: string;
+}
+
+function inferNodeExecutionStates(events: EventView[]): Map<string, StudioNodeExecutionState> {
+  const byNode = new Map<string, StudioNodeExecutionState>();
+  for (const event of events) {
+    if (!event.node) {
+      continue;
+    }
+    const eventType = event.event_type.toLowerCase();
+    const payloadStatus = typeof event.payload.status === "string" ? event.payload.status.toLowerCase() : undefined;
+
+    let next: StudioNodeExecutionStatus;
+    if (eventType.includes("error") || eventType.includes("failed") || payloadStatus === "error") {
+      next = "error";
+    } else if (eventType.includes("blocked") || eventType.includes("block") || payloadStatus === "blocked") {
+      next = "blocked";
+    } else if (
+      eventType.includes("skip") ||
+      eventType.includes("skipped") ||
+      eventType.includes("bypass") ||
+      payloadStatus === "skipped" ||
+      payloadStatus === "skipped_by_condition"
+    ) {
+      next = "skipped";
+    } else if (
+      eventType.includes("completed") ||
+      eventType.includes("success") ||
+      eventType.includes("done") ||
+      payloadStatus === "ok" ||
+      payloadStatus === "success"
+    ) {
+      next = "success";
+    } else if (
+      eventType.includes("start") ||
+      eventType.includes("started") ||
+      eventType.includes("running") ||
+      eventType.includes("enter") ||
+      eventType.includes("emit")
+    ) {
+      next = "running";
+    } else {
+      next = "queued";
+    }
+
+    byNode.set(event.node, {
+      status: next,
+      seq: event.seq,
+      eventType,
+    });
+  }
+  return byNode;
+}
+
+function inferEdgeExecutionStatus(
+  edge: FlowEdge,
+  nodeStates: Map<string, StudioNodeExecutionState>,
+): StudioNodeExecutionStatus | "idle" {
+  const fromState = nodeStates.get(edge.from);
+  const toState = nodeStates.get(edge.to);
+  if (fromState?.status === "error" || toState?.status === "error") {
+    return "error";
+  }
+  if (fromState?.status === "blocked" || toState?.status === "blocked") {
+    return "blocked";
+  }
+  if (fromState?.status === "skipped" || toState?.status === "skipped") {
+    return "skipped";
+  }
+  if (fromState?.status === "running" || toState?.status === "running") {
+    return "running";
+  }
+  if (fromState?.status === "success" && toState?.status === "success") {
+    return "success";
+  }
+  if (fromState?.status === "queued" || toState?.status === "queued") {
+    return "queued";
+  }
+  return "idle";
+}
+
+interface FlowTopology {
+  outgoing: Map<string, string[]>;
+  incoming: Map<string, string[]>;
+}
+
+function buildStudioRunCausalAnalysis(
+  flow: AgentFlow | null,
+  events: EventView[],
+): StudioRunCausalAnalysis {
+  if (!events.length) {
+    return emptyStudioRunCausalAnalysis();
+  }
+  const orderedEvents = [...events].sort((left, right) => left.seq - right.seq);
+  const latestFailure = orderedEvents.filter(isStudioErrorEvent).at(-1);
+  if (!latestFailure) {
+    return emptyStudioRunCausalAnalysis();
+  }
+  const failedNode = latestFailure.node ?? null;
+  if (!flow || !failedNode) {
+    return {
+      failedEventSeq: latestFailure.seq,
+      failedEventType: latestFailure.event_type,
+      failedNode: null,
+      upstreamPath: [],
+      impactPath: [],
+      impactedNodes: [],
+    };
+  }
+  const topology = buildStudioFlowTopology(flow);
+  const eventSeqIndex = buildStudioFailureExecutionIndex(orderedEvents, latestFailure.seq);
+  const downstreamImpact = buildStudioDownstreamImpactIndex(
+    topology,
+    failedNode,
+    latestFailure.seq,
+    eventSeqIndex.firstAfterFailure,
+  );
+  return {
+    failedEventSeq: latestFailure.seq,
+    failedEventType: latestFailure.event_type,
+    failedNode,
+    upstreamPath: deriveStudioUpstreamPath(topology, failedNode, latestFailure.seq, eventSeqIndex.lastBeforeFailure),
+    impactPath: deriveStudioImpactPath(topology, failedNode, downstreamImpact),
+    impactedNodes: deriveStudioImpactedNodeOrder(topology, failedNode, downstreamImpact),
+  };
+}
+
+function emptyStudioRunCausalAnalysis(): StudioRunCausalAnalysis {
+  return {
+    failedEventSeq: null,
+    failedEventType: null,
+    failedNode: null,
+    upstreamPath: [],
+    impactPath: [],
+    impactedNodes: [],
+  };
+}
+
+function buildStudioFlowTopology(flow: AgentFlow): FlowTopology {
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
+  for (const edge of flow.edges) {
+    const from = String(edge.from);
+    const to = String(edge.to);
+    const outgoingList = outgoing.get(from) ?? [];
+    outgoingList.push(to);
+    outgoing.set(from, outgoingList);
+    const incomingList = incoming.get(to) ?? [];
+    incomingList.push(from);
+    incoming.set(to, incomingList);
+  }
+  return { outgoing, incoming };
+}
+
+function buildStudioFailureExecutionIndex(
+  events: EventView[],
+  failedEventSeq: number,
+): {
+  lastBeforeFailure: Map<string, number>;
+  firstAfterFailure: Map<string, number>;
+} {
+  const lastBeforeFailure = new Map<string, number>();
+  const firstAfterFailure = new Map<string, number>();
+  for (const event of events) {
+    if (!event.node) {
+      continue;
+    }
+    if (event.seq < failedEventSeq) {
+      lastBeforeFailure.set(event.node, event.seq);
+    }
+    if (event.seq > failedEventSeq && !firstAfterFailure.has(event.node)) {
+      firstAfterFailure.set(event.node, event.seq);
+    }
+  }
+  return { lastBeforeFailure, firstAfterFailure };
+}
+
+function buildStudioDownstreamImpactIndex(
+  topology: FlowTopology,
+  failedNode: string,
+  failedEventSeq: number,
+  firstAfterFailure: Map<string, number>,
+): Map<string, number> {
+  const earliestPostFailure = new Map<string, number>();
+  const memo = new Map<string, number | null>();
+  const visiting = new Set<string>();
+
+  const dfs = (node: string): number | null => {
+    const cached = memo.get(node);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (visiting.has(node)) {
+      return null;
+    }
+    visiting.add(node);
+
+    const directSeq = firstAfterFailure.get(node);
+    if (directSeq !== undefined) {
+      memo.set(node, directSeq);
+      visiting.delete(node);
+      return directSeq;
+    }
+
+    let best: number | null = null;
+    for (const child of topology.outgoing.get(node) ?? []) {
+      const candidate = dfs(child);
+      if (candidate !== null && (best === null || candidate < best)) {
+        best = candidate;
+      }
+    }
+    memo.set(node, best);
+    visiting.delete(node);
+    return best;
+  };
+
+  dfs(failedNode);
+  const stack = [failedNode];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    if (dfs(current) === null) {
+      continue;
+    }
+    for (const child of topology.outgoing.get(current) ?? []) {
+      const childImpact = dfs(child);
+      if (childImpact !== null && !earliestPostFailure.has(child)) {
+        earliestPostFailure.set(child, childImpact);
+        stack.push(child);
+      }
+    }
+  }
+  earliestPostFailure.set(failedNode, earliestPostFailure.get(failedNode) ?? failedEventSeq);
+  return earliestPostFailure;
+}
+
+function deriveStudioUpstreamPath(
+  topology: FlowTopology,
+  node: string,
+  failureSeq: number,
+  lastByNodeBeforeFailure: Map<string, number>,
+): string[] {
+  const visited = new Set<string>();
+  const path: string[] = [node];
+  let current = node;
+  visited.add(current);
+  while (true) {
+    const parents = topology.incoming.get(current);
+    let next: string | undefined;
+    for (const parent of parents ?? []) {
+      const parentSeq = lastByNodeBeforeFailure.get(parent);
+      if (parentSeq === undefined || parentSeq >= failureSeq || visited.has(parent)) {
+        continue;
+      }
+      if (!next) {
+        next = parent;
+        continue;
+      }
+      const nextSeq = lastByNodeBeforeFailure.get(next);
+      if (nextSeq !== undefined && parentSeq > nextSeq) {
+        next = parent;
+      }
+    }
+    if (!next) {
+      return path.slice().reverse();
+    }
+    visited.add(next);
+    path.push(next);
+    current = next;
+  }
+}
+
+function deriveStudioImpactPath(
+  topology: FlowTopology,
+  node: string,
+  downstreamImpactByNode: Map<string, number>,
+): string[] {
+  const visited = new Set<string>([node]);
+  const path: string[] = [node];
+  let current = node;
+  while (true) {
+    const next = (topology.outgoing.get(current) ?? [])
+      .filter((child) => !visited.has(child) && downstreamImpactByNode.has(child))
+      .sort((left, right) => {
+        const leftSeq = downstreamImpactByNode.get(left) ?? Number.POSITIVE_INFINITY;
+        const rightSeq = downstreamImpactByNode.get(right) ?? Number.POSITIVE_INFINITY;
+        return leftSeq - rightSeq || left.localeCompare(right);
+      })[0];
+    if (!next) {
+      return path;
+    }
+    visited.add(next);
+    path.push(next);
+    current = next;
+  }
+}
+
+function deriveStudioImpactedNodes(
+  topology: FlowTopology,
+  failedNode: string,
+  downstreamImpactByNode: Map<string, number>,
+): Set<string> {
+  const impacted = new Set<string>([failedNode]);
+  const stack = [failedNode];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    const children = topology.outgoing.get(current);
+    if (!children) {
+      continue;
+    }
+    for (const child of children) {
+      if (!impacted.has(child) && downstreamImpactByNode.has(child)) {
+        impacted.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return impacted;
+}
+
+function deriveStudioImpactedNodeOrder(
+  topology: FlowTopology,
+  failedNode: string,
+  downstreamImpactByNode: Map<string, number>,
+): string[] {
+  const impacted = deriveStudioImpactedNodes(topology, failedNode, downstreamImpactByNode);
+  const ordered: string[] = [];
+  const visited = new Set<string>();
+  const stack = [failedNode];
+  while (stack.length) {
+    const current = stack.shift();
+    if (!current || visited.has(current) || !impacted.has(current)) {
+      continue;
+    }
+    visited.add(current);
+    ordered.push(current);
+    const children = (topology.outgoing.get(current) ?? [])
+      .filter((child) => impacted.has(child) && !visited.has(child))
+      .sort((left, right) => {
+        const leftSeq = downstreamImpactByNode.get(left) ?? Number.POSITIVE_INFINITY;
+        const rightSeq = downstreamImpactByNode.get(right) ?? Number.POSITIVE_INFINITY;
+        return leftSeq - rightSeq || left.localeCompare(right);
+      });
+    stack.push(...children);
+  }
+  for (const node of impacted) {
+    if (!visited.has(node)) {
+      ordered.push(node);
+    }
+  }
+  return ordered;
+}
+
+function isStudioErrorEvent(event: EventView): boolean {
+  const type = event.event_type.toLowerCase();
+  if (type.includes("error") || type.includes("failed")) {
+    return true;
+  }
+  return typeof event.payload.status === "string" && ["error", "failed"].includes(event.payload.status.toLowerCase());
+}
+
+function studioEventCausalClass(event: EventView, causalAnalysis: StudioRunCausalAnalysis): string {
+  if (!event.node) {
+    return "";
+  }
+  if (event.seq === causalAnalysis.failedEventSeq) {
+    return "timeline-item-causal-origin";
+  }
+  if (causalAnalysis.upstreamPath.includes(event.node) && event.seq <= (causalAnalysis.failedEventSeq ?? Number.NEGATIVE_INFINITY)) {
+    return "timeline-item-causal-upstream";
+  }
+  if (causalAnalysis.impactedNodes.includes(event.node)) {
+    return "timeline-item-causal-impact";
+  }
+  return "";
+}
+
+function toReactFlowGraph(
+  flow: AgentFlow | undefined,
+  selectedNodeId: string,
+  selectedEdgeId: string,
+  events: EventView[],
+  activeStudioNodeId: string,
+  causalAnalysis: StudioRunCausalAnalysis,
+): { nodes: Node[]; edges: Edge[] } {
   if (!flow) {
     return { nodes: [], edges: [] };
   }
+  const nodeStates = inferNodeExecutionStates(events);
+  const causalOrigin = causalAnalysis.failedNode ?? null;
+  const upstreamPathIndex = new Map<string, number>();
+  causalAnalysis.upstreamPath.forEach((nodeId, index) => upstreamPathIndex.set(nodeId, index));
+  const impactPathIndex = new Map<string, number>();
+  causalAnalysis.impactPath.forEach((nodeId, index) => impactPathIndex.set(nodeId, index));
   const nodeIds = ["start", ...flow.nodes.map((node) => node.id), "end"];
   const nodes: Node[] = nodeIds.map((id, index) => {
     const flowNode = flow.nodes.find((node) => node.id === id);
     const isVirtual = isVirtualNodeId(id);
+    const nodeState = nodeStates.get(id);
+    const isStudioActive = activeStudioNodeId === id;
+    const nodeCausalClass = id === causalOrigin
+      ? "status-causal-origin"
+      : upstreamPathIndex.has(id)
+        ? "status-causal-upstream"
+        : causalAnalysis.impactedNodes.includes(id)
+          ? "status-causal-impact"
+          : "";
     return {
       id,
       position: flowNode?.position ?? defaultNodePosition(index),
@@ -2652,22 +5623,45 @@ function toReactFlowGraph(flow: AgentFlow | undefined, selectedNodeId: string, s
         sublabel: flowNode?.type ?? "graph",
       },
       selected: selectedNodeId === id,
-      className: `flow-node ${isVirtual ? "virtual" : flowNode?.type ?? ""}`,
+      className: `flow-node ${isVirtual ? "virtual" : flowNode?.type ?? ""} ${
+        nodeState?.status ? `status-${nodeState.status}` : ""
+      } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""}`.trim(),
       draggable: !isVirtual,
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
     };
   });
 
-  const edges: Edge[] = flow.edges.map((edge, index) => ({
-    id: edgeId(edge, index),
-    source: edge.from,
-    target: edge.to,
-    label: edge.condition,
-    selected: selectedEdgeId === edgeId(edge, index),
-    markerEnd: { type: MarkerType.ArrowClosed },
-    className: edge.condition ? "conditional-edge" : "plain-edge",
-  }));
+  const edges: Edge[] = flow.edges.map((edge, index) => {
+    const edgeClass = edge.condition ? "conditional-edge" : "plain-edge";
+    const edgeExecution = inferEdgeExecutionStatus(edge, nodeStates);
+    const edgeExecutionClass = edgeExecution === "idle" ? "" : `status-${edgeExecution}-edge`;
+    const upstreamFrom = upstreamPathIndex.get(edge.from);
+    const upstreamTo = upstreamPathIndex.get(edge.to);
+    const impactFrom = impactPathIndex.get(edge.from);
+    const impactTo = impactPathIndex.get(edge.to);
+    const isCausalUpstreamEdge =
+      upstreamFrom !== undefined && upstreamTo !== undefined && upstreamTo - upstreamFrom === 1;
+    const isCausalImpactEdge = impactFrom !== undefined && impactTo !== undefined && impactTo - impactFrom === 1;
+    const isOriginEdge = Boolean(causalOrigin) && edge.to === causalOrigin && upstreamFrom !== undefined && upstreamTo === undefined;
+    const causalClass = isOriginEdge
+      ? "status-causal-origin-edge"
+      : isCausalUpstreamEdge
+        ? "status-causal-upstream-edge"
+        : isCausalImpactEdge
+          ? "status-causal-impact-edge"
+          : "";
+
+    return {
+      id: edgeId(edge, index),
+      source: edge.from,
+      target: edge.to,
+      label: edge.condition,
+      selected: selectedEdgeId === edgeId(edge, index),
+      markerEnd: { type: MarkerType.ArrowClosed },
+      className: `${edgeClass} ${edgeExecutionClass} ${causalClass}`.trim(),
+    };
+  });
   return { nodes, edges };
 }
 
@@ -2700,6 +5694,14 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
   }
   if (node.type === "code") {
     next.handler = node.handler ?? "handler_name";
+    next.codeLanguage = node.codeLanguage ?? "python";
+    next.codeExecution = node.codeExecution ?? "native";
+    next.codePath = node.codePath;
+    next.codeEntry = node.codeEntry ?? "run";
+    next.codeInline = node.codeInline;
+    next.codeDependencies = node.codeDependencies;
+    next.inputPath = node.inputPath ?? "state";
+    next.resultPath = node.resultPath ?? `custom.${node.id}`;
   }
   if (node.type === "http_request") {
     next.method = node.method ?? "POST";
@@ -2733,6 +5735,22 @@ function applyNodeTypeDefaults(node: FlowNode, flow: AgentFlow): FlowNode {
     next.contextPath = node.contextPath ?? `rag.${node.id}`;
     next.topK = node.topK ?? 3;
     next.chunkSize = node.chunkSize ?? 900;
+  }
+  if (node.type === "approval_gate") {
+    next.decisionPath = node.decisionPath ?? "approval.decision";
+    next.approvalValue = node.approvalValue ?? "approved";
+    next.rejectionValue = node.rejectionValue ?? "rejected";
+    next.resultPath = node.resultPath ?? `approvals.${node.id}`;
+  }
+  if (node.type === "scoring") {
+    next.inputPath = node.inputPath ?? "assistant_message";
+    next.resultPath = node.resultPath ?? `scores.${node.id}`;
+    next.threshold = node.threshold ?? 0.7;
+  }
+  if (node.type === "analytics") {
+    next.metricName = node.metricName ?? node.id;
+    next.payloadPath = node.payloadPath ?? "scores";
+    next.resultPath = node.resultPath ?? `analytics.${node.id}`;
   }
   return next;
 }
@@ -2780,8 +5798,226 @@ function validationMessage(result: ValidationResult): string {
   return `${result.name}: ${result.nodes} nós, ${result.edges} arestas, contrato ${result.contract}.`;
 }
 
-function generateMessage(result: GenerateResult): string {
-  return `Runtime gerado em ${result.outDir}.`;
+function langGraphSandboxMessage(result: GenerateResult): string {
+  return `Pacote LangGraph gerado em ${result.outDir}.`;
+}
+
+function approvalMessage(approval: LangGraphSandboxApproval): string {
+  return `Sandbox aprovado em ${approval.approvalPath} para ${approval.approvedFor}. Hash ${approval.flowHash.slice(0, 12)}.`;
+}
+
+function approvedRuntimeMessage(result: ApprovedGenerateResult): string {
+  return `API Docker aprovada gerada em ${result.outDir}. Hash ${result.approval.flowHash.slice(0, 12)}.`;
+}
+
+function artifactLooksLikeDockerRuntime(listing: GeneratedArtifactListing): boolean {
+  const paths = new Set(listing.files.map((file) => file.path));
+  return paths.has("Dockerfile") && paths.has("docker-compose.yml") && paths.has(".agent-flow/generated-meta.json");
+}
+
+async function runDockerRuntimeOperation(
+  operation: DockerRuntimeOperation,
+  outDir: string,
+  runtimeUrl: string,
+): Promise<DockerRuntimeOperationResult> {
+  if (operation === "prepare_env") {
+    return dockerRuntimePrepareEnv(outDir, runtimeUrl);
+  }
+  if (operation === "build") {
+    return dockerRuntimeBuild(outDir, runtimeUrl);
+  }
+  if (operation === "up") {
+    return dockerRuntimeUp(outDir, runtimeUrl);
+  }
+  if (operation === "down") {
+    return dockerRuntimeDown(outDir, runtimeUrl);
+  }
+  if (operation === "inspect") {
+    return dockerRuntimeInspect(outDir, runtimeUrl);
+  }
+  if (operation === "configure_ports") {
+    throw new Error("Use a ação de aplicar portas para atualizar o docker-compose.");
+  }
+  return dockerRuntimeSmoke(outDir, runtimeUrl);
+}
+
+function dockerOperationLabel(operation: DockerRuntimeOperation): string {
+  if (operation === "prepare_env") {
+    return "Preparando .env do runtime final";
+  }
+  if (operation === "build") {
+    return "Build Docker final";
+  }
+  if (operation === "up") {
+    return "Subindo container final";
+  }
+  if (operation === "down") {
+    return "Parando container final";
+  }
+  if (operation === "inspect") {
+    return "Inspecionando container final";
+  }
+  if (operation === "configure_ports") {
+    return "Atualizando portas Docker";
+  }
+  return "Executando smoke test";
+}
+
+function dockerOperationName(operation: DockerRuntimeOperation): string {
+  if (operation === "prepare_env") {
+    return "Prepare .env";
+  }
+  if (operation === "build") {
+    return "Build";
+  }
+  if (operation === "up") {
+    return "Up";
+  }
+  if (operation === "down") {
+    return "Down";
+  }
+  if (operation === "inspect") {
+    return "Inspect";
+  }
+  if (operation === "configure_ports") {
+    return "Portas";
+  }
+  return "Smoke";
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
+function loadStudioScenarios(flowId: string): StudioScenario[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(scenarioStorageKey(flowId));
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((item) => normalizeStudioScenario(item))
+      .filter((item): item is StudioScenario => item !== null)
+      .map(normalizeScenarioDefaults)
+      .sort((left, right) => sortStudioScenarios(left, right));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeStudioScenario(value: unknown): StudioScenario | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (typeof value.id !== "string" || !value.id.trim()) {
+    return null;
+  }
+  const createdAt = typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString();
+  const updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : createdAt;
+  return {
+    id: value.id,
+    label: typeof value.label === "string" ? value.label : "Cenário",
+    input: typeof value.input === "string" ? value.input : "",
+    tags: Array.isArray(value.tags)
+      ? value.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
+      : [],
+    isPinned: value.isPinned === true,
+    createdAt,
+    updatedAt,
+    lastUsedAt: value.lastUsedAt === null || typeof value.lastUsedAt === "string" ? value.lastUsedAt : null,
+  };
+}
+
+function normalizeScenarioDefaults(scenario: StudioScenario): StudioScenario {
+  const tags = Array.from(new Set(splitTags(scenario.tags.join(", "))));
+  const input = scenario.input.trim();
+  return {
+    ...scenario,
+    label: scenario.label.trim() || "Cenário",
+    input,
+    tags,
+  };
+}
+
+function scenarioStorageKey(flowId: string): string {
+  return `${scenarioStorageKeyPrefix}${flowId}`;
+}
+
+function sortStudioScenarios(left: StudioScenario, right: StudioScenario): number {
+  if (left.isPinned !== right.isPinned) {
+    return left.isPinned ? -1 : 1;
+  }
+  const leftLastUsed = left.lastUsedAt ? Date.parse(left.lastUsedAt) : Number.MIN_SAFE_INTEGER;
+  const rightLastUsed = right.lastUsedAt ? Date.parse(right.lastUsedAt) : Number.MIN_SAFE_INTEGER;
+  if (leftLastUsed !== rightLastUsed) {
+    return rightLastUsed - leftLastUsed;
+  }
+  return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+}
+
+function sortScenarios(scenarios: StudioScenario[]): StudioScenario[] {
+  return [...scenarios].sort((left, right) => sortStudioScenarios(left, right));
+}
+
+function splitTags(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .filter((item, index, all) => all.indexOf(item) === index);
+}
+
+function dockerRuntimeStatusLabel(
+  status: DockerRuntimeStatus | null,
+  busy: DockerRuntimeOperation | "refresh" | null,
+): string {
+  if (busy) {
+    return "executando";
+  }
+  if (!status) {
+    return "sem status";
+  }
+  if (status.lastStatus === "success") {
+    return "ok";
+  }
+  if (status.lastStatus === "error") {
+    return "erro";
+  }
+  return status.ready ? "pronto" : "pendente";
+}
+
+function dockerRuntimePillClass(status: DockerRuntimeStatus | null): string {
+  if (status?.lastStatus === "success") {
+    return "running";
+  }
+  if (status?.lastStatus === "error") {
+    return "stopped";
+  }
+  return "";
+}
+
+function dockerProgressClass(status: string): string {
+  if (status === "done" || status === "success") {
+    return "progress-done";
+  }
+  if (status === "warning") {
+    return "progress-warning";
+  }
+  if (status === "error") {
+    return "progress-error";
+  }
+  return "progress-running";
 }
 
 function manifestValidationMessage(result: RuntimeManifestValidationResult): string {
@@ -2802,6 +6038,54 @@ function parseSandboxPort(value: string): number | undefined {
     throw new Error("Porta do sandbox deve ser um inteiro entre 1024 e 65535.");
   }
   return port;
+}
+
+function parseStudioRunDurationInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function parsePortInput(value: string, label: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Porta ${label} deve ser um inteiro entre 1 e 65535.`);
+  }
+  return port;
+}
+
+function parsePositiveInteger(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function toIsoDateTime(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) {
+    throw new Error("from/to devem ser datas ISO válidas.");
+  }
+  return new Date(parsed).toISOString();
 }
 
 function formatBytes(sizeBytes: number): string {

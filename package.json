@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "validate:flow": "tsx packages/flow-spec/src/cli.ts flows/reference-interview/agent.flow.json",
     "codegen:reference": "tsx packages/codegen-langgraph/src/cli.ts --flow flows/reference-interview/agent.flow.json --out generated/reference-interview-runtime",
+    "codegen:sandbox": "tsx packages/codegen-langgraph/src/sandbox-cli.ts --flow flows/reference-interview/agent.flow.json --out generated/reference-interview-langgraph-sandbox",
     "codegen:manifest": "tsx packages/codegen-langgraph/src/manifest-cli.ts --manifest runtime.manifest.json --out generated/reference-runtime-bundle",
     "test:baseline": "python -m pytest -q examples/reference-interview-runtime",
     "test:generated": "python -m pytest -q generated/reference-interview-runtime",

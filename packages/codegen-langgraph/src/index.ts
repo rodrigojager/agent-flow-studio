@@ -1,8 +1,13 @@
-import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentFlow, RuntimeManifest } from "@agent-flow-builder/flow-spec";
 import { renderPythonMultiAgentBundleFiles } from "./pythonBundleTemplates.ts";
-import { renderPythonRuntimeFiles } from "./pythonRuntimeTemplates.ts";
+import {
+  renderPythonLangGraphSandboxFiles,
+  renderPythonRuntimeFiles,
+  type RuntimeFile,
+} from "./pythonRuntimeTemplates.ts";
 
 export interface GenerateOptions {
   flow: AgentFlow;
@@ -10,17 +15,41 @@ export interface GenerateOptions {
   outDir: string;
 }
 
+type GeneratedProjectTarget = "fastapi-runtime" | "langgraph-sandbox";
+
 export async function generateLangGraphRuntime(options: GenerateOptions): Promise<void> {
   const { flow, flowRoot, outDir } = options;
+  await generatePythonAgentProject({ flow, flowRoot, outDir, target: "fastapi-runtime", files: renderPythonRuntimeFiles(flow) });
+}
+
+export async function generateLangGraphSandbox(options: GenerateOptions): Promise<void> {
+  const { flow, flowRoot, outDir } = options;
+  await generatePythonAgentProject({
+    flow,
+    flowRoot,
+    outDir,
+    target: "langgraph-sandbox",
+    files: renderPythonLangGraphSandboxFiles(flow),
+  });
+}
+
+async function generatePythonAgentProject(options: GenerateOptions & { target: GeneratedProjectTarget; files: RuntimeFile[] }): Promise<void> {
+  const { flow, flowRoot, outDir, target, files } = options;
   await rm(outDir, { force: true, recursive: true });
   await mkdir(path.join(outDir, "app", "prompts"), { recursive: true });
   await mkdir(path.join(outDir, "app", "schemas"), { recursive: true });
   await mkdir(path.join(outDir, "app", "files"), { recursive: true });
+  await mkdir(path.join(outDir, "app", "code"), { recursive: true });
   await mkdir(path.join(outDir, ".agent-flow"), { recursive: true });
 
   await writeFile(
     path.join(outDir, ".agent-flow", "agent.flow.json"),
     `${JSON.stringify(flow, null, 2)}\n`,
+    "utf-8",
+  );
+  await writeFile(
+    path.join(outDir, ".agent-flow", "generated-meta.json"),
+    `${JSON.stringify(await generatedProjectMetadata(flow, flowRoot, target), null, 2)}\n`,
     "utf-8",
   );
 
@@ -39,11 +68,99 @@ export async function generateLangGraphRuntime(options: GenerateOptions): Promis
     await cp(filesRoot, path.join(outDir, "app", "files"), { recursive: true, force: true });
   }
 
-  for (const file of renderPythonRuntimeFiles(flow)) {
+  for (const codePath of codeAssetPaths(flow)) {
+    const source = path.join(flowRoot, codePath);
+    const target = path.join(outDir, "app", "code", codeArtifactPath(codePath));
+    await mkdir(path.dirname(target), { recursive: true });
+    await cp(source, target, { force: true });
+  }
+
+  for (const file of files) {
     const target = path.join(outDir, file.relativePath);
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, file.content, "utf-8");
   }
+}
+
+export function flowFingerprint(flow: AgentFlow): string {
+  return createHash("sha256").update(stableJson(flow)).digest("hex");
+}
+
+export async function flowProjectFingerprint(flow: AgentFlow, flowRoot: string): Promise<string> {
+  return createHash("sha256").update(stableJson({ flow, assets: await fingerprintAssets(flow, flowRoot) })).digest("hex");
+}
+
+async function generatedProjectMetadata(flow: AgentFlow, flowRoot: string, target: GeneratedProjectTarget) {
+  return {
+    target,
+    flowId: flow.id,
+    flowVersion: flow.version,
+    flowHash: await flowProjectFingerprint(flow, flowRoot),
+  };
+}
+
+interface FingerprintAsset {
+  kind: "prompt" | "schema" | "file" | "code";
+  path: string;
+  sha256: string;
+}
+
+async function fingerprintAssets(flow: AgentFlow, flowRoot: string): Promise<FingerprintAsset[]> {
+  const assets: FingerprintAsset[] = [];
+  for (const prompt of flow.prompts) {
+    assets.push(await fingerprintAsset(flowRoot, "prompt", prompt.path));
+  }
+  for (const schema of flow.schemas) {
+    assets.push(await fingerprintAsset(flowRoot, "schema", schema.path));
+  }
+  const filesRoot = path.join(flowRoot, "files");
+  if (await pathExists(filesRoot)) {
+    for (const relativePath of await listRelativeFiles(filesRoot)) {
+      assets.push(await fingerprintAsset(filesRoot, "file", relativePath));
+    }
+  }
+  for (const codePath of codeAssetPaths(flow)) {
+    assets.push(await fingerprintAsset(flowRoot, "code", codePath));
+  }
+  return assets.sort((left, right) => `${left.kind}:${left.path}`.localeCompare(`${right.kind}:${right.path}`));
+}
+
+async function fingerprintAsset(root: string, kind: FingerprintAsset["kind"], relativePath: string): Promise<FingerprintAsset> {
+  const content = await readFile(path.join(root, relativePath));
+  return {
+    kind,
+    path: relativePath.replaceAll(path.sep, "/"),
+    sha256: createHash("sha256").update(content).digest("hex"),
+  };
+}
+
+async function listRelativeFiles(root: string, current = ""): Promise<string[]> {
+  const absoluteCurrent = path.join(root, current);
+  const entries = await readdir(absoluteCurrent, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const relativePath = path.join(current, entry.name);
+    const absolutePath = path.join(root, relativePath);
+    if (entry.isDirectory()) {
+      files.push(...(await listRelativeFiles(root, relativePath)));
+    } else if (entry.isFile() || (await stat(absolutePath)).isFile()) {
+      files.push(relativePath);
+    }
+  }
+  return files.sort((left, right) => left.localeCompare(right));
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 async function pathExists(absolutePath: string): Promise<boolean> {
@@ -53,6 +170,30 @@ async function pathExists(absolutePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function codeAssetPaths(flow: AgentFlow): string[] {
+  return Array.from(
+    new Set(
+      flow.nodes
+        .filter((node) => node.type === "code" && typeof node.codePath === "string" && node.codePath.trim())
+        .map((node) => normalizeRelativeCodePath(String(node.codePath))),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeRelativeCodePath(value: string): string {
+  const normalized = value.trim().replaceAll("\\", "/");
+  const parts = normalized.split("/").filter(Boolean);
+  if (!parts.length || path.isAbsolute(normalized) || parts.includes("..")) {
+    throw new Error(`codePath inválido: ${value}`);
+  }
+  return parts.join("/");
+}
+
+function codeArtifactPath(value: string): string {
+  const normalized = normalizeRelativeCodePath(value);
+  return normalized.startsWith("code/") ? normalized.slice("code/".length) : normalized;
 }
 
 export interface ManifestAgentRuntime {

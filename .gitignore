@@ -10,3 +10,5 @@ dist/
 build/
 .tmp.driveupload/
 .tmp.drivedownload/
+.builder-api.log
+.playwright-mcp/

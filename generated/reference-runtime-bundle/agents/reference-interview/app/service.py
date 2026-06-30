@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app import repo
 from app.cache import recent_key
 from app.graph import (
+    ANALYTICS_NODE_IDS,
+    APPROVAL_GATE_NODE_IDS,
     CODE_NODE_IDS,
     CURRENT_DB_SESSION,
     DATABASE_QUERY_NODE_IDS,
@@ -18,6 +20,7 @@ from app.graph import (
     LLM_NODE_IDS,
     OUTPUT_SAFETY_NODE_IDS,
     RAG_RETRIEVAL_NODE_IDS,
+    SCORING_NODE_IDS,
     START_NODE_IDS,
     SWITCH_NODE_IDS,
     TRANSFORM_JSON_NODE_IDS,
@@ -320,6 +323,15 @@ class ReferenceAgentService:
             elif node_id in INPUT_SAFETY_NODE_IDS or node_id in OUTPUT_SAFETY_NODE_IDS:
                 payload["safety"] = result.get("safety") or {"blocked": False, "decision": "allow"}
             elif node_id in CODE_NODE_IDS:
+                custom_payload = (result.get("custom") or {}).get(node_id, {})
+                if custom_payload:
+                    if custom_payload.get("status") == "custom_code_executed":
+                        event_type = "custom_code_executed"
+                    elif custom_payload.get("status") == "custom_code_failed":
+                        event_type = "custom_code_failed"
+                    else:
+                        event_type = "custom_code_declared"
+                    payload["custom"] = custom_payload
                 payload["handler"] = "code"
             elif node_id in SWITCH_NODE_IDS:
                 event_type = "switch_evaluated"
@@ -351,6 +363,18 @@ class ReferenceAgentService:
                 event_type = "rag_retrieval_completed"
                 payload["handler"] = "rag_retrieval"
                 payload["rag"] = (result.get("rag") or {}).get(node_id, {})
+            elif node_id in APPROVAL_GATE_NODE_IDS:
+                event_type = "approval_gate_evaluated"
+                payload["handler"] = "approval_gate"
+                payload["approval"] = (result.get("approvals") or {}).get(node_id, {})
+            elif node_id in SCORING_NODE_IDS:
+                event_type = "scoring_completed"
+                payload["handler"] = "scoring"
+                payload["score"] = (result.get("scores") or {}).get(node_id, {})
+            elif node_id in ANALYTICS_NODE_IDS:
+                event_type = "analytics_recorded"
+                payload["handler"] = "analytics"
+                payload["analytics"] = (result.get("analytics") or {}).get(node_id, {})
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:

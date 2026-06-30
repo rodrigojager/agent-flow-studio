@@ -16,6 +16,7 @@ def set_test_env(db_path: str) -> None:
     os.environ["MOCK_LLM"] = "true"
     os.environ["AUTH_ENABLED"] = "false"
     os.environ["AUTO_CREATE_TABLES"] = "true"
+    os.environ["LANGSMITH_TRACING"] = "false"
 
     from app.settings import get_settings
 

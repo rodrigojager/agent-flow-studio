@@ -26,6 +26,12 @@ export interface FlowNode {
   promptId?: string;
   outputSchema?: string;
   handler?: string;
+  codeLanguage?: string;
+  codeExecution?: string;
+  codePath?: string;
+  codeInline?: string;
+  codeEntry?: string;
+  codeDependencies?: string;
   stage?: string;
   llm?: Record<string, unknown>;
   method?: string;
@@ -44,6 +50,12 @@ export interface FlowNode {
   collectionPath?: string;
   queryPath?: string;
   contextPath?: string;
+  decisionPath?: string;
+  approvalValue?: string;
+  rejectionValue?: string;
+  payloadPath?: string;
+  metricName?: string;
+  threshold?: number;
   topK?: number;
   chunkSize?: number;
   maxChars?: number;
@@ -163,6 +175,34 @@ export interface GenerateResult {
   outDir: string;
 }
 
+export interface LangGraphSandboxApproval {
+  status: "approved";
+  flowId: string;
+  flowVersion: string;
+  flowHash: string;
+  sandboxOutDir: string;
+  approvedFor: "fastapi-runtime";
+  approvalPath: string;
+  approvedAt: string;
+}
+
+export interface LangGraphSandboxApprovalStatus {
+  status: "approved" | "missing" | "outdated" | "invalid";
+  flowId: string;
+  flowVersion: string;
+  flowHash: string;
+  sandboxOutDir?: string;
+  approvedFor?: "fastapi-runtime";
+  approvalPath: string;
+  approvedAt?: string;
+  reason: string;
+  details?: unknown;
+}
+
+export interface ApprovedGenerateResult extends GenerateResult {
+  approval: LangGraphSandboxApproval;
+}
+
 export interface RuntimeManifestAgent {
   id: string;
   flowPath: string;
@@ -227,6 +267,132 @@ export interface GeneratedArtifactFileContent {
   content: string;
   sizeBytes: number;
   truncated: boolean;
+}
+
+export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect";
+export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error";
+
+export type DockerRuntimeProgressStatus = "running" | "done" | "error" | "warning" | "info";
+
+export interface DockerRuntimeProgressEvent {
+  stage: string;
+  status: DockerRuntimeProgressStatus;
+  message: string;
+  line: string;
+  percent?: number;
+  timestamp: string;
+}
+
+export interface DockerRuntimeSmokeResult {
+  health: unknown;
+  metadata: unknown;
+  sessionId: string;
+  transcriptCount: number;
+  eventsCount: number;
+}
+
+export interface DockerRuntimePortBinding {
+  service: "api" | "postgres" | "redis";
+  hostPort: number;
+  containerPort: number;
+  value: string;
+}
+
+export interface DockerRuntimePorts {
+  api: DockerRuntimePortBinding | null;
+  postgres: DockerRuntimePortBinding | null;
+  redis: DockerRuntimePortBinding | null;
+}
+
+export interface DockerRuntimePortUpdate {
+  api?: number;
+  postgres?: number;
+  redis?: number;
+}
+
+export interface DockerComposeService {
+  name: string | null;
+  service: string | null;
+  state: string | null;
+  status: string | null;
+  ports: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface DockerRuntimeInspection {
+  containers: DockerComposeService[];
+  rawPs: string;
+  rawLogs: string;
+}
+
+export interface DockerRuntimeStatus {
+  outDir: string;
+  ready: boolean;
+  target: "fastapi-runtime" | null;
+  flowId: string | null;
+  flowVersion: string | null;
+  flowHash: string | null;
+  resourceName: string | null;
+  runtimeUrl: string;
+  docsUrl: string;
+  openapiUrl: string;
+  ports: DockerRuntimePorts;
+  composeFile: boolean;
+  dockerfile: boolean;
+  envFile: boolean;
+  lastOperation: DockerRuntimeOperation | null;
+  lastStatus: DockerRuntimeOperationStatus;
+  lastExitCode: number | null;
+  updatedAt: string | null;
+  logs: string[];
+  inspection: DockerRuntimeInspection | null;
+  progress?: DockerRuntimeProgressEvent[];
+}
+
+export interface DockerRuntimeOperationResult extends DockerRuntimeStatus {
+  operation: DockerRuntimeOperation;
+  ok: boolean;
+  command?: string;
+  args?: string[];
+  stdout?: string;
+  stderr?: string;
+  smoke?: DockerRuntimeSmokeResult;
+  progress?: DockerRuntimeProgressEvent[];
+  message: string;
+}
+
+export interface DockerRuntimeHistoryEntry {
+  id: string;
+  outDir: string;
+  operation: DockerRuntimeOperation;
+  ok: boolean;
+  status: DockerRuntimeOperationStatus;
+  exitCode: number | null;
+  runtimeUrl: string;
+  startedAt: string;
+  finishedAt: string;
+  message: string;
+  command?: string;
+  args?: string[];
+  logs: string[];
+  smoke?: DockerRuntimeSmokeResult;
+  inspection?: DockerRuntimeInspection;
+  progress?: DockerRuntimeProgressEvent[];
+}
+
+export interface DockerRuntimeHistory {
+  outDir: string;
+  entries: DockerRuntimeHistoryEntry[];
+}
+
+export interface DockerRuntimeHistoryQuery {
+  limit?: number;
+  operation?: DockerRuntimeOperation;
+  status?: DockerRuntimeOperationStatus;
+  ok?: boolean;
+  search?: string;
+  from?: string;
+  to?: string;
 }
 
 export interface FlowAssetContent {
@@ -311,4 +477,144 @@ export interface EventView {
   event_type: string;
   node?: string | null;
   payload: Record<string, unknown>;
+}
+
+export interface StudioStateDiffEntry {
+  path: string;
+  kind: "added" | "removed" | "changed";
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface StudioStateSnapshot {
+  seq: number;
+  node: string | null;
+  eventType: string;
+  status: string | null;
+  phase: string | null;
+  turn: number | null;
+  state: Record<string, unknown>;
+  diff: StudioStateDiffEntry[];
+}
+
+export interface StudioRunCausalAnalysis {
+  failedEventSeq: number | null;
+  failedEventType: string | null;
+  failedNode: string | null;
+  upstreamPath: string[];
+  impactPath: string[];
+  impactedNodes: string[];
+}
+
+export interface StudioRunSummary {
+  id: string;
+  flowId: string;
+  flowVersion: string | null;
+  sessionId: string;
+  status: string;
+  phase: string;
+  turn: number;
+  maxTurns: number;
+  isComplete: boolean;
+  resourceName: string;
+  runtimeUrl: string;
+  messageCount: number;
+  eventCount: number;
+  snapshotCount: number;
+  nodeCount: number;
+  errorCount: number;
+  causalAnalysis: StudioRunCausalAnalysis | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface StudioRunQuery {
+  q?: string;
+  status?: string;
+  phase?: string;
+  hasErrors?: boolean;
+  isComplete?: boolean;
+  node?: string;
+  minDurationMs?: number;
+  maxDurationMs?: number;
+}
+
+export interface StudioRunExport {
+  format: "agent-flow-builder.studio-run-export.v1";
+  exportedAt: string;
+  flowId: string;
+  runId: string;
+  run: StudioRunRecord;
+}
+
+export interface StudioRunComparison {
+  format: "agent-flow-builder.studio-run-comparison.v1";
+  exportedAt: string;
+  flowId: string;
+  flowName: string | null;
+  leftRunId: string;
+  rightRunId: string;
+  left: StudioRunRecord;
+  right: StudioRunRecord;
+  metrics: {
+    statusChanged: boolean;
+    phaseChanged: boolean;
+    isCompleteChanged: boolean;
+    nodeCountDelta: number;
+    eventCountDelta: number;
+    errorCountDelta: number;
+    messageCountDelta: number;
+    runtimeUrlChanged: boolean;
+    durationMsLeft: number | null;
+    durationMsRight: number | null;
+    durationMsDelta: number | null;
+  };
+  nodeDiff: {
+    leftOnly: string[];
+    rightOnly: string[];
+    both: string[];
+  };
+  nodeComparisons: StudioNodeComparison[];
+  leftOnlyNodes: string[];
+  rightOnlyNodes: string[];
+}
+
+export interface StudioNodeComparison {
+  nodeId: string;
+  inLeft: boolean;
+  inRight: boolean;
+  changed: boolean;
+  stateDiff: StudioStateDiffEntry[];
+  outputDiff: StudioStateDiffEntry[];
+  left: {
+    seq: number | null;
+    eventType: string | null;
+    status: string | null;
+    phase: string | null;
+    turn: number | null;
+  };
+  right: {
+    seq: number | null;
+    eventType: string | null;
+    status: string | null;
+    phase: string | null;
+    turn: number | null;
+  };
+}
+
+export interface StudioRunRecord extends StudioRunSummary {
+  flowName: string | null;
+  runPath: string;
+  session: SessionView;
+  transcript: MessageView[];
+  events: EventView[];
+  stateSnapshots: StudioStateSnapshot[];
+  causalAnalysis: StudioRunCausalAnalysis | null;
+  logs: string[];
+}
+
+export interface StudioRunList {
+  flowId: string;
+  runs: StudioRunSummary[];
 }

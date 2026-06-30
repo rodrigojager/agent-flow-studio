@@ -16,6 +16,9 @@ export const NodeTypeSchema = z.enum([
   "database_save",
   "file_extract",
   "rag_retrieval",
+  "approval_gate",
+  "scoring",
+  "analytics",
 ]);
 
 export const PromptRefSchema = z.object({
@@ -141,6 +144,12 @@ export const NodeSchema = z
     promptId: z.string().min(1).optional(),
     outputSchema: z.string().min(1).optional(),
     handler: z.string().min(1).optional(),
+    codeLanguage: z.enum(["python", "typescript", "javascript", "external"]).optional(),
+    codeExecution: z.enum(["native", "inline", "file", "http", "mcp", "sidecar", "runtime_adapter"]).optional(),
+    codePath: z.string().min(1).optional(),
+    codeInline: z.string().min(1).optional(),
+    codeEntry: z.string().min(1).optional(),
+    codeDependencies: z.string().optional(),
     stage: z.enum(["input", "output", "context"]).optional(),
     llm: LlmConfigSchema.partial().optional(),
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
@@ -159,6 +168,12 @@ export const NodeSchema = z
     collectionPath: z.string().min(1).optional(),
     queryPath: z.string().min(1).optional(),
     contextPath: z.string().min(1).optional(),
+    decisionPath: z.string().min(1).optional(),
+    approvalValue: z.string().min(1).optional(),
+    rejectionValue: z.string().min(1).optional(),
+    payloadPath: z.string().min(1).optional(),
+    metricName: z.string().min(1).optional(),
+    threshold: z.number().min(0).max(1).optional(),
     topK: z.number().int().positive().max(20).optional(),
     chunkSize: z.number().int().positive().max(8000).optional(),
     maxChars: z.number().int().positive().max(1_000_000).optional(),
@@ -448,14 +463,43 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
         nodeId: node.id,
       });
     }
-    if (node.type === "code" && !node.handler) {
-      add({
-        severity: "warning",
-        code: "missing_handler",
-        message: `Nó ${node.id} não declara handler.`,
-        path: `nodes.${node.id}.handler`,
-        nodeId: node.id,
-      });
+    if (node.type === "code") {
+      if (!node.handler && !node.codePath && !node.codeInline) {
+        add({
+          severity: "warning",
+          code: "missing_code_contract",
+          message: `Nó ${node.id} precisa declarar handler, codePath ou codeInline para representar comportamento customizado.`,
+          path: `nodes.${node.id}`,
+          nodeId: node.id,
+        });
+      }
+      if (node.codePath && !isSafeRelativePath(node.codePath)) {
+        add({
+          severity: "warning",
+          code: "unsafe_code_path",
+          message: `codePath do nó ${node.id} deve ser relativo e não pode usar caminho absoluto ou '..'.`,
+          path: `nodes.${node.id}.codePath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.inputPath && !isValidStatePath(node.inputPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_code_input_path",
+          message: `inputPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.inputPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.resultPath && !isValidStatePath(node.resultPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_code_result_path",
+          message: `resultPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.resultPath`,
+          nodeId: node.id,
+        });
+      }
     }
     if (node.type === "http_request") {
       if (!node.url) {
@@ -627,6 +671,66 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
           code: "invalid_rag_context_path",
           message: `contextPath do nó ${node.id} deve ser um caminho simples de estado.`,
           path: `nodes.${node.id}.contextPath`,
+          nodeId: node.id,
+        });
+      }
+    }
+    if (node.type === "approval_gate") {
+      if (node.decisionPath && !isValidStatePath(node.decisionPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_approval_decision_path",
+          message: `decisionPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.decisionPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.resultPath && !isValidStatePath(node.resultPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_approval_result_path",
+          message: `resultPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.resultPath`,
+          nodeId: node.id,
+        });
+      }
+    }
+    if (node.type === "scoring") {
+      if (node.inputPath && !isValidStatePath(node.inputPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_scoring_input_path",
+          message: `inputPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.inputPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.resultPath && !isValidStatePath(node.resultPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_scoring_result_path",
+          message: `resultPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.resultPath`,
+          nodeId: node.id,
+        });
+      }
+    }
+    if (node.type === "analytics") {
+      if (node.payloadPath && !isValidStatePath(node.payloadPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_analytics_payload_path",
+          message: `payloadPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.payloadPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.resultPath && !isValidStatePath(node.resultPath)) {
+        add({
+          severity: "warning",
+          code: "invalid_analytics_result_path",
+          message: `resultPath do nó ${node.id} deve ser um caminho simples de estado.`,
+          path: `nodes.${node.id}.resultPath`,
           nodeId: node.id,
         });
       }

@@ -13,6 +13,12 @@ interface RuntimeNodeConfig {
   type: string;
   stage?: string;
   handler?: string;
+  codeLanguage?: string;
+  codeExecution?: string;
+  codePath?: string;
+  codeInline?: string;
+  codeEntry?: string;
+  codeDependencies?: string;
   promptFile?: string;
   llmAdapter?: string;
   llmModel?: string;
@@ -33,6 +39,12 @@ interface RuntimeNodeConfig {
   collectionPath?: string;
   queryPath?: string;
   contextPath?: string;
+  decisionPath?: string;
+  approvalValue?: string;
+  rejectionValue?: string;
+  payloadPath?: string;
+  metricName?: string;
+  threshold?: number;
   topK?: number;
   chunkSize?: number;
   maxChars?: number;
@@ -71,6 +83,7 @@ export function renderPythonRuntimeFiles(flow: AgentFlow): RuntimeFile[] {
   const plan = runtimePlan(flow);
   const serviceName = `${slug(flow.id)}-runtime`;
   return [
+    { relativePath: "langgraph.json", content: renderLangGraphConfig(flow) },
     { relativePath: "pyproject.toml", content: renderPyproject(flow, serviceName) },
     { relativePath: ".env.example", content: renderEnvExample(flow, serviceName) },
     { relativePath: "Dockerfile", content: renderDockerfile() },
@@ -87,13 +100,42 @@ export function renderPythonRuntimeFiles(flow: AgentFlow): RuntimeFile[] {
     { relativePath: "app/idempotency.py", content: renderIdempotency() },
     { relativePath: "app/safety.py", content: renderSafety() },
     { relativePath: "app/llm.py", content: renderLlm(flow) },
+    { relativePath: "app/code_runner.mjs", content: renderCodeRunner() },
+    { relativePath: "app/code/package.json", content: renderCodePackageJson() },
     { relativePath: "app/graph.py", content: renderGraph(flow, plan) },
     { relativePath: "app/schemas.py", content: renderSchemas() },
     { relativePath: "app/service.py", content: renderService() },
     { relativePath: "app/auth.py", content: renderAuth() },
     { relativePath: "app/main.py", content: renderMain(flow) },
+    { relativePath: "app/langgraph_app.py", content: renderLangGraphApp() },
     { relativePath: "tests/conftest.py", content: renderTestConftest() },
     { relativePath: "tests/test_generated_runtime.py", content: renderRuntimeTest() },
+    { relativePath: "tests/test_langgraph_platform.py", content: renderLangGraphPlatformTest() },
+  ];
+}
+
+export function renderPythonLangGraphSandboxFiles(flow: AgentFlow): RuntimeFile[] {
+  assertSupportedRuntime(flow);
+  const plan = runtimePlan(flow);
+  const serviceName = `${slug(flow.id)}-langgraph-sandbox`;
+  return [
+    { relativePath: "langgraph.json", content: renderLangGraphConfig(flow) },
+    { relativePath: "pyproject.toml", content: renderLangGraphSandboxPyproject(flow, serviceName) },
+    { relativePath: ".env.example", content: renderLangGraphSandboxEnvExample(flow, serviceName) },
+    { relativePath: "README.md", content: renderLangGraphSandboxReadme(flow) },
+    { relativePath: "app/__init__.py", content: "" },
+    { relativePath: "app/generated_flow.py", content: renderGeneratedFlow(flow) },
+    { relativePath: "app/settings.py", content: renderSettings(flow, serviceName) },
+    { relativePath: "app/db.py", content: renderDb() },
+    { relativePath: "app/models.py", content: renderModels() },
+    { relativePath: "app/safety.py", content: renderSafety() },
+    { relativePath: "app/llm.py", content: renderLlm(flow) },
+    { relativePath: "app/code_runner.mjs", content: renderCodeRunner() },
+    { relativePath: "app/code/package.json", content: renderCodePackageJson() },
+    { relativePath: "app/graph.py", content: renderGraph(flow, plan) },
+    { relativePath: "app/langgraph_app.py", content: renderLangGraphApp() },
+    { relativePath: "tests/conftest.py", content: renderTestConftest() },
+    { relativePath: "tests/test_langgraph_platform.py", content: renderLangGraphPlatformTest() },
   ];
 }
 
@@ -188,6 +230,12 @@ function runtimeNodeConfig(flow: AgentFlow, node: FlowNode, defaultPromptPath: s
     type: node.type,
     stage: node.stage,
     handler: node.handler,
+    codeLanguage: optionalString(node, "codeLanguage"),
+    codeExecution: optionalString(node, "codeExecution"),
+    codePath: optionalString(node, "codePath"),
+    codeInline: optionalString(node, "codeInline"),
+    codeEntry: optionalString(node, "codeEntry"),
+    codeDependencies: optionalString(node, "codeDependencies"),
     promptFile: basename(prompt?.path ?? defaultPromptPath),
     llmAdapter: node.llm?.adapter,
     llmModel: node.llm?.model,
@@ -208,6 +256,12 @@ function runtimeNodeConfig(flow: AgentFlow, node: FlowNode, defaultPromptPath: s
     collectionPath: optionalString(node, "collectionPath"),
     queryPath: optionalString(node, "queryPath"),
     contextPath: optionalString(node, "contextPath"),
+    decisionPath: optionalString(node, "decisionPath"),
+    approvalValue: optionalString(node, "approvalValue"),
+    rejectionValue: optionalString(node, "rejectionValue"),
+    payloadPath: optionalString(node, "payloadPath"),
+    metricName: optionalString(node, "metricName"),
+    threshold: optionalNumber(node, "threshold"),
     topK: optionalNumber(node, "topK"),
     chunkSize: optionalNumber(node, "chunkSize"),
     maxChars: optionalNumber(node, "maxChars"),
@@ -320,6 +374,21 @@ function pyJson(value: unknown): string {
   return JSON.stringify(JSON.stringify(value, null, 2));
 }
 
+function renderLangGraphConfig(flow: AgentFlow): string {
+  return `${JSON.stringify(
+    {
+      dependencies: ["."],
+      graphs: {
+        [slug(flow.id).replace(/-/g, "_") || "agent"]: "./app/langgraph_app.py:graph",
+      },
+      env: ".env",
+      python_version: "3.12",
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 function renderPyproject(flow: AgentFlow, serviceName: string): string {
   return `[project]
 name = "${serviceName}"
@@ -356,6 +425,40 @@ include = ["app*"]
 `;
 }
 
+function renderLangGraphSandboxPyproject(flow: AgentFlow, serviceName: string): string {
+  return `[project]
+name = "${serviceName}"
+version = "${flow.version}"
+description = "Artefato LangGraph Platform gerado para sandbox de ${flow.name}."
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic-settings",
+  "sqlalchemy",
+  "psycopg2-binary",
+  "redis",
+  "openai",
+  "langgraph",
+  "langgraph-checkpoint-postgres",
+  "psycopg[binary,pool]",
+  "python-dotenv",
+  "pypdf",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "langgraph-cli[inmem]",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+`;
+}
+
 function renderEnvExample(flow: AgentFlow, serviceName: string): string {
   const postgresCheckpointer = flow.persistence.checkpointer === "postgres" ? "true" : "false";
   const redisEnabled = flow.persistence.cache === "redis" ? "true" : "false";
@@ -374,6 +477,31 @@ AUTH_ENABLED=false
 AGENT_API_KEY=
 AUTO_CREATE_TABLES=true
 LOG_LEVEL=INFO
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=${serviceName}
+`;
+}
+
+function renderLangGraphSandboxEnvExample(flow: AgentFlow, serviceName: string): string {
+  return `SERVICE_NAME=${serviceName}
+DATABASE_URL=sqlite:///./langgraph_sandbox.db
+REDIS_URL=redis://localhost:6380/0
+REDIS_ENABLED=false
+USE_POSTGRES_CHECKPOINTER=false
+MOCK_LLM=true
+OPENAI_API_KEY=
+OPENAI_MODEL=${flow.llm.model}
+OPENAI_BASE_URL=
+LLM_ADAPTER=${flow.llm.adapter}
+LLM_MAX_RETRIES=2
+AUTH_ENABLED=false
+AGENT_API_KEY=
+AUTO_CREATE_TABLES=true
+LOG_LEVEL=INFO
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=${serviceName}
 `;
 }
 
@@ -385,6 +513,10 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends nodejs npm \\
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 
@@ -394,6 +526,83 @@ COPY migrations ./migrations
 EXPOSE 8080
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+`;
+}
+
+function renderCodePackageJson(): string {
+  return `{"type":"module"}
+`;
+}
+
+function renderCodeRunner(): string {
+  return `import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      data += chunk;
+    });
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
+}
+
+function serializeError(error) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+  return { message: String(error) };
+}
+
+async function loadModule(request) {
+  if (request.sourcePath) {
+    const url = pathToFileURL(request.sourcePath);
+    url.searchParams.set("t", String(Date.now()));
+    return import(url.href);
+  }
+
+  if (!request.inlineSource) {
+    throw new Error("missing_code_source");
+  }
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-flow-js-"));
+  const inlinePath = path.join(tempDir, "inline.mjs");
+  await writeFile(inlinePath, request.inlineSource, "utf8");
+  try {
+    const url = pathToFileURL(inlinePath);
+    url.searchParams.set("t", String(Date.now()));
+    return await import(url.href);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function main() {
+  const raw = await readStdin();
+  const request = raw ? JSON.parse(raw) : {};
+  const module = await loadModule(request);
+  const entryName = request.entry || "run";
+  const entry = module[entryName] || module.default;
+  if (typeof entry !== "function") {
+    throw new Error("Entry point not found or not callable: " + entryName);
+  }
+  const output = await entry(request.input, request.context || {});
+  process.stdout.write(JSON.stringify({ ok: true, output }));
+}
+
+main().catch((error) => {
+  process.stdout.write(JSON.stringify({ ok: false, error: serializeError(error) }));
+  process.exitCode = 1;
+});
 `;
 }
 
@@ -467,6 +676,57 @@ pytest -q
 uvicorn app.main:app --reload --port 8080
 \`\`\`
 
+Se o fluxo usa nó \`code\` em JavaScript, o ambiente local também precisa ter \`node\` disponível. O Dockerfile gerado já instala \`nodejs\` e \`npm\` para executar esses nós no container final.
+
+## Container Docker
+
+\`\`\`powershell
+Copy-Item .env.example .env
+docker compose up --build
+\`\`\`
+
+A API fica em \`http://127.0.0.1:8080/docs\`.
+
+## Validação LangSmith/LangGraph
+
+Para testar no sandbox LangSmith/LangGraph, gere o pacote separado pelo botão \`LangGraph\` do builder ou pelo script \`npm run codegen:sandbox\`. Esse runtime é o alvo final FastAPI/Docker e não instala o CLI do LangGraph para evitar conflito de dependências com FastAPI.
+
+Este pacote ainda inclui \`langgraph.json\` e \`app/langgraph_app.py\` para rastreabilidade do grafo aprovado, mas o artefato preferencial para upload/teste no LangSmith é \`generated/${flow.id}-langgraph-sandbox\`.
+
+## Nós
+
+${flow.nodes.map((node) => `- \`${node.id}\` (${node.type})`).join("\n")}
+`;
+}
+
+function renderLangGraphSandboxReadme(flow: AgentFlow): string {
+  return `# ${flow.name} - Sandbox LangGraph
+
+Artefato gerado a partir de \`${flow.id}\` para validação no sandbox LangSmith/LangGraph.
+
+Este pacote não é o runtime FastAPI/Docker final.
+
+## Execução
+
+\`\`\`powershell
+Copy-Item .env.example .env
+python -m pip install -e ".[dev]"
+pytest -q
+langgraph dev
+\`\`\`
+
+Configure \`LANGSMITH_API_KEY\`, \`LANGSMITH_TRACING=true\` e \`LANGSMITH_PROJECT\` em \`.env\` para registrar traces no LangSmith.
+Para testar sem chamada real de modelo, mantenha \`MOCK_LLM=true\`.
+
+## Entry Point
+
+- \`langgraph.json\`
+- \`app/langgraph_app.py:graph\`
+
+## Depois da aprovação
+
+Volte ao builder, registre a aprovação do sandbox e gere o runtime FastAPI/Docker. O builder valida o hash do flow aprovado antes de criar o pacote final da API.
+
 ## Nós
 
 ${flow.nodes.map((node) => `- \`${node.id}\` (${node.type})`).join("\n")}
@@ -522,6 +782,9 @@ class Settings(BaseSettings):
     agent_api_key: str = ""
     auto_create_tables: bool = True
     log_level: str = "INFO"
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -1198,7 +1461,11 @@ def load_prompt(name: str = "system.md") -> str:
 
 function renderGraph(flow: AgentFlow, plan: RuntimePlan): string {
   return `import atexit
+import inspect
 import json
+import subprocess
+import time
+import traceback
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -1229,6 +1496,7 @@ NODE_ROUTE_CONDITIONS = json.loads(${pyJson(plan.nodeRouteConditions)})
 START_MESSAGE = ${pyString(`Olá! Este é o ${flow.name}. Envie uma mensagem para eu ecoar o fluxo com segurança, LLM e estado.`)}
 CURRENT_DB_SESSION = ContextVar("CURRENT_DB_SESSION", default=None)
 FILES_ROOT = Path(__file__).resolve().parent / "files"
+CODE_ROOT = Path(__file__).resolve().parent / "code"
 
 
 @contextmanager
@@ -1270,6 +1538,9 @@ DATABASE_QUERY_NODE_IDS = _node_ids(node_type="database_query")
 DATABASE_SAVE_NODE_IDS = _node_ids(node_type="database_save")
 FILE_EXTRACT_NODE_IDS = _node_ids(node_type="file_extract")
 RAG_RETRIEVAL_NODE_IDS = _node_ids(node_type="rag_retrieval")
+APPROVAL_GATE_NODE_IDS = _node_ids(node_type="approval_gate")
+SCORING_NODE_IDS = _node_ids(node_type="scoring")
+ANALYTICS_NODE_IDS = _node_ids(node_type="analytics")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -1289,6 +1560,10 @@ class ReferenceState(TypedDict, total=False):
     database: dict[str, Any]
     files: dict[str, Any]
     rag: dict[str, Any]
+    approvals: dict[str, Any]
+    scores: dict[str, Any]
+    analytics: dict[str, Any]
+    custom: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -1350,6 +1625,8 @@ def build_graph(
         return {**updates, "executed_nodes": executed}
 
     def state_path_value(state: ReferenceState, path: str):
+        if not path or str(path).strip() in {"state", "."}:
+            return state
         current: Any = state
         normalized = str(path or "").removeprefix("state.")
         for part in normalized.split("."):
@@ -1427,6 +1704,219 @@ def build_graph(
             raise ValueError("Caminho de arquivo sai de app/files.")
         return resolved
 
+    def safe_code_path(relative_path: str) -> Path:
+        raw_path = str(relative_path or "").replace("\\\\", "/")
+        candidate = Path(raw_path)
+        if candidate.parts and candidate.parts[0] == "code":
+            candidate = Path(*candidate.parts[1:]) if len(candidate.parts) > 1 else Path("")
+        if not candidate.parts or candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError("codePath deve ser relativo a app/code e não pode usar '..'.")
+        resolved = (CODE_ROOT / candidate).resolve()
+        root = CODE_ROOT.resolve()
+        if root not in [resolved, *resolved.parents]:
+            raise ValueError("codePath sai de app/code.")
+        return resolved
+
+    def call_custom_entry(entry: Any, input_value: Any, context: dict[str, Any]) -> Any:
+        signature = inspect.signature(entry)
+        positional = [
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+        ]
+        has_varargs = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in signature.parameters.values())
+        if has_varargs or len(positional) >= 2:
+            return entry(input_value, context)
+        if len(positional) == 1:
+            return entry(input_value)
+        return entry()
+
+    def execute_custom_python_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        entry_name = str(config.get("codeEntry") or "run")
+        source_path = config.get("codePath")
+        inline_source = config.get("codeInline")
+        if inline_source:
+            source = str(inline_source)
+            filename = f"<agent-flow:{node_id}>"
+        elif source_path:
+            path = safe_code_path(str(source_path))
+            source = path.read_text(encoding="utf-8")
+            filename = str(path)
+        else:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "missing_code_source",
+            }
+
+        namespace: dict[str, Any] = {
+            "__builtins__": __builtins__,
+            "json": json,
+            "Path": Path,
+        }
+        exec(compile(source, filename, "exec"), namespace)
+        entry = namespace.get(entry_name)
+        if not callable(entry):
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": f"Entry point não encontrado ou não chamável: {entry_name}",
+            }
+
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        context = {
+            "node_id": node_id,
+            "session_id": state.get("session_id"),
+            "turn": state.get("turn"),
+            "input_path": input_path,
+            "state": state,
+            "settings": settings,
+            "llm_client": llm_client,
+            "state_path_value": state_path_value,
+            "jsonable": jsonable,
+        }
+        output = call_custom_entry(entry, input_value, context)
+        return {
+            "ok": True,
+            "status": "custom_code_executed",
+            "node_id": node_id,
+            "contract": contract,
+            "output": jsonable(output),
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def execute_custom_javascript_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        entry_name = str(config.get("codeEntry") or "run")
+        source_path = config.get("codePath")
+        inline_source = config.get("codeInline")
+        request: dict[str, Any] = {
+            "entry": entry_name,
+        }
+        if inline_source:
+            request["inlineSource"] = str(inline_source)
+        elif source_path:
+            request["sourcePath"] = str(safe_code_path(str(source_path)))
+        else:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "missing_code_source",
+            }
+
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        request["input"] = jsonable(input_value)
+        request["context"] = {
+            "node_id": node_id,
+            "session_id": state.get("session_id"),
+            "turn": state.get("turn"),
+            "input_path": input_path,
+            "state": jsonable(state),
+        }
+
+        runner_path = Path(__file__).resolve().parent / "code_runner.mjs"
+        timeout_seconds = int(config.get("timeoutSeconds") or 30)
+        completed = subprocess.run(
+            ["node", str(runner_path)],
+            input=json.dumps(request),
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        try:
+            runner_result = json.loads(stdout) if stdout else {}
+        except json.JSONDecodeError:
+            runner_result = {"ok": False, "error": {"message": stdout or "empty_node_output"}}
+        if completed.returncode != 0 or not runner_result.get("ok"):
+            error = runner_result.get("error")
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": error.get("message") if isinstance(error, dict) else str(error or "javascript_runner_failed"),
+                "stderr": stderr,
+            }
+        return {
+            "ok": True,
+            "status": "custom_code_executed",
+            "node_id": node_id,
+            "contract": contract,
+            "output": jsonable(runner_result.get("output")),
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def execute_custom_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        language = str(config.get("codeLanguage") or "python").lower()
+        execution = str(config.get("codeExecution") or "native").lower()
+        if language == "external" or execution in {"http", "mcp", "sidecar", "runtime_adapter"}:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": config["id"],
+                "contract": contract,
+                "reason": "external_executor_not_configured",
+            }
+        if language in {"javascript", "js"}:
+            try:
+                return execute_custom_javascript_code(config, state, contract)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "status": "custom_code_failed",
+                    "node_id": config["id"],
+                    "contract": contract,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(limit=5),
+                }
+        if language not in {"python", "py"}:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": config["id"],
+                "contract": contract,
+                "reason": "unsupported_language",
+            }
+        try:
+            return execute_custom_python_code(config, state, contract)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": config["id"],
+                "contract": contract,
+                "error": str(exc),
+                "traceback": traceback.format_exc(limit=5),
+            }
+
+    def remember_custom_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        custom_results = dict(state.get("custom") or {})
+        custom_results[node_id] = result
+        updates["custom"] = custom_results
+        if result.get("ok") and result_path != f"custom.{node_id}":
+            assign_state_path(updates, state, result_path, result.get("output"))
+        if not result.get("ok") and result.get("status") == "custom_code_failed":
+            updates["status"] = "error"
+            updates["phase"] = "failed"
+            updates["is_complete"] = True
+            updates["assistant_message"] = {"code": "ERR", "text": f"Falha no código customizado do nó {node_id}."}
+        return mark_node(state, node_id, updates)
+
     def read_asset_text(relative_path: str, max_chars: int) -> dict[str, Any]:
         path = safe_asset_path(relative_path)
         if not path.exists() or not path.is_file():
@@ -1497,6 +1987,38 @@ def build_graph(
         updates["rag"] = rag_results
         if context_path != f"rag.{node_id}":
             assign_state_path(updates, state, context_path, result)
+        return mark_node(state, node_id, updates)
+
+    def remember_approval_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        approval_results = dict(state.get("approvals") or {})
+        approval_results[node_id] = result
+        updates["approvals"] = approval_results
+        if result["decision"] == "pending":
+            updates["status"] = "active"
+            updates["phase"] = "awaiting_approval"
+            updates["is_complete"] = False
+            updates["assistant_message"] = {"code": "APR", "text": "Aguardando aprovação humana."}
+        if result_path != f"approvals.{node_id}":
+            assign_state_path(updates, state, result_path, result)
+        return mark_node(state, node_id, updates)
+
+    def remember_score_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        score_results = dict(state.get("scores") or {})
+        score_results[node_id] = result
+        updates["scores"] = score_results
+        if result_path != f"scores.{node_id}":
+            assign_state_path(updates, state, result_path, result)
+        return mark_node(state, node_id, updates)
+
+    def remember_analytics_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        analytics_results = dict(state.get("analytics") or {})
+        analytics_results[node_id] = result
+        updates["analytics"] = analytics_results
+        if result_path != f"analytics.{node_id}":
+            assign_state_path(updates, state, result_path, result)
         return mark_node(state, node_id, updates)
 
     def make_start_node(config: dict[str, Any]):
@@ -1588,6 +2110,16 @@ def build_graph(
     def make_code_node(config: dict[str, Any]):
         node_id = config["id"]
         handler = config.get("handler")
+        result_path = str(config.get("resultPath") or f"custom.{node_id}")
+        custom_contract = {
+            "language": config.get("codeLanguage"),
+            "execution": config.get("codeExecution"),
+            "path": config.get("codePath"),
+            "entry": config.get("codeEntry"),
+            "input_path": config.get("inputPath"),
+            "has_inline_code": bool(config.get("codeInline")),
+            "dependencies": config.get("codeDependencies"),
+        }
 
         def deterministic_gate(state: ReferenceState) -> ReferenceState:
             next_turn = int(state.get("turn") or 0) + 1
@@ -1611,10 +2143,13 @@ def build_graph(
                 "is_complete": False,
             })
 
-        def noop_code(state: ReferenceState) -> ReferenceState:
-            return mark_node(state, node_id, {})
+        def run_custom_code(state: ReferenceState) -> ReferenceState:
+            contract = {key: value for key, value in custom_contract.items() if value not in (None, "", False)}
+            if not contract:
+                return mark_node(state, node_id, {})
+            return remember_custom_result(state, node_id, result_path, execute_custom_code(config, state, contract))
 
-        return deterministic_gate if handler == "deterministic_gate" else noop_code
+        return deterministic_gate if handler == "deterministic_gate" else run_custom_code
 
     def make_switch_node(config: dict[str, Any]):
         node_id = config["id"]
@@ -1921,6 +2456,128 @@ def build_graph(
 
         return run
 
+    def make_approval_gate_node(config: dict[str, Any]):
+        node_id = config["id"]
+        decision_path = str(config.get("decisionPath") or "approval.decision")
+        approval_value = str(config.get("approvalValue") or "approved").lower()
+        rejection_value = str(config.get("rejectionValue") or "rejected").lower()
+        result_path = str(config.get("resultPath") or f"approvals.{node_id}")
+
+        def normalize_decision(value: Any) -> str:
+            if value is True:
+                return "approved"
+            if value is False:
+                return "rejected"
+            text_value = str(value or "").strip().lower()
+            approved_values = {approval_value, "approved", "approve", "aprovado", "aprovar", "sim", "yes", "ok", "true"}
+            rejected_values = {rejection_value, "rejected", "reject", "reprovado", "rejeitar", "não", "nao", "no", "false"}
+            if text_value in approved_values or any(token in text_value for token in approved_values if len(token) >= 3):
+                return "approved"
+            if text_value in rejected_values or any(token in text_value for token in rejected_values if len(token) >= 3):
+                return "rejected"
+            return "pending"
+
+        def run(state: ReferenceState) -> ReferenceState:
+            raw_value = state_path_value(state, decision_path)
+            decision = normalize_decision(raw_value)
+            result_payload = {
+                "decision": decision,
+                "approved": decision == "approved",
+                "rejected": decision == "rejected",
+                "pending": decision == "pending",
+                "decision_path": decision_path,
+                "raw_value": jsonable(raw_value),
+            }
+            return remember_approval_result(state, node_id, result_path, result_payload)
+
+        return run
+
+    def make_scoring_node(config: dict[str, Any]):
+        node_id = config["id"]
+        input_path = str(config.get("inputPath") or "assistant_message")
+        result_path = str(config.get("resultPath") or f"scores.{node_id}")
+        threshold = float(config.get("threshold") if config.get("threshold") is not None else 0.7)
+
+        def score_value(value: Any) -> float:
+            if isinstance(value, dict):
+                for key in ("score", "confidence", "rating"):
+                    candidate = value.get(key)
+                    if isinstance(candidate, (int, float)):
+                        return max(0.0, min(1.0, float(candidate)))
+                text_value = " ".join(str(item) for item in value.values())
+            else:
+                text_value = str(value or "")
+            lowered = text_value.lower()
+            positive = {"accepted", "approved", "adequado", "correto", "bom", "ok", "sim"}
+            negative = {"rejected", "bloqueado", "ruim", "incorreto", "não", "nao"}
+            if any(term in lowered for term in positive):
+                return 1.0
+            if any(term in lowered for term in negative):
+                return 0.0
+            words = [word for word in lowered.replace("\\n", " ").split(" ") if len(word) >= 3]
+            return max(0.1, min(1.0, len(words) / 30))
+
+        def run(state: ReferenceState) -> ReferenceState:
+            value = state_path_value(state, input_path)
+            score = score_value(value)
+            result_payload = {
+                "score": score,
+                "threshold": threshold,
+                "passed": score >= threshold,
+                "input_path": input_path,
+                "value": jsonable(value),
+            }
+            return remember_score_result(state, node_id, result_path, result_payload)
+
+        return run
+
+    def make_analytics_node(config: dict[str, Any]):
+        node_id = config["id"]
+        metric_name = str(config.get("metricName") or node_id)
+        payload_path = str(config.get("payloadPath") or "")
+        result_path = str(config.get("resultPath") or f"analytics.{node_id}")
+
+        def run(state: ReferenceState) -> ReferenceState:
+            payload = jsonable(state_path_value(state, payload_path)) if payload_path else {
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "status": state.get("status"),
+                "phase": state.get("phase"),
+            }
+            try:
+                with graph_session_scope() as db:
+                    record_id = str(uuid4())
+                    db.add(
+                        AgentNodeRecord(
+                            record_id=record_id,
+                            session_id=str(state.get("session_id") or ""),
+                            node_id=node_id,
+                            payload_json={
+                                "kind": "analytics",
+                                "metric_name": metric_name,
+                                "payload": payload,
+                            },
+                        )
+                    )
+                    db.flush()
+                result_payload = {
+                    "ok": True,
+                    "metric_name": metric_name,
+                    "payload_path": payload_path,
+                    "payload": payload,
+                    "record_id": record_id,
+                }
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "metric_name": metric_name,
+                    "payload_path": payload_path,
+                    "error": str(exc),
+                }
+            return remember_analytics_result(state, node_id, result_path, result_payload)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -1968,6 +2625,12 @@ def build_graph(
             return make_file_extract_node(config)
         if node_type == "rag_retrieval":
             return make_rag_retrieval_node(config)
+        if node_type == "approval_gate":
+            return make_approval_gate_node(config)
+        if node_type == "scoring":
+            return make_scoring_node(config)
+        if node_type == "analytics":
+            return make_analytics_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)
@@ -2141,6 +2804,8 @@ from sqlalchemy.orm import Session
 from app import repo
 from app.cache import recent_key
 from app.graph import (
+    ANALYTICS_NODE_IDS,
+    APPROVAL_GATE_NODE_IDS,
     CODE_NODE_IDS,
     CURRENT_DB_SESSION,
     DATABASE_QUERY_NODE_IDS,
@@ -2153,6 +2818,7 @@ from app.graph import (
     LLM_NODE_IDS,
     OUTPUT_SAFETY_NODE_IDS,
     RAG_RETRIEVAL_NODE_IDS,
+    SCORING_NODE_IDS,
     START_NODE_IDS,
     SWITCH_NODE_IDS,
     TRANSFORM_JSON_NODE_IDS,
@@ -2455,6 +3121,15 @@ class ReferenceAgentService:
             elif node_id in INPUT_SAFETY_NODE_IDS or node_id in OUTPUT_SAFETY_NODE_IDS:
                 payload["safety"] = result.get("safety") or {"blocked": False, "decision": "allow"}
             elif node_id in CODE_NODE_IDS:
+                custom_payload = (result.get("custom") or {}).get(node_id, {})
+                if custom_payload:
+                    if custom_payload.get("status") == "custom_code_executed":
+                        event_type = "custom_code_executed"
+                    elif custom_payload.get("status") == "custom_code_failed":
+                        event_type = "custom_code_failed"
+                    else:
+                        event_type = "custom_code_declared"
+                    payload["custom"] = custom_payload
                 payload["handler"] = "code"
             elif node_id in SWITCH_NODE_IDS:
                 event_type = "switch_evaluated"
@@ -2486,6 +3161,18 @@ class ReferenceAgentService:
                 event_type = "rag_retrieval_completed"
                 payload["handler"] = "rag_retrieval"
                 payload["rag"] = (result.get("rag") or {}).get(node_id, {})
+            elif node_id in APPROVAL_GATE_NODE_IDS:
+                event_type = "approval_gate_evaluated"
+                payload["handler"] = "approval_gate"
+                payload["approval"] = (result.get("approvals") or {}).get(node_id, {})
+            elif node_id in SCORING_NODE_IDS:
+                event_type = "scoring_completed"
+                payload["handler"] = "scoring"
+                payload["score"] = (result.get("scores") or {}).get(node_id, {})
+            elif node_id in ANALYTICS_NODE_IDS:
+                event_type = "analytics_recorded"
+                payload["handler"] = "analytics"
+                payload["analytics"] = (result.get("analytics") or {}).get(node_id, {})
             elif node_id in START_NODE_IDS:
                 payload["handler"] = "start"
             elif node_id in FINISH_NODE_IDS:
@@ -2752,6 +3439,37 @@ app = create_app()
 `;
 }
 
+function renderLangGraphApp(): string {
+  return `"""Entrypoint do LangGraph Platform para sandbox LangSmith/LangGraph.
+
+Este modulo exporta \`graph\` no formato esperado por \`langgraph.json\`.
+O runtime FastAPI continua em \`app.main:app\`; este arquivo existe para
+validar o comportamento do agente no sandbox antes do empacotamento final.
+"""
+
+from app.db import init_db
+from app.graph import build_graph
+from app.llm import LLMClient
+from app.safety import SafetyGate
+from app.settings import get_settings
+
+
+settings = get_settings()
+if settings.auto_create_tables:
+    init_db()
+
+llm_client = LLMClient(settings)
+safety_gate = SafetyGate()
+
+graph = build_graph(
+    settings=settings,
+    llm_client=llm_client,
+    safety_gate=safety_gate,
+    checkpointer=None,
+)
+`;
+}
+
 function renderTestConftest(): string {
   return `import os
 import sys
@@ -2771,10 +3489,43 @@ def set_test_env(db_path: str) -> None:
     os.environ["MOCK_LLM"] = "true"
     os.environ["AUTH_ENABLED"] = "false"
     os.environ["AUTO_CREATE_TABLES"] = "true"
+    os.environ["LANGSMITH_TRACING"] = "false"
 
     from app.settings import get_settings
 
     get_settings.cache_clear()
+`;
+}
+
+function renderLangGraphPlatformTest(): string {
+  return `import importlib
+import sys
+
+from tests.conftest import set_test_env
+
+
+def test_langgraph_platform_entrypoint_loads_and_invokes(tmp_path):
+    set_test_env(str(tmp_path / "langgraph-platform.db"))
+    sys.modules.pop("app.langgraph_app", None)
+
+    module = importlib.import_module("app.langgraph_app")
+    assert hasattr(module.graph, "invoke")
+    from app.graph import START_NODE_IDS
+
+    result = module.graph.invoke(
+        {
+            "action": "start",
+            "session_id": "platform-smoke",
+            "status": "created",
+            "phase": "created",
+            "turn": 0,
+            "max_turns": 3,
+            "executed_nodes": [],
+        },
+        config={"configurable": {"thread_id": "platform-smoke"}},
+    )
+    assert result["assistant_message"]["code"] == "ABR"
+    assert START_NODE_IDS[0] in result["executed_nodes"]
 `;
 }
 

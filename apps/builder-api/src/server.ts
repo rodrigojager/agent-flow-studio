@@ -1,19 +1,30 @@
 import { pathToFileURL } from "node:url";
 import fastify, { type FastifyInstance } from "fastify";
 import { agentFlowJsonSchema, llmAdapterCatalog, runtimeManifestJsonSchema } from "@agent-flow-builder/flow-spec";
+import {
+  DockerRuntimeManager,
+  type DockerCommandRunner,
+  type DockerRuntimeOperation,
+  type DockerRuntimeOperationStatus,
+} from "./docker-runtime.ts";
 import { SandboxManager } from "./sandbox.ts";
+import { compareStudioRuns, exportStudioRun, listStudioRuns, loadStudioRun, saveStudioRun } from "./studio-runs.ts";
 import {
   archiveGeneratedArtifact,
+  approveLangGraphSandbox,
   createFlowWorkspace,
   createPrompt,
   createSchemaAsset,
   deletePrompt,
   deleteSchemaAsset,
   exportFlowWorkspace,
+  generateApprovedRuntime,
+  generateLangGraphSandboxArtifact,
   importFlowWorkspace,
   generateRuntimeManifest,
   generateRuntime,
   listGeneratedArtifact,
+  readLangGraphSandboxApprovalStatus,
   listFlows,
   loadFlowById,
   loadRuntimeManifest,
@@ -32,10 +43,15 @@ import {
 export interface BuildAppOptions {
   workspaceRoot?: string;
   logger?: boolean;
+  dockerRunner?: DockerCommandRunner;
 }
 
 interface FlowParams {
   flowId: string;
+}
+
+interface StudioRunParams extends FlowParams {
+  runId: string;
 }
 
 interface PromptParams extends FlowParams {
@@ -70,9 +86,51 @@ interface SandboxBody {
   port?: number;
 }
 
+interface DockerRuntimeBody {
+  outDir?: string;
+  runtimeUrl?: string;
+  ports?: {
+    api?: number;
+    postgres?: number;
+    redis?: number;
+  };
+}
+
+interface DockerRuntimeHistoryQuery {
+  limit?: string;
+  operation?: string;
+  status?: string;
+  ok?: string;
+  search?: string;
+  from?: string;
+  to?: string;
+}
+
 interface ArtifactQuery {
   outDir?: string;
   path?: string;
+  runtimeUrl?: string;
+}
+
+interface DockerHistoryQuery extends ArtifactQuery {
+  limit?: string;
+  operation?: string;
+  status?: string;
+  ok?: string;
+  search?: string;
+  from?: string;
+  to?: string;
+}
+
+interface StudioRunQuery {
+  q?: string;
+  status?: string;
+  phase?: string;
+  hasErrors?: string;
+  isComplete?: string;
+  node?: string;
+  minDurationMs?: string;
+  maxDurationMs?: string;
 }
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
@@ -81,6 +139,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   );
   const app = fastify({ logger: options.logger ?? false });
   const sandboxManager = new SandboxManager(workspaceRoot);
+  const dockerRuntimeManager = new DockerRuntimeManager(workspaceRoot, {
+    runner: options.dockerRunner,
+  });
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("Access-Control-Allow-Origin", "*");
@@ -272,6 +333,48 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     };
   });
 
+  app.post<{ Params: FlowParams; Body: GenerateBody }>("/flows/:flowId/generate-langgraph-sandbox", async (request) => {
+    const body = request.body ?? {};
+    if (body.outDir !== undefined && typeof body.outDir !== "string") {
+      throw new WorkspaceError("outDir deve ser string quando informado.", 400);
+    }
+    const result = await generateLangGraphSandboxArtifact(workspaceRoot, request.params.flowId, body.outDir);
+    return {
+      status: "ok",
+      flowId: result.flowId,
+      flowPath: result.flowPath,
+      outDir: result.outDir,
+    };
+  });
+
+  app.post<{ Params: FlowParams; Body: GenerateBody }>("/flows/:flowId/approve-langgraph-sandbox", async (request) => {
+    const body = request.body ?? {};
+    if (body.outDir !== undefined && typeof body.outDir !== "string") {
+      throw new WorkspaceError("outDir deve ser string quando informado.", 400);
+    }
+    const approval = await approveLangGraphSandbox(workspaceRoot, request.params.flowId, body.outDir);
+    return { status: "ok", approval };
+  });
+
+  app.get<{ Params: FlowParams }>("/flows/:flowId/langgraph-sandbox-approval-status", async (request) => {
+    return readLangGraphSandboxApprovalStatus(workspaceRoot, request.params.flowId);
+  });
+
+  app.post<{ Params: FlowParams; Body: GenerateBody }>("/flows/:flowId/generate-approved-runtime", async (request) => {
+    const body = request.body ?? {};
+    if (body.outDir !== undefined && typeof body.outDir !== "string") {
+      throw new WorkspaceError("outDir deve ser string quando informado.", 400);
+    }
+    const result = await generateApprovedRuntime(workspaceRoot, request.params.flowId, body.outDir);
+    return {
+      status: "ok",
+      flowId: result.flowId,
+      flowPath: result.flowPath,
+      outDir: result.outDir,
+      approval: result.approval,
+    };
+  });
+
   app.get<{ Querystring: ArtifactQuery }>("/artifacts", async (request) => {
     const outDir = requiredQueryString(request.query.outDir, "outDir");
     return listGeneratedArtifact(workspaceRoot, outDir);
@@ -290,6 +393,75 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     reply.header("content-disposition", `attachment; filename="${archive.fileName}"`);
     reply.header("content-length", String(archive.sizeBytes));
     return reply.send(archive.content);
+  });
+
+  app.get<{ Querystring: ArtifactQuery }>("/docker-runtime/status", async (request) => {
+    const outDir = requiredQueryString(request.query.outDir, "outDir");
+    return dockerRuntimeManager.status(outDir, optionalString(request.query.runtimeUrl, "runtimeUrl"));
+  });
+
+  app.get<{ Querystring: DockerHistoryQuery }>("/docker-runtime/history", async (request) => {
+    const outDir = requiredQueryString(request.query.outDir, "outDir");
+    const runtimeUrl = optionalString(request.query.runtimeUrl, "runtimeUrl");
+    const from = parseDateQuery(request.query.from, "from");
+    const to = parseDateQuery(request.query.to, "to");
+    if (from && to && from > to) {
+      throw new WorkspaceError("from deve ser menor ou igual a to.", 400);
+    }
+    const operation = optionalDockerRuntimeOperation(request.query.operation, "operation");
+    const status = optionalDockerRuntimeStatus(request.query.status, "status");
+    return dockerRuntimeManager.history(
+      outDir,
+      runtimeUrl,
+      {
+        limit: optionalPositiveInteger(request.query.limit, "limit") ?? 20,
+        operation,
+        status,
+        ok: optionalBooleanQuery(request.query.ok, "ok"),
+        search: optionalQueryString(request.query.search, "search"),
+        from,
+        to,
+      },
+    );
+  });
+
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/build", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.build(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
+  });
+
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/prepare-env", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.prepareEnv(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
+  });
+
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/configure-ports", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.configurePorts(
+      outDir,
+      optionalPorts(request.body?.ports),
+      optionalString(request.body?.runtimeUrl, "runtimeUrl"),
+    );
+  });
+
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/up", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.up(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
+  });
+
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/down", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.down(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
+  });
+
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/smoke", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.smoke(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
+  });
+
+  app.post<{ Body: DockerRuntimeBody }>("/docker-runtime/inspect", async (request) => {
+    const outDir = requiredBodyString(request.body?.outDir, "outDir");
+    return dockerRuntimeManager.inspect(outDir, optionalString(request.body?.runtimeUrl, "runtimeUrl"));
   });
 
   app.get("/sandboxes", async () => ({
@@ -315,6 +487,51 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     return sandboxManager.stop(request.params.flowId);
   });
 
+  app.get<{ Params: FlowParams; Querystring: StudioRunQuery }>(
+    "/flows/:flowId/studio-runs",
+    async (request) => {
+      const minDurationMs = optionalNonNegativeInteger(request.query.minDurationMs, "minDurationMs");
+      const maxDurationMs = optionalNonNegativeInteger(request.query.maxDurationMs, "maxDurationMs");
+      if (minDurationMs !== undefined && maxDurationMs !== undefined && minDurationMs > maxDurationMs) {
+        throw new WorkspaceError("minDurationMs deve ser menor ou igual a maxDurationMs.", 400);
+      }
+      return listStudioRuns(workspaceRoot, request.params.flowId, {
+        q: optionalQueryString(request.query.q, "q"),
+        status: optionalQueryString(request.query.status, "status"),
+        phase: optionalQueryString(request.query.phase, "phase"),
+        hasErrors: optionalBooleanQuery(request.query.hasErrors, "hasErrors"),
+        isComplete: optionalBooleanQuery(request.query.isComplete, "isComplete"),
+        node: optionalQueryString(request.query.node, "node"),
+        minDurationMs,
+        maxDurationMs,
+      });
+    },
+  );
+
+  app.get<{ Params: FlowParams; Querystring: { left: string; right: string } }>(
+    "/flows/:flowId/studio-runs/compare",
+    async (request) => {
+      const leftRunId = optionalQueryString(request.query.left, "left");
+      const rightRunId = optionalQueryString(request.query.right, "right");
+      if (!leftRunId || !rightRunId) {
+        throw new WorkspaceError("left e right são obrigatórios.", 400);
+      }
+      return compareStudioRuns(workspaceRoot, request.params.flowId, leftRunId, rightRunId);
+    },
+  );
+
+  app.get<{ Params: StudioRunParams }>("/flows/:flowId/studio-runs/:runId/export", async (request) => {
+    return exportStudioRun(workspaceRoot, request.params.flowId, request.params.runId);
+  });
+
+  app.get<{ Params: StudioRunParams }>("/flows/:flowId/studio-runs/:runId", async (request) => {
+    return loadStudioRun(workspaceRoot, request.params.flowId, request.params.runId);
+  });
+
+  app.post<{ Params: FlowParams; Body: unknown }>("/flows/:flowId/studio-runs", async (request) => {
+    return saveStudioRun(workspaceRoot, request.params.flowId, request.body ?? {});
+  });
+
   app.addHook("onClose", async () => {
     await sandboxManager.stopAll();
   });
@@ -332,6 +549,145 @@ function serializeErrorDetails(details: unknown): unknown {
 function requiredQueryString(value: string | undefined, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new WorkspaceError(`${name} é obrigatório.`, 400);
+  }
+  return value;
+}
+
+function requiredBodyString(value: string | undefined, name: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new WorkspaceError(`${name} é obrigatório.`, 400);
+  }
+  return value;
+}
+
+function optionalString(value: string | undefined, name: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new WorkspaceError(`${name} deve ser string quando informado.`, 400);
+  }
+  return value;
+}
+
+function optionalQueryString(value: string | undefined, name: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new WorkspaceError(`${name} deve ser string quando informado.`, 400);
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function optionalPositiveInteger(value: string | undefined, name: string): number | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new WorkspaceError(`${name} deve ser inteiro positivo quando informado.`, 400);
+  }
+  return parsed;
+}
+
+function optionalDockerRuntimeOperation(value: string | undefined, name: string): DockerRuntimeOperation | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "prepare_env" ||
+    normalized === "configure_ports" ||
+    normalized === "build" ||
+    normalized === "up" ||
+    normalized === "down" ||
+    normalized === "smoke" ||
+    normalized === "inspect"
+  ) {
+    return normalized;
+  }
+  throw new WorkspaceError(`${name} deve ser prepare_env, configure_ports, build, up, down, smoke ou inspect.`, 400);
+}
+
+function optionalDockerRuntimeStatus(value: string | undefined, name: string): DockerRuntimeOperationStatus | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "idle" || normalized === "running" || normalized === "success" || normalized === "error") {
+    return normalized;
+  }
+  throw new WorkspaceError(`${name} deve ser idle, running, success ou error.`, 400);
+}
+
+function parseDateQuery(value: string | undefined, name: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) {
+    throw new WorkspaceError(`${name} deve ser uma data ISO válida.`, 400);
+  }
+  return new Date(parsed).toISOString();
+}
+
+function optionalNonNegativeInteger(value: string | undefined, name: string): number | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new WorkspaceError(`${name} deve ser inteiro quando informado.`, 400);
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new WorkspaceError(`${name} deve ser inteiro não negativo quando informado.`, 400);
+  }
+  return parsed;
+}
+
+function optionalBooleanQuery(value: string | undefined, name: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new WorkspaceError(`${name} deve ser boolean quando informado.`, 400);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new WorkspaceError(`${name} deve ser true, false, 1 ou 0.`, 400);
+}
+
+function optionalPorts(value: DockerRuntimeBody["ports"] | undefined): NonNullable<DockerRuntimeBody["ports"]> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new WorkspaceError("ports deve ser objeto quando informado.", 400);
+  }
+  for (const [key, port] of Object.entries(value)) {
+    if (!["api", "postgres", "redis"].includes(key)) {
+      throw new WorkspaceError(`Porta desconhecida: ${key}`, 400);
+    }
+    if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      throw new WorkspaceError(`Porta ${key} deve ser inteiro entre 1 e 65535.`, 400);
+    }
   }
   return value;
 }

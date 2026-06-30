@@ -71,6 +71,9 @@ DATABASE_QUERY_NODE_IDS = _node_ids(node_type="database_query")
 DATABASE_SAVE_NODE_IDS = _node_ids(node_type="database_save")
 FILE_EXTRACT_NODE_IDS = _node_ids(node_type="file_extract")
 RAG_RETRIEVAL_NODE_IDS = _node_ids(node_type="rag_retrieval")
+APPROVAL_GATE_NODE_IDS = _node_ids(node_type="approval_gate")
+SCORING_NODE_IDS = _node_ids(node_type="scoring")
+ANALYTICS_NODE_IDS = _node_ids(node_type="analytics")
 
 
 class ReferenceState(TypedDict, total=False):
@@ -90,6 +93,9 @@ class ReferenceState(TypedDict, total=False):
     database: dict[str, Any]
     files: dict[str, Any]
     rag: dict[str, Any]
+    approvals: dict[str, Any]
+    scores: dict[str, Any]
+    analytics: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -298,6 +304,38 @@ def build_graph(
         updates["rag"] = rag_results
         if context_path != f"rag.{node_id}":
             assign_state_path(updates, state, context_path, result)
+        return mark_node(state, node_id, updates)
+
+    def remember_approval_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        approval_results = dict(state.get("approvals") or {})
+        approval_results[node_id] = result
+        updates["approvals"] = approval_results
+        if result["decision"] == "pending":
+            updates["status"] = "active"
+            updates["phase"] = "awaiting_approval"
+            updates["is_complete"] = False
+            updates["assistant_message"] = {"code": "APR", "text": "Aguardando aprovação humana."}
+        if result_path != f"approvals.{node_id}":
+            assign_state_path(updates, state, result_path, result)
+        return mark_node(state, node_id, updates)
+
+    def remember_score_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        score_results = dict(state.get("scores") or {})
+        score_results[node_id] = result
+        updates["scores"] = score_results
+        if result_path != f"scores.{node_id}":
+            assign_state_path(updates, state, result_path, result)
+        return mark_node(state, node_id, updates)
+
+    def remember_analytics_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
+        updates: dict[str, Any] = {}
+        analytics_results = dict(state.get("analytics") or {})
+        analytics_results[node_id] = result
+        updates["analytics"] = analytics_results
+        if result_path != f"analytics.{node_id}":
+            assign_state_path(updates, state, result_path, result)
         return mark_node(state, node_id, updates)
 
     def make_start_node(config: dict[str, Any]):
@@ -722,6 +760,128 @@ def build_graph(
 
         return run
 
+    def make_approval_gate_node(config: dict[str, Any]):
+        node_id = config["id"]
+        decision_path = str(config.get("decisionPath") or "approval.decision")
+        approval_value = str(config.get("approvalValue") or "approved").lower()
+        rejection_value = str(config.get("rejectionValue") or "rejected").lower()
+        result_path = str(config.get("resultPath") or f"approvals.{node_id}")
+
+        def normalize_decision(value: Any) -> str:
+            if value is True:
+                return "approved"
+            if value is False:
+                return "rejected"
+            text_value = str(value or "").strip().lower()
+            approved_values = {approval_value, "approved", "approve", "aprovado", "aprovar", "sim", "yes", "ok", "true"}
+            rejected_values = {rejection_value, "rejected", "reject", "reprovado", "rejeitar", "não", "nao", "no", "false"}
+            if text_value in approved_values or any(token in text_value for token in approved_values if len(token) >= 3):
+                return "approved"
+            if text_value in rejected_values or any(token in text_value for token in rejected_values if len(token) >= 3):
+                return "rejected"
+            return "pending"
+
+        def run(state: ReferenceState) -> ReferenceState:
+            raw_value = state_path_value(state, decision_path)
+            decision = normalize_decision(raw_value)
+            result_payload = {
+                "decision": decision,
+                "approved": decision == "approved",
+                "rejected": decision == "rejected",
+                "pending": decision == "pending",
+                "decision_path": decision_path,
+                "raw_value": jsonable(raw_value),
+            }
+            return remember_approval_result(state, node_id, result_path, result_payload)
+
+        return run
+
+    def make_scoring_node(config: dict[str, Any]):
+        node_id = config["id"]
+        input_path = str(config.get("inputPath") or "assistant_message")
+        result_path = str(config.get("resultPath") or f"scores.{node_id}")
+        threshold = float(config.get("threshold") if config.get("threshold") is not None else 0.7)
+
+        def score_value(value: Any) -> float:
+            if isinstance(value, dict):
+                for key in ("score", "confidence", "rating"):
+                    candidate = value.get(key)
+                    if isinstance(candidate, (int, float)):
+                        return max(0.0, min(1.0, float(candidate)))
+                text_value = " ".join(str(item) for item in value.values())
+            else:
+                text_value = str(value or "")
+            lowered = text_value.lower()
+            positive = {"accepted", "approved", "adequado", "correto", "bom", "ok", "sim"}
+            negative = {"rejected", "bloqueado", "ruim", "incorreto", "não", "nao"}
+            if any(term in lowered for term in positive):
+                return 1.0
+            if any(term in lowered for term in negative):
+                return 0.0
+            words = [word for word in lowered.replace("\n", " ").split(" ") if len(word) >= 3]
+            return max(0.1, min(1.0, len(words) / 30))
+
+        def run(state: ReferenceState) -> ReferenceState:
+            value = state_path_value(state, input_path)
+            score = score_value(value)
+            result_payload = {
+                "score": score,
+                "threshold": threshold,
+                "passed": score >= threshold,
+                "input_path": input_path,
+                "value": jsonable(value),
+            }
+            return remember_score_result(state, node_id, result_path, result_payload)
+
+        return run
+
+    def make_analytics_node(config: dict[str, Any]):
+        node_id = config["id"]
+        metric_name = str(config.get("metricName") or node_id)
+        payload_path = str(config.get("payloadPath") or "")
+        result_path = str(config.get("resultPath") or f"analytics.{node_id}")
+
+        def run(state: ReferenceState) -> ReferenceState:
+            payload = jsonable(state_path_value(state, payload_path)) if payload_path else {
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "status": state.get("status"),
+                "phase": state.get("phase"),
+            }
+            try:
+                with graph_session_scope() as db:
+                    record_id = str(uuid4())
+                    db.add(
+                        AgentNodeRecord(
+                            record_id=record_id,
+                            session_id=str(state.get("session_id") or ""),
+                            node_id=node_id,
+                            payload_json={
+                                "kind": "analytics",
+                                "metric_name": metric_name,
+                                "payload": payload,
+                            },
+                        )
+                    )
+                    db.flush()
+                result_payload = {
+                    "ok": True,
+                    "metric_name": metric_name,
+                    "payload_path": payload_path,
+                    "payload": payload,
+                    "record_id": record_id,
+                }
+            except Exception as exc:
+                result_payload = {
+                    "ok": False,
+                    "metric_name": metric_name,
+                    "payload_path": payload_path,
+                    "error": str(exc),
+                }
+            return remember_analytics_result(state, node_id, result_path, result_payload)
+
+        return run
+
     def make_finish_node(config: dict[str, Any]):
         node_id = config["id"]
 
@@ -769,6 +929,12 @@ def build_graph(
             return make_file_extract_node(config)
         if node_type == "rag_retrieval":
             return make_rag_retrieval_node(config)
+        if node_type == "approval_gate":
+            return make_approval_gate_node(config)
+        if node_type == "scoring":
+            return make_scoring_node(config)
+        if node_type == "analytics":
+            return make_analytics_node(config)
         if node_type == "end":
             return make_finish_node(config)
         return make_noop_node(config)
