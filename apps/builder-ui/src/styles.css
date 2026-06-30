@@ -951,6 +951,16 @@ button:disabled {
   gap: 6px;
 }
 
+.docker-progress-empty {
+  margin: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: var(--surface-bg);
+  font-size: 12px;
+}
+
 .docker-history-toolbar {
   display: grid;
   grid-template-columns: repeat(3, minmax(100px, 1fr));

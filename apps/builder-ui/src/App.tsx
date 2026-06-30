@@ -116,6 +116,8 @@ import type {
   DockerRuntimeHistoryQuery,
   DockerRuntimeOperation,
   DockerRuntimeOperationResult,
+  DockerRuntimeProgressEvent,
+  DockerRuntimeProgressStatus,
   DockerRuntimeStatus,
   GenerateResult,
   GeneratedArtifactFileContent,
@@ -149,6 +151,8 @@ interface DockerHistoryFilterForm {
   status: DockerRuntimeOperationStatus | "";
   ok: "" | "true" | "false";
   search: string;
+  progressStage: string;
+  progressStatus: DockerRuntimeProgressStatus | "";
   from: string;
   to: string;
   limit: string;
@@ -218,11 +222,14 @@ const dockerHistoryOperationOptions: DockerRuntimeOperation[] = [
   "inspect",
 ];
 const dockerHistoryStatusOptions: DockerRuntimeOperationStatus[] = ["idle", "running", "success", "error", "canceled"];
+const dockerProgressStatusOptions: DockerRuntimeProgressStatus[] = ["running", "done", "error", "warning", "info", "canceled"];
 const dockerHistoryFilterDefaults: DockerHistoryFilterForm = {
   operation: "",
   status: "",
   ok: "",
   search: "",
+  progressStage: "",
+  progressStatus: "",
   from: "",
   to: "",
   limit: "20",
@@ -1415,6 +1422,8 @@ export default function App() {
       dockerHistoryFilterDraft.status !== dockerHistoryFilterApplied.status ||
       dockerHistoryFilterDraft.ok !== dockerHistoryFilterApplied.ok ||
       dockerHistoryFilterDraft.search !== dockerHistoryFilterApplied.search ||
+      dockerHistoryFilterDraft.progressStage !== dockerHistoryFilterApplied.progressStage ||
+      dockerHistoryFilterDraft.progressStatus !== dockerHistoryFilterApplied.progressStatus ||
       dockerHistoryFilterDraft.from !== dockerHistoryFilterApplied.from ||
       dockerHistoryFilterDraft.to !== dockerHistoryFilterApplied.to ||
       dockerHistoryFilterDraft.limit !== dockerHistoryFilterApplied.limit
@@ -1438,6 +1447,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         status: filters.status || undefined,
         ok: filters.ok === "true" ? true : filters.ok === "false" ? false : undefined,
         search: filters.search.trim() || undefined,
+        progressStage: filters.progressStage.trim() || undefined,
+        progressStatus: filters.progressStatus || undefined,
         from,
         to,
       },
@@ -1451,29 +1462,34 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       setDockerRuntimeHistoryData(null);
       return;
     }
-    void refreshDockerHistoryData(artifactListing.outDir, dockerRuntimeUrl);
+    void refreshDockerHistoryData(artifactListing.outDir, dockerRuntimeUrl, dockerHistoryFilterDefaults);
     setStatus({ kind: "ok", message: "Filtro de histórico Docker limpo." });
   }
 
   async function applyDockerHistoryFilter() {
+    const nextFilters = { ...dockerHistoryFilterDraft };
     try {
-      buildDockerHistoryQuery(dockerHistoryFilterDraft);
+      buildDockerHistoryQuery(nextFilters);
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
       return;
     }
-    setDockerHistoryFilterApplied(dockerHistoryFilterDraft);
+    setDockerHistoryFilterApplied(nextFilters);
     if (!artifactListing || !artifactLooksLikeDockerRuntime(artifactListing)) {
       setStatus({ kind: "ok", message: "Filtro de histórico Docker aplicado." });
       return;
     }
-    await refreshDockerHistoryData(artifactListing.outDir, dockerRuntimeUrl);
+    await refreshDockerHistoryData(artifactListing.outDir, dockerRuntimeUrl, nextFilters);
     setStatus({ kind: "ok", message: "Filtro de histórico Docker aplicado." });
   }
 
-  async function refreshDockerHistoryData(outDir: string, runtimeUrl: string) {
+  async function refreshDockerHistoryData(
+    outDir: string,
+    runtimeUrl: string,
+    filters: DockerHistoryFilterForm = dockerHistoryFilterApplied,
+  ) {
     try {
-      const { limit, query } = buildDockerHistoryQuery(dockerHistoryFilterApplied);
+      const { limit, query } = buildDockerHistoryQuery(filters);
       const history = await dockerRuntimeHistory(outDir, runtimeUrl, limit, query);
       setDockerRuntimeHistoryData(history);
     } catch (error) {
@@ -2581,9 +2597,11 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onDockerAction={handleDockerRuntimeAction}
               onCancelDockerBuild={handleCancelDockerBuild}
               dockerHistoryFilterDraft={dockerHistoryFilterDraft}
+              dockerHistoryFilterApplied={dockerHistoryFilterApplied}
               dockerHistoryFilterHasChanges={dockerHistoryFilterHasChanges}
               dockerHistoryOperationOptions={dockerHistoryOperationOptions}
               dockerHistoryStatusOptions={dockerHistoryStatusOptions}
+              dockerProgressStatusOptions={dockerProgressStatusOptions}
               onDockerHistoryFilterDraftChange={setDockerHistoryFilterDraft}
               onDockerHistoryApply={applyDockerHistoryFilter}
               onDockerHistoryClear={clearDockerHistoryFilter}
@@ -3531,9 +3549,11 @@ function GeneratedArtifactPanel({
   onDockerAction,
   onCancelDockerBuild,
   dockerHistoryFilterDraft,
+  dockerHistoryFilterApplied,
   dockerHistoryFilterHasChanges,
   dockerHistoryOperationOptions,
   dockerHistoryStatusOptions,
+  dockerProgressStatusOptions,
   onDockerHistoryFilterDraftChange,
   onDockerHistoryApply,
   onDockerHistoryClear,
@@ -3563,14 +3583,16 @@ function GeneratedArtifactPanel({
   onDockerAction: (operation: DockerRuntimeOperation) => void;
   onCancelDockerBuild: () => void;
   dockerHistoryFilterDraft: DockerHistoryFilterForm;
+  dockerHistoryFilterApplied: DockerHistoryFilterForm;
   dockerHistoryFilterHasChanges: boolean;
   dockerHistoryOperationOptions: readonly DockerRuntimeOperation[];
   dockerHistoryStatusOptions: readonly DockerRuntimeOperationStatus[];
+  dockerProgressStatusOptions: readonly DockerRuntimeProgressStatus[];
   onDockerHistoryFilterDraftChange: (next: DockerHistoryFilterForm) => void;
   onDockerHistoryApply: () => Promise<void>;
   onDockerHistoryClear: () => void;
 }) {
-  const buildProgress = useMemo(() => {
+  const rawBuildProgress = useMemo(() => {
     if (dockerOperation?.operation === "build" && dockerOperation.progress?.length) {
       return dockerOperation.progress;
     }
@@ -3578,6 +3600,10 @@ function GeneratedArtifactPanel({
     const latestBuild = buildEntries.find((entry) => entry.operation === "build" && (entry.progress?.length ?? 0) > 0);
     return latestBuild?.progress ?? [];
   }, [dockerHistory, dockerOperation]);
+  const buildProgress = useMemo(
+    () => rawBuildProgress.filter((step) => dockerProgressMatchesFilter(step, dockerHistoryFilterApplied)),
+    [dockerHistoryFilterApplied, rawBuildProgress],
+  );
 
   if (!listing) {
     return (
@@ -3786,25 +3812,32 @@ function GeneratedArtifactPanel({
           {dockerStatus?.logs.length ? (
             <pre className="mini-json artifact-preview">{dockerStatus.logs.join("\n")}</pre>
           ) : null}
-          {buildProgress.length ? (
+          {rawBuildProgress.length ? (
             <div className="docker-progress">
-              <strong>Progresso do build</strong>
-              <div className="docker-progress-list">
-                {buildProgress.map((step) => (
-                  <div className="docker-progress-row" key={`${step.timestamp}-${step.line}`}>
-                    <div className="docker-progress-header">
-                      <strong>{step.stage}</strong>
-                      <span className={`docker-progress-status ${dockerProgressClass(step.status)}`}>{step.status}</span>
-                    </div>
-                    <p>{step.message}</p>
-                    {typeof step.percent === "number" ? (
-                      <div className="progress-track">
-                        <div className="progress-fill" style={{ width: `${step.percent}%` }} />
+              <strong>
+                Progresso do build
+                {buildProgress.length !== rawBuildProgress.length ? ` (${buildProgress.length}/${rawBuildProgress.length})` : ""}
+              </strong>
+              {buildProgress.length ? (
+                <div className="docker-progress-list">
+                  {buildProgress.map((step) => (
+                    <div className="docker-progress-row" key={`${step.timestamp}-${step.line}`}>
+                      <div className="docker-progress-header">
+                        <strong>{step.stage}</strong>
+                        <span className={`docker-progress-status ${dockerProgressClass(step.status)}`}>{step.status}</span>
                       </div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
+                      <p>{step.message}</p>
+                      {typeof step.percent === "number" ? (
+                        <div className="progress-track">
+                          <div className="progress-fill" style={{ width: `${step.percent}%` }} />
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="docker-progress-empty">Nenhuma etapa do build corresponde aos filtros aplicados.</p>
+              )}
             </div>
           ) : null}
           <div className="docker-history-toolbar">
@@ -3866,6 +3899,35 @@ function GeneratedArtifactPanel({
                 onChange={(event) => onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, search: event.target.value })}
                 placeholder="operacao, status ou texto"
               />
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Etapa</span>
+              <input
+                value={dockerHistoryFilterDraft.progressStage}
+                onChange={(event) =>
+                  onDockerHistoryFilterDraftChange({ ...dockerHistoryFilterDraft, progressStage: event.target.value })
+                }
+                placeholder="metadata, copy, install"
+              />
+            </label>
+            <label className="docker-history-filter-input">
+              <span>Progresso</span>
+              <select
+                value={dockerHistoryFilterDraft.progressStatus}
+                onChange={(event) =>
+                  onDockerHistoryFilterDraftChange({
+                    ...dockerHistoryFilterDraft,
+                    progressStatus: event.target.value as DockerRuntimeProgressStatus | "",
+                  })
+                }
+              >
+                <option value="">Todos</option>
+                {dockerProgressStatusOptions.map((status) => (
+                  <option value={status} key={`docker-progress-status-${status}`}>
+                    {status}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="docker-history-filter-input">
               <span>De</span>
@@ -6066,6 +6128,20 @@ function dockerProgressClass(status: string): string {
     return "progress-error";
   }
   return "progress-running";
+}
+
+function dockerProgressMatchesFilter(step: DockerRuntimeProgressEvent, filters: DockerHistoryFilterForm): boolean {
+  const stageFilter = filters.progressStage.trim().toLowerCase();
+  if (
+    stageFilter &&
+    ![step.stage, step.message, step.line].some((value) => value.toLowerCase().includes(stageFilter))
+  ) {
+    return false;
+  }
+  if (filters.progressStatus && step.status !== filters.progressStatus) {
+    return false;
+  }
+  return true;
 }
 
 function manifestValidationMessage(result: RuntimeManifestValidationResult): string {

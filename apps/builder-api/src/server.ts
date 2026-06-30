@@ -4,6 +4,7 @@ import { agentFlowJsonSchema, llmAdapterCatalog, runtimeManifestJsonSchema } fro
 import {
   DockerRuntimeManager,
   type DockerCommandRunner,
+  type DockerBuildProgressStatus,
   type DockerRuntimeOperation,
   type DockerRuntimeOperationStatus,
 } from "./docker-runtime.ts";
@@ -102,6 +103,8 @@ interface DockerRuntimeHistoryQuery {
   status?: string;
   ok?: string;
   search?: string;
+  progressStage?: string;
+  progressStatus?: string;
   from?: string;
   to?: string;
 }
@@ -118,6 +121,8 @@ interface DockerHistoryQuery extends ArtifactQuery {
   status?: string;
   ok?: string;
   search?: string;
+  progressStage?: string;
+  progressStatus?: string;
   from?: string;
   to?: string;
 }
@@ -410,6 +415,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     }
     const operation = optionalDockerRuntimeOperation(request.query.operation, "operation");
     const status = optionalDockerRuntimeStatus(request.query.status, "status");
+    const progressStatus = optionalDockerBuildProgressStatus(request.query.progressStatus, "progressStatus");
     return dockerRuntimeManager.history(
       outDir,
       runtimeUrl,
@@ -419,6 +425,8 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         status,
         ok: optionalBooleanQuery(request.query.ok, "ok"),
         search: optionalQueryString(request.query.search, "search"),
+        progressStage: optionalQueryString(request.query.progressStage, "progressStage"),
+        progressStatus,
         from,
         to,
       },
@@ -632,6 +640,27 @@ function optionalDockerRuntimeStatus(value: string | undefined, name: string): D
     return normalized;
   }
   throw new WorkspaceError(`${name} deve ser idle, running, success, error ou canceled.`, 400);
+}
+
+function optionalDockerBuildProgressStatus(value: string | undefined, name: string): DockerBuildProgressStatus | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "running" ||
+    normalized === "done" ||
+    normalized === "error" ||
+    normalized === "warning" ||
+    normalized === "info" ||
+    normalized === "canceled"
+  ) {
+    return normalized;
+  }
+  throw new WorkspaceError(`${name} deve ser running, done, error, warning, info ou canceled.`, 400);
 }
 
 function parseDateQuery(value: string | undefined, name: string): string | undefined {

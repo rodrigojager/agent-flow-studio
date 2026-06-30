@@ -748,6 +748,50 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   assert.equal(dockerHistoryFilteredSearch.statusCode, 200);
   assert.equal(Array.isArray(dockerHistoryFilteredSearch.json().entries), true);
 
+  const dockerHistoryFilteredProgressStage = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&progressStage=metadata&limit=20",
+  });
+  assert.equal(dockerHistoryFilteredProgressStage.statusCode, 200);
+  assert.ok(dockerHistoryFilteredProgressStage.json().entries.length >= 1);
+  assert.ok(
+    dockerHistoryFilteredProgressStage
+      .json()
+      .entries.every((entry: { progress?: Array<{ stage: string; message: string; line: string }> }) =>
+        (entry.progress ?? []).some((step) =>
+          [step.stage, step.message, step.line].some((value) => value.toLowerCase().includes("metadata")),
+        ),
+      ),
+  );
+
+  const dockerHistoryFilteredProgressStatus = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&progressStatus=done&limit=20",
+  });
+  assert.equal(dockerHistoryFilteredProgressStatus.statusCode, 200);
+  assert.ok(dockerHistoryFilteredProgressStatus.json().entries.length >= 1);
+  assert.ok(
+    dockerHistoryFilteredProgressStatus
+      .json()
+      .entries.every((entry: { progress?: Array<{ status: string }> }) =>
+        (entry.progress ?? []).some((step) => step.status === "done"),
+      ),
+  );
+
+  const dockerHistoryFilteredCanceledProgress = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&progressStatus=canceled&limit=20",
+  });
+  assert.equal(dockerHistoryFilteredCanceledProgress.statusCode, 200);
+  assert.ok(dockerHistoryFilteredCanceledProgress.json().entries.length >= 1);
+  assert.ok(
+    dockerHistoryFilteredCanceledProgress
+      .json()
+      .entries.every((entry: { progress?: Array<{ status: string }> }) =>
+        (entry.progress ?? []).some((step) => step.status === "canceled"),
+      ),
+  );
+
   const oldest = dockerHistory.json().entries.at(-1)?.finishedAt;
   const newest = dockerHistory.json().entries[0]?.finishedAt;
   assert.ok(oldest && newest);
@@ -789,6 +833,13 @@ test("Builder API lists, validates, reads and generates the reference flow", asy
   });
   assert.equal(dockerHistoryInvalidOperation.statusCode, 400);
   assert.equal(dockerHistoryInvalidOperation.json().error, "workspace_error");
+
+  const dockerHistoryInvalidProgressStatus = await app.inject({
+    method: "GET",
+    url: "/docker-runtime/history?outDir=generated%2Freference-interview-approved-runtime&progressStatus=invalid",
+  });
+  assert.equal(dockerHistoryInvalidProgressStatus.statusCode, 400);
+  assert.equal(dockerHistoryInvalidProgressStatus.json().error, "workspace_error");
 
   const dockerHistoryInvalidFrom = await app.inject({
     method: "GET",

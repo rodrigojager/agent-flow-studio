@@ -95,7 +95,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
   - smoke test;
   - inspeção de serviços;
   - logs;
-  - histórico operacional.
+  - histórico operacional com filtros por operação, status, resultado, texto, etapa de build e status do progresso.
 - Progresso incremental durante `docker compose build`.
 - Links para `/docs` e `/openapi.json` do runtime final.
 
@@ -128,7 +128,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 
 ### Próximo Ciclo
 
-- Refinar UX do progresso de build Docker, cancelamento e filtros de histórico.
+- Refinar UX do progresso de build Docker, principalmente percentuais e leitura de etapas quando o output do Docker for incompleto.
 - Completar auditoria visual de tema claro/escuro em todas as telas e viewports.
 - Melhorar ergonomia do canvas com grupos, atalhos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.

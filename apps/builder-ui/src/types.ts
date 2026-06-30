@@ -391,6 +391,8 @@ export interface DockerRuntimeHistoryQuery {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  progressStage?: string;
+  progressStatus?: DockerRuntimeProgressStatus;
   from?: string;
   to?: string;
 }

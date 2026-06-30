@@ -14,7 +14,7 @@ const DOCKER_BUILD_PROGRESS_CACHE_MAX = 20;
 
 export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect" | "cancel";
 export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error" | "canceled";
-type DockerBuildProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
+export type DockerBuildProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
 
 interface DockerBuildProgressEvent {
   stage: string;
@@ -142,6 +142,8 @@ export interface DockerRuntimeHistoryQuery {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  progressStage?: string;
+  progressStatus?: DockerBuildProgressStatus;
   from?: string;
   to?: string;
 }
@@ -151,6 +153,8 @@ interface DockerRuntimeHistoryFilter {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  progressStage?: string;
+  progressStatus?: DockerBuildProgressStatus;
   fromMs?: number;
   toMs?: number;
 }
@@ -775,6 +779,8 @@ export class DockerRuntimeManager {
     const operationFilter = query.operation;
     const okFilter = query.ok;
     const searchFilter = query.search?.toLowerCase();
+    const progressStageFilter = query.progressStage?.toLowerCase();
+    const progressStatusFilter = query.progressStatus;
     const fromMs = query.fromMs;
     const toMs = query.toMs;
     let raw = "";
@@ -814,6 +820,12 @@ export class DockerRuntimeManager {
           if (!haystack.includes(searchFilter)) {
             return false;
           }
+        }
+        if (progressStageFilter && !entryProgressMatchesStage(entry, progressStageFilter)) {
+          return false;
+        }
+        if (progressStatusFilter && !entryProgressMatchesStatus(entry, progressStatusFilter)) {
+          return false;
         }
         const finishedAtMs = Date.parse(entry.finishedAt);
         if (Number.isNaN(finishedAtMs)) {
@@ -1458,6 +1470,8 @@ interface DockerRuntimeHistoryFilterQuery {
   status?: DockerRuntimeOperationStatus;
   ok?: boolean;
   search?: string;
+  progressStage?: string;
+  progressStatus?: DockerBuildProgressStatus;
   fromMs?: number;
   toMs?: number;
 }
@@ -1475,9 +1489,21 @@ function normalizeDockerRuntimeHistoryQuery(
     status: source.status,
     ok: source.ok,
     search: source.search?.trim() || undefined,
+    progressStage: source.progressStage?.trim() || undefined,
+    progressStatus: source.progressStatus,
     fromMs: Number.isFinite(fromMs) ? fromMs : undefined,
     toMs: Number.isFinite(toMs) ? toMs : undefined,
   };
+}
+
+function entryProgressMatchesStage(entry: DockerRuntimeHistoryEntry, needle: string): boolean {
+  return (entry.progress ?? []).some((step) =>
+    [step.stage, step.message, step.line].some((value) => value.toLowerCase().includes(needle)),
+  );
+}
+
+function entryProgressMatchesStatus(entry: DockerRuntimeHistoryEntry, status: DockerBuildProgressStatus): boolean {
+  return (entry.progress ?? []).some((step) => step.status === status);
 }
 
 function isDockerBuildProgress(value: unknown): value is DockerBuildProgressEvent {
