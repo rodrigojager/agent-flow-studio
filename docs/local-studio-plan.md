@@ -380,7 +380,7 @@ Status 2026-06-30:
 - implementado: comparação de runs calcula modo `live/mock/pinned`, eventos pinados/mock, tokens, custo estimado e um resumo de regressão com severidade, motivos e indicação de pinado vs real;
 - implementado: thresholds de regressão por cenário para crescimento de tokens, custo e duração, enviados na metadata e aplicados ao veredito da comparação;
 - implementado: importação/exportação de fixture JSON por cenário com input, thresholds, checkpoint, pins ativos/stale e metadata de replay;
-- implementado: execução sequencial em lote de cenários/fixtures com resumo por cenário, sessão, duração e erro;
+- implementado: execução sequencial em lote de cenários/fixtures com resumo por cenário, sessão, duração, erro e comparação automática com o run anterior do mesmo cenário;
 - pendente: filtros avançados de histórico operacional e restauração real de estado por checkpointer/runtime.
 
 ### Fase 7.5: Grafo Interativo de Execução
@@ -486,7 +486,8 @@ Mas a ferramenta não deve depender disso para operar.
    - thresholds configuráveis por cenário já implementados para tokens/custo/duração;
    - fixtures importáveis/exportáveis por cenário já implementadas;
    - execução sequencial em lote de fixtures já implementada;
-   - evoluir comparação automática de baseline/candidate por lote;
+   - comparação automática de baseline/candidate por lote já implementada;
+   - evoluir relatório/aprovação exportável de lote;
    - evoluir restauração real de estado/checkpointer além do payload pinado.
 4. auditoria completa de tema:
    - verificar fluxo em ambas paletas;

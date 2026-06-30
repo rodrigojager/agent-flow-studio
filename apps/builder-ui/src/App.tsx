@@ -134,6 +134,7 @@ import type {
   RuntimeManifestValidationResult,
   SandboxStatus,
   SessionView,
+  StudioRunRecord,
   StudioRunSummary,
   StudioRunComparison,
   StudioRunQuery,
@@ -242,15 +243,26 @@ interface StudioScenarioBatchResult {
   label: string;
   status: "ok" | "error";
   sessionId: string | null;
+  runId: string | null;
   message: string;
   durationMs: number | null;
+  comparison: StudioScenarioBatchComparison;
   completedAt: string;
 }
 
 interface StudioScenarioRunResult {
   sessionId: string;
+  runId: string | null;
   message: string;
   durationMs: number;
+}
+
+interface StudioScenarioBatchComparison {
+  baselineRunId: string | null;
+  candidateRunId: string | null;
+  severity: "pass" | "warn" | "fail" | "missing" | "error";
+  verdict: string;
+  reasons: string[];
 }
 
 interface StudioNodePinDraft {
@@ -2098,10 +2110,10 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     await refreshSandboxState(selectedFlowId);
   }
 
-  async function refreshRuntimeData(nextSession?: SessionView) {
+  async function refreshRuntimeData(nextSession?: SessionView): Promise<StudioRunRecord | null> {
     const session = nextSession ?? runtimeSession;
     if (!draftFlow || !sandbox?.url || !session) {
-      return;
+      return null;
     }
     const [nextTranscript, nextEvents] = await Promise.all([
       runtimeTranscript(sandbox.url, draftFlow.api.resourceName, session.session_id),
@@ -2120,11 +2132,13 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         events: nextEvents,
         logs: sandbox.logs ?? [],
       });
-        setStudioStateSnapshots(saved.stateSnapshots);
+      setStudioStateSnapshots(saved.stateSnapshots);
       await refreshStudioRuns(draftFlow.id, buildStudioRunQuery());
       setSelectedStudioRunId(saved.id);
+      return saved;
     } catch {
       // Runtime execution should stay usable even if local trace persistence fails.
+      return null;
     }
   }
 
@@ -2527,10 +2541,11 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     setTranscript(started.messages);
     const result = await sendRuntimeTurn(sandboxUrl, resourceName, createdSessionId, message);
     setRuntimeSession(result.session);
-    await refreshRuntimeData(result.session);
+    const savedRun = await refreshRuntimeData(result.session);
     await refreshSandboxState(selectedFlowId, true);
     return {
       sessionId: result.session.session_id,
+      runId: savedRun?.id ?? null,
       message: result.assistant_message.text || "Cenário executado.",
       durationMs: Date.now() - startedAt,
     };
@@ -2573,20 +2588,28 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     }
     const results: StudioScenarioBatchResult[] = [];
     const succeeded: string[] = [];
+    let lastComparison: StudioRunComparison | null = null;
     setStudioScenarioBatchResults([]);
     for (let index = 0; index < scenarios.length; index += 1) {
       const scenario = scenarios[index];
       setStatus({ kind: "busy", message: `Executando lote ${index + 1}/${scenarios.length}: ${scenario.label}.` });
+      const baselineRunId = await findLatestScenarioRunId(scenario.id);
       try {
         const result = await runStudioScenario(scenario);
+        const comparison = await compareScenarioBatchRun(scenario.id, baselineRunId, result.runId);
+        if (comparison.fullComparison) {
+          lastComparison = comparison.fullComparison;
+        }
         succeeded.push(scenario.id);
         results.push({
           scenarioId: scenario.id,
           label: scenario.label,
           status: "ok",
           sessionId: result.sessionId,
+          runId: result.runId,
           message: result.message,
           durationMs: result.durationMs,
+          comparison: comparison.summary,
           completedAt: new Date().toISOString(),
         });
         setStudioSelectedScenarioId(scenario.id);
@@ -2596,19 +2619,105 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           label: scenario.label,
           status: "error",
           sessionId: null,
+          runId: null,
           message: errorMessage(error),
           durationMs: null,
+          comparison: {
+            baselineRunId,
+            candidateRunId: null,
+            severity: "error",
+            verdict: "Execução falhou antes da comparação.",
+            reasons: [errorMessage(error)],
+          },
           completedAt: new Date().toISOString(),
         });
       }
       setStudioScenarioBatchResults([...results]);
     }
     persistStudioScenarioUsage(succeeded, new Date().toISOString());
+    if (lastComparison) {
+      setStudioRunComparison(lastComparison);
+      setStudioRunCompareRunId(lastComparison.leftRunId);
+      setSelectedStudioRunId(lastComparison.rightRunId);
+    }
     const failedCount = results.filter((result) => result.status === "error").length;
     setStatus({
       kind: failedCount > 0 ? "error" : "ok",
       message: `Lote concluído: ${succeeded.length}/${results.length} cenário(s) executado(s).`,
     });
+  }
+
+  async function findLatestScenarioRunId(scenarioId: string): Promise<string | null> {
+    if (!selectedFlowId) {
+      return null;
+    }
+    try {
+      const result = await listStudioRuns(selectedFlowId, {});
+      for (const run of result.runs) {
+        const record = await loadStudioRun(selectedFlowId, run.id);
+        if (studioRunScenarioId(record) === scenarioId) {
+          return record.id;
+        }
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  async function compareScenarioBatchRun(
+    scenarioId: string,
+    baselineRunId: string | null,
+    candidateRunId: string | null,
+  ): Promise<{ summary: StudioScenarioBatchComparison; fullComparison: StudioRunComparison | null }> {
+    if (!selectedFlowId || !candidateRunId) {
+      return {
+        summary: {
+          baselineRunId,
+          candidateRunId,
+          severity: "error",
+          verdict: "Run candidate não foi persistido.",
+          reasons: ["Persistência local do run não retornou ID."],
+        },
+        fullComparison: null,
+      };
+    }
+    if (!baselineRunId) {
+      return {
+        summary: {
+          baselineRunId: null,
+          candidateRunId,
+          severity: "missing",
+          verdict: "Sem baseline anterior para este cenário.",
+          reasons: [`Primeira execução registrada para ${scenarioId}.`],
+        },
+        fullComparison: null,
+      };
+    }
+    try {
+      const comparison = await compareStudioRuns(selectedFlowId, baselineRunId, candidateRunId);
+      return {
+        summary: {
+          baselineRunId,
+          candidateRunId,
+          severity: comparison.regression.severity,
+          verdict: comparison.regression.verdict,
+          reasons: comparison.regression.reasons,
+        },
+        fullComparison: comparison,
+      };
+    } catch (error) {
+      return {
+        summary: {
+          baselineRunId,
+          candidateRunId,
+          severity: "error",
+          verdict: "Falha ao comparar baseline e candidate.",
+          reasons: [errorMessage(error)],
+        },
+        fullComparison: null,
+      };
+    }
   }
 
   function handleRunPinnedScenario() {
@@ -5088,10 +5197,17 @@ function SandboxPanel({
               <article className={`runtime-item ${result.status === "error" ? "error" : ""}`} key={`${result.scenarioId}-${result.completedAt}`}>
                 <strong>{result.label}</strong>
                 <small>
-                  {result.status === "ok" ? "ok" : "erro"} · sessão {result.sessionId ? result.sessionId.slice(0, 8) : "-"} ·{" "}
-                  {result.durationMs !== null ? `${result.durationMs}ms` : "-"} · {formatDateTime(result.completedAt)}
+                  {result.status === "ok" ? "ok" : "erro"} · sessão {result.sessionId ? result.sessionId.slice(0, 8) : "-"} · run{" "}
+                  {result.runId ? result.runId.slice(0, 18) : "-"} · {result.durationMs !== null ? `${result.durationMs}ms` : "-"} ·{" "}
+                  {formatDateTime(result.completedAt)}
+                </small>
+                <small>
+                  Comparação: {formatBatchComparisonSeverity(result.comparison.severity)} · baseline{" "}
+                  {result.comparison.baselineRunId ? result.comparison.baselineRunId.slice(0, 18) : "-"} · candidate{" "}
+                  {result.comparison.candidateRunId ? result.comparison.candidateRunId.slice(0, 18) : "-"}
                 </small>
                 <span>{result.message}</span>
+                <span>{result.comparison.verdict}</span>
               </article>
             ))}
           </div>
@@ -6035,6 +6151,22 @@ function formatRunDuration(valueMs: number | null): string {
     return `${seconds}.${String(ms).padStart(3, "0")}s`;
   }
   return `${safeMs}ms`;
+}
+
+function formatBatchComparisonSeverity(severity: StudioScenarioBatchComparison["severity"]): string {
+  if (severity === "pass") {
+    return "ok";
+  }
+  if (severity === "warn") {
+    return "atenção";
+  }
+  if (severity === "fail") {
+    return "falha";
+  }
+  if (severity === "missing") {
+    return "sem baseline";
+  }
+  return "erro";
 }
 
 function formatNullableNumber(value: number | null): string {
@@ -7651,6 +7783,12 @@ function buildStudioScenarioReplayFixture(
       stale: stalePins,
     },
   };
+}
+
+function studioRunScenarioId(run: StudioRunRecord): string | null {
+  const metadata = isRecord(run.session.metadata) ? run.session.metadata : {};
+  const scenario = isRecord(metadata.scenario) ? metadata.scenario : {};
+  return typeof scenario.id === "string" && scenario.id.trim() ? scenario.id : null;
 }
 
 function normalizeStudioScenarioReplayFixture(value: unknown): StudioScenarioReplayFixture | null {

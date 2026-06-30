@@ -87,7 +87,7 @@ O nó de código customizado aceita Python e JavaScript no runtime atual, por ar
 - Cenários podem usar pins ativos como mock/replay determinístico por nó; a execução envia os pins na metadata da sessão e o runtime gerado evita efeitos reais do nó quando há pin compatível.
 - Cenários possuem thresholds de regressão para crescimento de tokens, custo e duração; esses limites acompanham a metadata da execução e controlam o veredito da comparação.
 - Cenários importam/exportam fixture JSON de replay com input, thresholds, checkpoint, pins ativos/stale e metadata exata enviada ao runtime.
-- Cenários/fixtures podem ser executados em lote sequencial, com resumo por cenário, sessão, duração e erro.
+- Cenários/fixtures podem ser executados em lote sequencial, com resumo por cenário, sessão, duração, erro e comparação automática com o run anterior do mesmo cenário.
 
 ### Aprovação E Runtime Docker
 
@@ -142,13 +142,13 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 - Ampliar auditoria visual automatizada para estados gerais de erro/loading em painéis específicos além do status global e do fluxo Docker.
 - Melhorar ergonomia do canvas com grupos, estado dirty/stale e controles contextuais.
 - Evoluir edição visual de prompts, schemas e metadados sem depender do JSON bruto.
-- Evoluir replay por pins com comparação automática de lote e restauração real de estado.
+- Evoluir replay por pins com aprovação/relatório de lote e restauração real de estado.
 
 ### Médio Prazo
 
 - Playground avançado com forms derivados de schema, output render/raw e secrets locais mascarados.
 - Alertas de regressão configuráveis por tipo de nó.
-- Comparação automática de lote de fixtures de replay.
+- Relatório exportável de lote de fixtures de replay.
 - Restauração real de estado a partir de checkpointer/runtime, além do fork local já disponível como cenário.
 - Catálogo local de templates, tools, skills e agents reutilizáveis.
 - Editor visual de manifesto multiagente.
