@@ -23,6 +23,7 @@ import type {
   LangGraphSandboxApprovalStatus,
   MessageView,
   LoadedRuntimeManifest,
+  RuntimeManifest,
   RuntimeManifestGenerateResult,
   RuntimeManifestValidationResult,
   SandboxListResult,
@@ -260,6 +261,14 @@ export async function dockerRuntimeInspect(outDir: string, runtimeUrl?: string):
 
 export async function loadRuntimeManifest(): Promise<LoadedRuntimeManifest> {
   return request<LoadedRuntimeManifest>("/runtime-manifest");
+}
+
+export async function saveRuntimeManifest(manifest: RuntimeManifest): Promise<LoadedRuntimeManifest> {
+  return request<LoadedRuntimeManifest>("/runtime-manifest", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(manifest),
+  });
 }
 
 export async function validateRuntimeManifest(): Promise<RuntimeManifestValidationResult> {

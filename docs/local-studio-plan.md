@@ -421,6 +421,7 @@ Critério de sucesso:
 Entregáveis:
 
 - visualizar manifestos multiagente;
+- editar visualmente `runtime.manifest.json` com agentes, LLM padrão, empacotamento e prefixos de rota;
 - testar agentes por `agent_id`;
 - isolamento por rota/agente;
 - runs por agente;
@@ -510,6 +511,7 @@ Mas a ferramenta não deve depender disso para operar.
    - `agent_id` em runtime de teste e final já foi implementado em `/metadata`, sessão e eventos;
    - filtros por agente em runs locais do Studio já foram implementados;
    - resumo por agente e filtro por agente na timeline já foram implementados;
+   - editor visual inicial de `runtime.manifest.json` já foi implementado na aba `Runtime`;
    - falta ampliar o trace/histórico multiagente para uma visão dedicada de bundle.
 
 ## Regra de decisão para novos comportamentos

@@ -1119,10 +1119,29 @@ test("Builder API reads, validates and generates a runtime manifest bundle", asy
   assert.equal(loaded.statusCode, 200);
   assert.equal(loaded.json().manifest.id, "reference-runtime");
 
+  const manifestDraft = loaded.json().manifest;
+  manifestDraft.name = "Reference Runtime Visual";
+  manifestDraft.packaging = "multiagent";
+  manifestDraft.defaultLlm.mockEnv = "MOCK_LLM";
+  manifestDraft.agents[0].routePrefix = "/reference-interview";
+  const saved = await app.inject({
+    method: "PUT",
+    url: "/runtime-manifest",
+    headers: { "content-type": "application/json" },
+    payload: manifestDraft,
+  });
+  assert.equal(saved.statusCode, 200);
+  assert.equal(saved.json().manifest.name, "Reference Runtime Visual");
+  assert.equal(saved.json().manifest.packaging, "multiagent");
+  assert.equal(saved.json().manifest.agents[0].routePrefix, "/reference-interview");
+  const savedFile = JSON.parse(await readFile(path.join(workspaceRoot, "runtime.manifest.json"), "utf-8"));
+  assert.equal(savedFile.defaultLlm.mockEnv, "MOCK_LLM");
+
   const validated = await app.inject({ method: "POST", url: "/runtime-manifest/validate" });
   assert.equal(validated.statusCode, 200);
   assert.equal(validated.json().status, "ok");
   assert.equal(validated.json().agents[0].flowId, "reference-interview");
+  assert.equal(validated.json().agents[0].routePrefix, "/reference-interview");
 
   const generated = await app.inject({
     method: "POST",

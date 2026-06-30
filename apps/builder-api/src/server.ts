@@ -36,6 +36,7 @@ import {
   readSchemaAsset,
   saveFlow,
   savePrompt,
+  saveRuntimeManifest,
   saveSchemaAsset,
   validateRuntimeManifest,
   validateFlow,
@@ -196,6 +197,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     return {
       path: loaded.relativePath,
       manifest: loaded.manifest,
+    };
+  });
+
+  app.put<{ Body: unknown }>("/runtime-manifest", async (request) => {
+    const saved = await saveRuntimeManifest(workspaceRoot, request.body);
+    return {
+      path: saved.relativePath,
+      manifest: saved.manifest,
     };
   });
 

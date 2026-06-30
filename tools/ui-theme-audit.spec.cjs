@@ -226,6 +226,30 @@ test("inspector panels render internal loading and error states", async ({ page 
   expect(unexpectedErrors, "Unexpected browser errors while rendering internal panel states").toEqual([]);
 });
 
+test("runtime manifest editor saves visual changes", async ({ page }) => {
+  const pageErrors = attachBrowserErrorCollector(page);
+  await openBuilder(page, "light", viewports[0]);
+  await openInspectorTab(page, "Runtime");
+
+  const runtimePanel = page.locator(".runtime-manifest-body");
+  await expect(runtimePanel.getByLabel("Nome")).toHaveValue("Reference Runtime");
+  await runtimePanel.getByLabel("Nome").fill("Reference Runtime UI");
+  await runtimePanel.getByLabel("Empacotamento").selectOption("multiagent");
+  await runtimePanel.getByLabel("Prefixo da rota").fill("/reference-interview");
+  await runtimePanel.getByLabel("Mock env").fill("MOCK_LLM");
+  await expect(runtimePanel.getByText("editado")).toBeVisible();
+
+  await runtimePanel.getByRole("button", { name: /Salvar/ }).click();
+  await expect(runtimePanel.getByLabel("Nome")).toHaveValue("Reference Runtime UI");
+  await expect(runtimePanel.locator(".runtime-pill", { hasText: "multiagent" })).toBeVisible();
+  await runtimePanel.getByRole("button", { name: /Validar/ }).click();
+  await expect(runtimePanel.getByText("Agentes válidos")).toBeVisible();
+
+  await expectNoDocumentHorizontalOverflow(page);
+  await expectTopbarControlsToFit(page);
+  expect(pageErrors, "Unexpected browser errors while saving runtime manifest visually").toEqual([]);
+});
+
 for (const theme of themes) {
   test(`studio runs with data render in ${theme} theme`, async ({ page, request }) => {
     const pageErrors = attachBrowserErrorCollector(page);

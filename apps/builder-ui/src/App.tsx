@@ -97,6 +97,7 @@ import {
   sandboxStatus,
   saveFlow,
   savePromptAsset,
+  saveRuntimeManifest,
   saveSchemaAsset,
   saveStudioRun,
   sendRuntimeTurn,
@@ -135,6 +136,7 @@ import type {
   LoadedFlow,
   LoadedRuntimeManifest,
   MessageView,
+  RuntimeManifest,
   RuntimeManifestGenerateResult,
   RuntimeManifestValidationResult,
   SandboxStatus,
@@ -592,6 +594,8 @@ export default function App() {
   const [studioNodePins, setStudioNodePins] = useState<StudioNodePin[]>([]);
   const [userMessage, setUserMessage] = useState("Olá, quero testar este fluxo.");
   const [runtimeManifest, setRuntimeManifest] = useState<LoadedRuntimeManifest | null>(null);
+  const [runtimeManifestDraft, setRuntimeManifestDraft] = useState<RuntimeManifest | null>(null);
+  const [runtimeManifestDirty, setRuntimeManifestDirty] = useState(false);
   const [flowValidation, setFlowValidation] = useState<ValidationResult | null>(null);
   const [manifestValidation, setManifestValidation] = useState<RuntimeManifestValidationResult | null>(null);
   const [manifestGeneration, setManifestGeneration] = useState<RuntimeManifestGenerateResult | null>(null);
@@ -681,6 +685,8 @@ export default function App() {
     try {
       const loaded = await loadRuntimeManifest();
       setRuntimeManifest(loaded);
+      setRuntimeManifestDraft(cloneRuntimeManifest(loaded.manifest));
+      setRuntimeManifestDirty(false);
       setManifestValidation(null);
       setManifestGeneration(null);
       setRuntimeManifestLoadState({ kind: "ready", message: `${loaded.manifest.name} carregado.` });
@@ -691,6 +697,8 @@ export default function App() {
     } catch (error) {
       const message = errorMessage(error);
       setRuntimeManifest(null);
+      setRuntimeManifestDraft(null);
+      setRuntimeManifestDirty(false);
       setManifestValidation(null);
       setManifestGeneration(null);
       setRuntimeManifestLoadState({ kind: "error", message: `Erro ao carregar runtime.manifest.json: ${message}` });
@@ -1324,6 +1332,144 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  function updateRuntimeManifestDraft(mutator: (manifest: RuntimeManifest) => RuntimeManifest) {
+    setRuntimeManifestDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const next = mutator(current);
+      if (next !== current) {
+        setRuntimeManifestDirty(true);
+        setManifestValidation(null);
+        setManifestGeneration(null);
+      }
+      return next;
+    });
+  }
+
+  function updateRuntimeManifestField<K extends keyof Pick<RuntimeManifest, "id" | "name" | "version">>(
+    key: K,
+    value: RuntimeManifest[K],
+  ) {
+    updateRuntimeManifestDraft((manifest) => ({ ...manifest, [key]: value }));
+  }
+
+  function updateRuntimeManifestPackaging(packaging: RuntimeManifest["packaging"]) {
+    updateRuntimeManifestDraft((manifest) => {
+      const next: RuntimeManifest = { ...manifest, packaging };
+      return packaging === "multiagent" ? ensureManifestRoutePrefixes(next) : next;
+    });
+  }
+
+  function updateRuntimeManifestUseDefaultLlm(enabled: boolean) {
+    updateRuntimeManifestDraft((manifest) => {
+      if (!enabled) {
+        const { defaultLlm: _defaultLlm, ...rest } = manifest;
+        return rest;
+      }
+      const adapter = llmAdapters[0];
+      return {
+        ...manifest,
+        defaultLlm: manifest.defaultLlm ?? {
+          adapter: adapter?.id ?? "openai",
+          model: adapter?.defaultModel || "gpt-4.1-mini",
+          apiKeyEnv: adapter?.apiKeyEnv ?? "OPENAI_API_KEY",
+          baseUrlEnv: adapter?.baseUrlEnv ?? "OPENAI_BASE_URL",
+        },
+      };
+    });
+  }
+
+  function updateRuntimeManifestLlmAdapter(adapterId: string) {
+    updateRuntimeManifestDraft((manifest) => {
+      const adapter = llmAdapters.find((item) => item.id === adapterId);
+      return {
+        ...manifest,
+        defaultLlm: {
+          ...(manifest.defaultLlm ?? { model: adapter?.defaultModel || "gpt-4.1-mini" }),
+          adapter: adapterId,
+          model: adapter?.defaultModel || manifest.defaultLlm?.model || "gpt-4.1-mini",
+          apiKeyEnv: adapter?.apiKeyEnv ?? manifest.defaultLlm?.apiKeyEnv,
+          baseUrlEnv: adapter?.baseUrlEnv ?? manifest.defaultLlm?.baseUrlEnv,
+          mockEnv: adapter?.mockEnv ?? manifest.defaultLlm?.mockEnv,
+        },
+      };
+    });
+  }
+
+  function updateRuntimeManifestLlmField(key: keyof NonNullable<RuntimeManifest["defaultLlm"]>, value: string) {
+    updateRuntimeManifestDraft((manifest) => ({
+      ...manifest,
+      defaultLlm: {
+        ...(manifest.defaultLlm ?? { adapter: "openai", model: "gpt-4.1-mini" }),
+        [key]: value.trim() ? value : undefined,
+      },
+    }));
+  }
+
+  function addRuntimeManifestAgent() {
+    updateRuntimeManifestDraft((manifest) => {
+      const usedPaths = new Set(manifest.agents.map((agent) => agent.flowPath));
+      const candidate = flows.find((flow) => !usedPaths.has(flow.path)) ?? flows[0];
+      const agentId = uniqueManifestAgentId(candidate?.id ?? "new-agent", manifest.agents);
+      const agent = {
+        id: agentId,
+        flowPath: candidate?.path ?? `flows/${agentId}/agent.flow.json`,
+        routePrefix: manifest.packaging === "multiagent" ? uniqueManifestRoutePrefix(`/${agentId}`, manifest.agents) : "",
+      };
+      return {
+        ...manifest,
+        agents: [...manifest.agents, agent],
+      };
+    });
+  }
+
+  function updateRuntimeManifestAgent(
+    index: number,
+    key: keyof RuntimeManifest["agents"][number],
+    value: string,
+  ) {
+    updateRuntimeManifestDraft((manifest) => ({
+      ...manifest,
+      agents: manifest.agents.map((agent, agentIndex) => {
+        if (agentIndex !== index) {
+          return agent;
+        }
+        const next = { ...agent, [key]: value };
+        if (key === "flowPath" && (!agent.id || agent.id === manifestAgentIdFromFlowPath(agent.flowPath))) {
+          next.id = uniqueManifestAgentId(manifestAgentIdFromFlowPath(value), manifest.agents, index);
+          if (manifest.packaging === "multiagent") {
+            const otherAgents = manifest.agents.filter((_item, otherIndex) => otherIndex !== index);
+            next.routePrefix = uniqueManifestRoutePrefix(next.routePrefix || `/${next.id}`, otherAgents);
+          }
+        }
+        return next;
+      }),
+    }));
+  }
+
+  function removeRuntimeManifestAgent(index: number) {
+    updateRuntimeManifestDraft((manifest) => {
+      if (manifest.agents.length <= 1) {
+        return manifest;
+      }
+      return {
+        ...manifest,
+        agents: manifest.agents.filter((_agent, agentIndex) => agentIndex !== index),
+      };
+    });
+  }
+
+  function resetRuntimeManifestDraft() {
+    if (!runtimeManifest) {
+      return;
+    }
+    setRuntimeManifestDraft(cloneRuntimeManifest(runtimeManifest.manifest));
+    setRuntimeManifestDirty(false);
+    setManifestValidation(null);
+    setManifestGeneration(null);
   }
 
   function updateFlowField<K extends keyof Pick<AgentFlow, "name" | "version">>(key: K, value: AgentFlow[K]) {
@@ -2454,6 +2600,31 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       setStatus({ kind: "ok", message: manifestValidationMessage(result) });
     } catch (error) {
       setManifestValidation(null);
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleSaveRuntimeManifest() {
+    if (!runtimeManifestDraft) {
+      return;
+    }
+    const previousDefaultOutDir = runtimeManifest ? `generated/${runtimeManifest.manifest.id}-bundle` : "";
+    setStatus({ kind: "busy", message: "Salvando runtime.manifest.json." });
+    setRuntimeManifestLoadState({ kind: "loading", message: "Salvando runtime.manifest.json." });
+    try {
+      const saved = await saveRuntimeManifest(runtimeManifestDraft);
+      setRuntimeManifest(saved);
+      setRuntimeManifestDraft(cloneRuntimeManifest(saved.manifest));
+      setRuntimeManifestDirty(false);
+      setManifestValidation(null);
+      setManifestGeneration(null);
+      setRuntimeManifestLoadState({ kind: "ready", message: `${saved.manifest.name} salvo.` });
+      setManifestOutDir((current) => (
+        !current || current === previousDefaultOutDir ? `generated/${saved.manifest.id}-bundle` : current
+      ));
+      setStatus({ kind: "ok", message: `${saved.manifest.name} salvo em ${saved.path}.` });
+    } catch (error) {
+      setRuntimeManifestLoadState({ kind: "error", message: errorMessage(error) });
       setStatus({ kind: "error", message: errorMessage(error) });
     }
   }
@@ -3799,11 +3970,25 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           ) : inspectorTab === "runtime" ? (
             <RuntimeManifestPanel
               loaded={runtimeManifest}
+              draft={runtimeManifestDraft}
+              dirty={runtimeManifestDirty}
+              flows={flows}
+              llmAdapters={llmAdapters}
               loadState={runtimeManifestLoadState}
               validation={manifestValidation}
               generation={manifestGeneration}
               outDir={manifestOutDir}
               onOutDirChange={setManifestOutDir}
+              onManifestFieldChange={updateRuntimeManifestField}
+              onManifestPackagingChange={updateRuntimeManifestPackaging}
+              onManifestUseDefaultLlmChange={updateRuntimeManifestUseDefaultLlm}
+              onManifestLlmAdapterChange={updateRuntimeManifestLlmAdapter}
+              onManifestLlmFieldChange={updateRuntimeManifestLlmField}
+              onManifestAgentChange={updateRuntimeManifestAgent}
+              onAddManifestAgent={addRuntimeManifestAgent}
+              onRemoveManifestAgent={removeRuntimeManifestAgent}
+              onResetDraft={resetRuntimeManifestDraft}
+              onSave={handleSaveRuntimeManifest}
               onRefresh={() => refreshRuntimeManifest()}
               onValidate={handleValidateManifest}
               onGenerate={handleGenerateManifest}
@@ -5993,21 +6178,49 @@ function GeneratedArtifactPanel({
 
 function RuntimeManifestPanel({
   loaded,
+  draft,
+  dirty,
+  flows,
+  llmAdapters,
   loadState,
   validation,
   generation,
   outDir,
   onOutDirChange,
+  onManifestFieldChange,
+  onManifestPackagingChange,
+  onManifestUseDefaultLlmChange,
+  onManifestLlmAdapterChange,
+  onManifestLlmFieldChange,
+  onManifestAgentChange,
+  onAddManifestAgent,
+  onRemoveManifestAgent,
+  onResetDraft,
+  onSave,
   onRefresh,
   onValidate,
   onGenerate,
 }: {
   loaded: LoadedRuntimeManifest | null;
+  draft: RuntimeManifest | null;
+  dirty: boolean;
+  flows: FlowSummary[];
+  llmAdapters: LlmAdapterCatalogItem[];
   loadState: PanelLoadState;
   validation: RuntimeManifestValidationResult | null;
   generation: RuntimeManifestGenerateResult | null;
   outDir: string;
   onOutDirChange: (value: string) => void;
+  onManifestFieldChange: (key: "id" | "name" | "version", value: string) => void;
+  onManifestPackagingChange: (value: RuntimeManifest["packaging"]) => void;
+  onManifestUseDefaultLlmChange: (value: boolean) => void;
+  onManifestLlmAdapterChange: (adapterId: string) => void;
+  onManifestLlmFieldChange: (key: keyof NonNullable<RuntimeManifest["defaultLlm"]>, value: string) => void;
+  onManifestAgentChange: (index: number, key: keyof RuntimeManifest["agents"][number], value: string) => void;
+  onAddManifestAgent: () => void;
+  onRemoveManifestAgent: (index: number) => void;
+  onResetDraft: () => void;
+  onSave: () => void;
   onRefresh: () => void;
   onValidate: () => void;
   onGenerate: () => void;
@@ -6036,34 +6249,113 @@ function RuntimeManifestPanel({
     );
   }
 
-  const { manifest } = loaded;
+  const manifest = draft ?? loaded.manifest;
+  const defaultLlm = manifest.defaultLlm;
+  const defaultLlmEnabled = Boolean(defaultLlm);
+  const adapterOptions = llmAdapterOptions(llmAdapters, defaultLlm?.adapter ?? "");
   const generatedAgents = generation?.agents ?? [];
   return (
     <div className="runtime-manifest-body">
       <section className="sandbox-section">
         <div className="sandbox-header">
           <strong>{manifest.name}</strong>
-          <span className={manifest.packaging === "multiagent" ? "runtime-pill running" : "runtime-pill"}>
-            {manifest.packaging}
+          <span className={dirty ? "runtime-pill warning" : manifest.packaging === "multiagent" ? "runtime-pill running" : "runtime-pill"}>
+            {dirty ? "editado" : manifest.packaging}
           </span>
         </div>
         <PanelNotice state={loadState} />
-        <dl className="kv-list inspector-list">
-          <Field label="Arquivo" value={loaded.path} />
-          <Field label="ID" value={manifest.id} />
-          <Field label="Versão" value={manifest.version} />
-          <Field label="LLM padrão" value={manifest.defaultLlm ? `${manifest.defaultLlm.adapter} - ${manifest.defaultLlm.model}` : "-"} />
-        </dl>
+        <div className="edit-group manifest-editor-grid">
+          <label>
+            <span>Nome</span>
+            <input value={manifest.name} onChange={(event) => onManifestFieldChange("name", event.target.value)} />
+          </label>
+          <label>
+            <span>ID</span>
+            <input value={manifest.id} onChange={(event) => onManifestFieldChange("id", event.target.value)} />
+          </label>
+          <label>
+            <span>Versão</span>
+            <input value={manifest.version} onChange={(event) => onManifestFieldChange("version", event.target.value)} />
+          </label>
+          <label>
+            <span>Empacotamento</span>
+            <select
+              value={manifest.packaging}
+              onChange={(event) => onManifestPackagingChange(event.target.value as RuntimeManifest["packaging"])}
+            >
+              <option value="monoagent">Monoagente</option>
+              <option value="multiagent">Multiagente</option>
+            </select>
+          </label>
+        </div>
         <div className="sandbox-actions">
+          <button type="button" className="command-button primary" onClick={onSave} disabled={!dirty}>
+            <Save size={16} aria-hidden="true" />
+            Salvar
+          </button>
+          <button type="button" className="command-button" onClick={onResetDraft} disabled={!dirty}>
+            Desfazer
+          </button>
           <button type="button" className="command-button" onClick={onRefresh}>
             <RefreshCw size={16} aria-hidden="true" />
             Atualizar
           </button>
-          <button type="button" className="command-button" onClick={onValidate}>
+          <button type="button" className="command-button" onClick={onValidate} disabled={dirty}>
             <CheckCircle2 size={16} aria-hidden="true" />
             Validar
           </button>
         </div>
+        <dl className="kv-list inspector-list">
+          <Field label="Arquivo" value={loaded.path} />
+          <Field label="LLM padrão" value={defaultLlm ? `${defaultLlm.adapter} - ${defaultLlm.model}` : "-"} />
+        </dl>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
+          <strong>LLM padrão</strong>
+          <span>{defaultLlmEnabled ? "ativo" : "desligado"}</span>
+        </div>
+        <div className="edit-group">
+          <label className="inline-check">
+            <input
+              type="checkbox"
+              checked={defaultLlmEnabled}
+              onChange={(event) => onManifestUseDefaultLlmChange(event.target.checked)}
+            />
+            <span>Usar LLM padrão no bundle</span>
+          </label>
+        </div>
+        {defaultLlmEnabled && defaultLlm ? (
+          <div className="edit-group manifest-editor-grid">
+            <label>
+              <span>Adapter</span>
+              <select value={defaultLlm.adapter} onChange={(event) => onManifestLlmAdapterChange(event.target.value)}>
+                {adapterOptions.map((adapter) => (
+                  <option value={adapter.id} key={`manifest-llm-${adapter.id}`}>
+                    {adapter.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Modelo</span>
+              <input value={defaultLlm.model} onChange={(event) => onManifestLlmFieldChange("model", event.target.value)} />
+            </label>
+            <label>
+              <span>API key env</span>
+              <input value={defaultLlm.apiKeyEnv ?? ""} onChange={(event) => onManifestLlmFieldChange("apiKeyEnv", event.target.value)} />
+            </label>
+            <label>
+              <span>Base URL env</span>
+              <input value={defaultLlm.baseUrlEnv ?? ""} onChange={(event) => onManifestLlmFieldChange("baseUrlEnv", event.target.value)} />
+            </label>
+            <label>
+              <span>Mock env</span>
+              <input value={defaultLlm.mockEnv ?? ""} onChange={(event) => onManifestLlmFieldChange("mockEnv", event.target.value)} />
+            </label>
+          </div>
+        ) : null}
       </section>
 
       <section className="sandbox-section">
@@ -6071,11 +6363,52 @@ function RuntimeManifestPanel({
           <strong>Agentes</strong>
           <span>{manifest.agents.length}</span>
         </div>
-        <div className="runtime-list compact-list">
-          {manifest.agents.map((agent) => (
-            <article className="runtime-item" key={agent.id}>
-              <strong>{agent.id}</strong>
-              <span>{agent.routePrefix || "/"} - {agent.flowPath}</span>
+        <div className="sandbox-actions">
+          <button type="button" className="command-button" onClick={onAddManifestAgent}>
+            <Plus size={16} aria-hidden="true" />
+            Adicionar agente
+          </button>
+        </div>
+        <div className="runtime-list compact-list manifest-agent-list">
+          {manifest.agents.map((agent, index) => (
+            <article className="runtime-item manifest-agent-item" key={`${agent.id}-${index}`}>
+              <div className="manifest-agent-header">
+                <strong>{agent.id || `agente-${index + 1}`}</strong>
+                <span>{agent.routePrefix || "/"}</span>
+              </div>
+              <div className="edit-group manifest-agent-grid">
+                <label>
+                  <span>ID do agente</span>
+                  <input value={agent.id} onChange={(event) => onManifestAgentChange(index, "id", event.target.value)} />
+                </label>
+                <label>
+                  <span>Flow</span>
+                  <select value={agent.flowPath} onChange={(event) => onManifestAgentChange(index, "flowPath", event.target.value)}>
+                    {manifestFlowOptions(flows, agent.flowPath).map((flow) => (
+                      <option value={flow.path} key={`manifest-agent-flow-${index}-${flow.path}`}>
+                        {flow.id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Prefixo da rota</span>
+                  <input
+                    value={agent.routePrefix}
+                    placeholder={manifest.packaging === "multiagent" ? `/${agent.id || "agente"}` : ""}
+                    onChange={(event) => onManifestAgentChange(index, "routePrefix", event.target.value)}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                className="command-button danger"
+                onClick={() => onRemoveManifestAgent(index)}
+                disabled={manifest.agents.length <= 1}
+              >
+                <Trash2 size={16} aria-hidden="true" />
+                Remover agente
+              </button>
             </article>
           ))}
         </div>
@@ -6092,7 +6425,7 @@ function RuntimeManifestPanel({
             <input value={outDir} onChange={(event) => onOutDirChange(event.target.value)} />
           </label>
         </div>
-        <button type="button" className="command-button primary full-width" onClick={onGenerate}>
+        <button type="button" className="command-button primary full-width" onClick={onGenerate} disabled={dirty}>
           <Terminal size={16} aria-hidden="true" />
           Gerar bundle
         </button>
@@ -10693,6 +11026,109 @@ function manifestValidationMessage(result: RuntimeManifestValidationResult): str
 
 function manifestGenerateMessage(result: RuntimeManifestGenerateResult): string {
   return `Bundle ${result.manifestId} gerado em ${result.outDir}.`;
+}
+
+function cloneRuntimeManifest(manifest: RuntimeManifest): RuntimeManifest {
+  return JSON.parse(JSON.stringify(manifest)) as RuntimeManifest;
+}
+
+function ensureManifestRoutePrefixes(manifest: RuntimeManifest): RuntimeManifest {
+  const used = new Set<string>();
+  return {
+    ...manifest,
+    agents: manifest.agents.map((agent) => {
+      const current = agent.routePrefix.trim();
+      const preferred = current && current !== "/" ? current : `/${slugIdentifier(agent.id || manifestAgentIdFromFlowPath(agent.flowPath))}`;
+      const routePrefix = uniqueManifestRoutePrefix(preferred, Array.from(used).map((route) => ({ routePrefix: route })));
+      used.add(routePrefix.replace(/\/+$/g, "") || "/");
+      return {
+        ...agent,
+        routePrefix,
+      };
+    }),
+  };
+}
+
+function uniqueManifestAgentId(
+  preferredId: string,
+  agents: RuntimeManifest["agents"],
+  currentIndex: number | null = null,
+): string {
+  const base = slugIdentifier(preferredId || "agent");
+  const used = new Set(
+    agents
+      .filter((_agent, index) => index !== currentIndex)
+      .map((agent) => agent.id),
+  );
+  if (!used.has(base)) {
+    return base;
+  }
+  let index = 2;
+  while (used.has(`${base}-${index}`)) {
+    index += 1;
+  }
+  return `${base}-${index}`;
+}
+
+function uniqueManifestRoutePrefix(preferredRoute: string, agents: Array<Pick<RuntimeManifest["agents"][number], "routePrefix">>): string {
+  const normalizedPreferred = normalizeManifestRoutePrefix(preferredRoute);
+  const used = new Set(
+    agents
+      .map((agent) => normalizeManifestRoutePrefix(agent.routePrefix))
+      .filter((route) => route !== "/"),
+  );
+  if (!used.has(normalizedPreferred)) {
+    return normalizedPreferred;
+  }
+  let index = 2;
+  while (used.has(`${normalizedPreferred}-${index}`)) {
+    index += 1;
+  }
+  return `${normalizedPreferred}-${index}`;
+}
+
+function normalizeManifestRoutePrefix(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "/";
+  }
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.replace(/\/+$/g, "") || "/";
+}
+
+function manifestAgentIdFromFlowPath(flowPath: string): string {
+  const parts = flowPath.split(/[\\/]/).filter(Boolean);
+  const flowIndex = parts.findIndex((part) => part === "flows");
+  if (flowIndex >= 0 && parts[flowIndex + 1]) {
+    return slugIdentifier(parts[flowIndex + 1]);
+  }
+  const fileName = parts.at(-1)?.replace(/\.json$/i, "") || "agent";
+  return slugIdentifier(fileName);
+}
+
+function slugIdentifier(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "agent";
+}
+
+function manifestFlowOptions(flows: FlowSummary[], currentPath: string): FlowSummary[] {
+  if (!currentPath || flows.some((flow) => flow.path === currentPath)) {
+    return flows;
+  }
+  return [
+    ...flows,
+    {
+      id: manifestAgentIdFromFlowPath(currentPath),
+      name: currentPath,
+      version: null,
+      path: currentPath,
+      valid: true,
+    },
+  ];
 }
 
 function parseSandboxPort(value: string): number | undefined {

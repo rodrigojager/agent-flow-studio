@@ -38,6 +38,8 @@ export interface LoadedRuntimeManifest {
   absolutePath: string;
 }
 
+export interface SaveRuntimeManifestResult extends LoadedRuntimeManifest {}
+
 export interface GenerateResult {
   flowId: string;
   flowPath: string;
@@ -407,6 +409,31 @@ export async function loadRuntimeManifest(
   } catch (error) {
     throw new WorkspaceError("runtime.manifest.json não respeita o Runtime Manifest Spec.", 422, error);
   }
+}
+
+export async function saveRuntimeManifest(
+  workspaceRoot: string,
+  value: unknown,
+  manifestPath = "runtime.manifest.json",
+): Promise<SaveRuntimeManifestResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const absolutePath = safeResolve(root, manifestPath);
+  let manifest: RuntimeManifest;
+  try {
+    manifest = parseRuntimeManifest(value);
+  } catch (error) {
+    throw new WorkspaceError("Manifesto enviado não respeita o Runtime Manifest Spec.", 422, error);
+  }
+
+  const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+  const tempPath = `${absolutePath}.tmp-${Date.now()}`;
+  await writeFile(tempPath, serialized, "utf-8");
+  await rename(tempPath, absolutePath);
+  return {
+    manifest,
+    relativePath: toWorkspaceRelative(root, absolutePath),
+    absolutePath,
+  };
 }
 
 export async function validateRuntimeManifest(workspaceRoot: string) {
