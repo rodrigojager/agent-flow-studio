@@ -234,6 +234,17 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toHaveCount(0);
   await catalogPanel.getByRole("button", { name: /^Limpar$/ }).click();
 
+  const guardedBlock = page.locator(".catalog-card", { hasText: "Bloco HTTP JSON validado" });
+  await expect(guardedBlock).toBeVisible();
+  await guardedBlock.getByRole("button", { name: /^Criar bloco$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Bloco HTTP JSON validado aplicado ao flow", {
+    timeout: 10_000,
+  });
+  await expect(page.locator(".react-flow__node", { hasText: "guarded-http-json-block-prepare_payload" })).toHaveCount(1);
+  await expect(page.locator(".react-flow__node", { hasText: "guarded-http-json-block-call_http_json" })).toHaveCount(1);
+
+  await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
+  await openInspectorTab(page, "Catálogo");
   const httpTool = page.locator(".catalog-card", { hasText: "HTTP JSON tool" });
   await httpTool.getByRole("button", { name: /^Usar no nó$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("HTTP JSON tool aplicado ao flow", { timeout: 10_000 });

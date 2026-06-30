@@ -1487,6 +1487,11 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(builtinHttpTool.version, "1.0.0");
   assert.equal(builtinHttpTool.revision, 1);
   assert.match(builtinHttpTool.contentHash, /^[0-9a-f]{12}$/);
+  const builtinToolBundle = catalog
+    .json()
+    .items.find((item: { kind: string; id: string }) => item.kind === "tool" && item.id === "guarded-http-json-block");
+  assert.ok(builtinToolBundle);
+  assert.match(builtinToolBundle.content, /agent-flow-builder\.tool-bundle\.v1/);
   assert.ok(
     catalog
       .json()
@@ -1644,6 +1649,35 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(savedTool.json().item.source, "local");
   assert.equal(savedTool.json().item.nodePatch.handler, "deterministic_gate");
 
+  const savedToolBundle = await app.inject({
+    method: "POST",
+    url: "/catalog/items",
+    headers: { "content-type": "application/json" },
+    payload: {
+      kind: "tool",
+      id: "local-tool-bundle",
+      name: "Tool composta local",
+      description: "Bundle local mínimo para reuso.",
+      tags: ["tool", "bundle", "local"],
+      content: JSON.stringify({
+        format: "agent-flow-builder.tool-bundle.v1",
+        nodes: [
+          {
+            id: "normalize_payload",
+            type: "transform_json",
+            inputPath: "input",
+            outputPath: "normalized_payload",
+          },
+        ],
+        edges: [],
+      }),
+    },
+  });
+  assert.equal(savedToolBundle.statusCode, 200);
+  assert.equal(savedToolBundle.json().item.source, "local");
+  assert.match(savedToolBundle.json().item.content, /agent-flow-builder\.tool-bundle\.v1/);
+  assert.equal(savedToolBundle.json().item.nodePatch, undefined);
+
   const savedSkill = await app.inject({
     method: "POST",
     url: "/catalog/items",
@@ -1695,6 +1729,30 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.equal(appliedTool.json().node.type, "code");
   assert.equal(appliedTool.json().node.codeExecution, "http");
   assert.equal(appliedTool.json().node.url, "http://127.0.0.1:9001/run");
+
+  const appliedToolBundle = await app.inject({
+    method: "POST",
+    url: "/flows/reference-interview/catalog/apply",
+    headers: { "content-type": "application/json" },
+    payload: {
+      itemId: "guarded-http-json-block",
+      kind: "tool",
+    },
+  });
+  assert.equal(appliedToolBundle.statusCode, 200);
+  const bundleFlow = appliedToolBundle.json().flow;
+  const preparedNode = bundleFlow.nodes.find((node: { id: string }) => node.id === "guarded-http-json-block-prepare_payload");
+  const httpNode = bundleFlow.nodes.find((node: { id: string }) => node.id === "guarded-http-json-block-call_http_json");
+  assert.equal(bundleFlow.nodes.length, appliedTool.json().flow.nodes.length + 2);
+  assert.equal(appliedToolBundle.json().node.id, "guarded-http-json-block-prepare_payload");
+  assert.equal(preparedNode.type, "transform_json");
+  assert.equal(httpNode.codeExecution, "http");
+  assert.ok(
+    bundleFlow.edges.some(
+      (edge: { from: string; to: string }) =>
+        edge.from === "guarded-http-json-block-prepare_payload" && edge.to === "guarded-http-json-block-call_http_json",
+    ),
+  );
 
   const appliedSkill = await app.inject({
     method: "POST",

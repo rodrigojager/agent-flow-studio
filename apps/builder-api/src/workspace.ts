@@ -10,8 +10,10 @@ import {
 } from "@agent-flow-builder/codegen-langgraph";
 import {
   analyzeAgentFlow,
+  EdgeSchema,
   type AgentFlow,
   type FlowDiagnostic,
+  NodeSchema,
   parseAgentFlow,
   parseRuntimeManifest,
   type RuntimeManifest,
@@ -261,6 +263,7 @@ const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
 const LOCAL_CATALOG_FORMAT = "agent-flow-builder.local-catalog.v1";
 const AGENT_TEMPLATE_FORMAT = "agent-flow-builder.agent-template.v1";
 const SKILL_CATALOG_FORMAT = "agent-flow-builder.skill.v1";
+const TOOL_BUNDLE_FORMAT = "agent-flow-builder.tool-bundle.v1";
 const LOCAL_CATALOG_PATH = ".agent-flow/catalog/registry.json";
 const GENERATED_ARTIFACT_MAX_FILES = 1000;
 const GENERATED_ARTIFACT_MAX_PREVIEW_BYTES = 512 * 1024;
@@ -1244,6 +1247,12 @@ interface SkillCatalogDefinition {
   targetNodePatch?: Record<string, unknown>;
 }
 
+interface ToolBundleCatalogDefinition {
+  format: typeof TOOL_BUNDLE_FORMAT;
+  nodes: AgentFlow["nodes"];
+  edges: AgentFlow["edges"];
+}
+
 function builtInCatalogItems(): LocalCatalogItem[] {
   const createdAt = "2026-06-30T00:00:00.000Z";
   const items: Array<Omit<LocalCatalogItem, "version" | "revision" | "contentHash" | "history">> = [
@@ -1409,6 +1418,44 @@ function builtInCatalogItems(): LocalCatalogItem[] {
       },
     },
     {
+      id: "guarded-http-json-block",
+      kind: "tool",
+      name: "Bloco HTTP JSON validado",
+      description: "Bloco composto com normalização de payload seguida de chamada HTTP local por contrato JSON.",
+      tags: ["tool", "bundle", "http", "json"],
+      scope: "local",
+      source: "builtin",
+      createdAt,
+      updatedAt: createdAt,
+      content: toolBundleCatalogContent(
+        [
+          {
+            id: "prepare_payload",
+            type: "transform_json",
+            description: "Normaliza o input recebido antes da execução externa.",
+            inputPath: "input",
+            outputPath: "tool_payload",
+            position: { x: 0, y: 0 },
+          },
+          {
+            id: "call_http_json",
+            type: "code",
+            description: "Executa a tool HTTP local usando o payload normalizado.",
+            handler: "http_json_tool",
+            codeLanguage: "external",
+            codeExecution: "http",
+            method: "POST",
+            url: "http://127.0.0.1:9001/run",
+            inputPath: "tool_payload",
+            outputPath: "tool_result",
+            timeoutSeconds: 30,
+            position: { x: 260, y: 0 },
+          },
+        ],
+        [{ from: "prepare_payload", to: "call_http_json" }],
+      ),
+    },
+    {
       id: "mcp-stdio-tool",
       kind: "tool",
       name: "MCP stdio tool",
@@ -1541,10 +1588,16 @@ function parseLocalCatalogItemInput(value: unknown): LocalCatalogItemInput {
       throw new WorkspaceError("Conteúdo do item schema deve ser JSON válido.", 422, error);
     }
   } else if (kind === "tool") {
-    if (!isRecord(value.nodePatch)) {
-      throw new WorkspaceError("Item tool precisa de nodePatch.", 422);
+    const content = typeof value.content === "string" && value.content.trim() ? value.content : "";
+    if (content) {
+      item.content = normalizeToolBundleCatalogContent(content);
     }
-    item.nodePatch = sanitizeCatalogNodePatch(value.nodePatch);
+    if (isRecord(value.nodePatch)) {
+      item.nodePatch = sanitizeCatalogNodePatch(value.nodePatch);
+    }
+    if (!item.content && !item.nodePatch) {
+      throw new WorkspaceError("Item tool precisa de nodePatch ou content JSON de tool bundle.", 422);
+    }
   } else if (kind === "agent_template") {
     const content = typeof value.content === "string" && value.content.trim() ? value.content : "";
     if (!content) {
@@ -1759,6 +1812,69 @@ function substituteTemplateValue(value: unknown, context: { flowId: string; flow
   return value;
 }
 
+function normalizeToolBundleCatalogContent(content: string): string {
+  const parsed = parseToolBundleCatalogContent({ id: "local-tool-bundle", content } as LocalCatalogItem);
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+function parseToolBundleCatalogContent(item: LocalCatalogItem): ToolBundleCatalogDefinition {
+  if (!item.content) {
+    throw new WorkspaceError(`Tool ${item.id} não possui content JSON de bundle.`, 422);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(item.content);
+  } catch (error) {
+    throw new WorkspaceError(`Tool bundle ${item.id} não é JSON válido.`, 422, error);
+  }
+  if (!isRecord(parsed) || parsed.format !== TOOL_BUNDLE_FORMAT) {
+    throw new WorkspaceError(`Tool bundle ${item.id} deve usar formato ${TOOL_BUNDLE_FORMAT}.`, 422);
+  }
+  if (!Array.isArray(parsed.nodes) || !parsed.nodes.length) {
+    throw new WorkspaceError(`Tool bundle ${item.id} precisa conter ao menos um nó.`, 422);
+  }
+  const usedNodeIds = new Set<string>();
+  const nodes = parsed.nodes.map((rawNode, index) => {
+    try {
+      const node = NodeSchema.parse(rawNode);
+      const id = parseAssetId(node.id, `id do nó ${index + 1} do bundle`);
+      if (usedNodeIds.has(id)) {
+        throw new WorkspaceError(`Tool bundle ${item.id} contém nó duplicado: ${id}.`, 422);
+      }
+      usedNodeIds.add(id);
+      return { ...node, id };
+    } catch (error) {
+      if (error instanceof WorkspaceError) {
+        throw error;
+      }
+      throw new WorkspaceError(`Nó ${index + 1} do tool bundle ${item.id} é inválido.`, 422, error);
+    }
+  });
+  const rawEdges = parsed.edges === undefined ? [] : parsed.edges;
+  if (!Array.isArray(rawEdges)) {
+    throw new WorkspaceError(`Tool bundle ${item.id} precisa conter edges como lista.`, 422);
+  }
+  const edges = rawEdges.map((rawEdge, index) => {
+    try {
+      const edge = EdgeSchema.parse(rawEdge);
+      if (!usedNodeIds.has(edge.from) || !usedNodeIds.has(edge.to)) {
+        throw new WorkspaceError(`Edge ${index + 1} do tool bundle ${item.id} referencia nó fora do bundle.`, 422);
+      }
+      return edge;
+    } catch (error) {
+      if (error instanceof WorkspaceError) {
+        throw error;
+      }
+      throw new WorkspaceError(`Edge ${index + 1} do tool bundle ${item.id} é inválida.`, 422, error);
+    }
+  });
+  return {
+    format: TOOL_BUNDLE_FORMAT,
+    nodes,
+    edges,
+  };
+}
+
 function normalizeSkillCatalogContent(content: string): string {
   const parsed = parseSkillCatalogContent({ id: "local-skill", content } as LocalCatalogItem);
   return `${JSON.stringify(parsed, null, 2)}\n`;
@@ -1877,6 +1993,9 @@ async function applyToolCatalogItem(
   item: LocalCatalogItem,
   input: ApplyCatalogItemInput,
 ): Promise<ApplyCatalogItemResult> {
+  if (item.content) {
+    return applyToolBundleCatalogItem(workspaceRoot, flowId, item, input);
+  }
   const loaded = await loadFlowById(workspaceRoot, flowId);
   const patch = sanitizeCatalogNodePatch(item.nodePatch ?? {});
   let appliedNode: AgentFlow["nodes"][number] | null = null;
@@ -1919,6 +2038,81 @@ async function applyToolCatalogItem(
     flow,
     flowPath: loaded.relativePath,
     node,
+  };
+}
+
+async function applyToolBundleCatalogItem(
+  workspaceRoot: string,
+  flowId: string,
+  item: LocalCatalogItem,
+  input: ApplyCatalogItemInput,
+): Promise<ApplyCatalogItemResult> {
+  const bundle = parseToolBundleCatalogContent(item);
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const targetNode = input.targetNodeId ? loaded.flow.nodes.find((node) => node.id === input.targetNodeId) : undefined;
+  if (input.targetNodeId && !targetNode) {
+    throw new WorkspaceError(`Nó alvo não encontrado para aplicar tool bundle: ${input.targetNodeId}`, 404);
+  }
+
+  const usedNodeIds = new Set(loaded.flow.nodes.map((node) => node.id));
+  const idMap = new Map<string, string>();
+  for (const node of bundle.nodes) {
+    const preferredId = input.id && bundle.nodes.length === 1 ? input.id : `${input.id ?? item.id}-${node.id}`;
+    const id = uniqueCatalogRefId(preferredId, Array.from(usedNodeIds));
+    usedNodeIds.add(id);
+    idMap.set(node.id, id);
+  }
+
+  const basePosition = targetNode
+    ? { x: (targetNode.position?.x ?? 0) + 260, y: targetNode.position?.y ?? 120 }
+    : nextCatalogNodePosition(loaded.flow.nodes);
+  const bundlePositions = bundle.nodes.map((node, index) => node.position ?? { x: index * 260, y: 0 });
+  const minX = Math.min(...bundlePositions.map((position) => position.x));
+  const minY = Math.min(...bundlePositions.map((position) => position.y));
+  const nodes = bundle.nodes.map((node, index) => {
+    const localPosition = bundlePositions[index];
+    return {
+      ...node,
+      id: idMap.get(node.id) ?? node.id,
+      description: node.description || item.description || item.name,
+      position: {
+        x: basePosition.x + localPosition.x - minX,
+        y: basePosition.y + localPosition.y - minY,
+      },
+    };
+  });
+  const bundleEdges = bundle.edges.map((edge) => ({
+    ...edge,
+    from: idMap.get(edge.from) ?? edge.from,
+    to: idMap.get(edge.to) ?? edge.to,
+  }));
+  const entryEdges = nodes[0]
+    ? [
+        {
+          from: input.targetNodeId ?? "start",
+          to: nodes[0].id,
+        },
+      ]
+    : [];
+  const bundleEdgeSources = new Set(bundleEdges.map((edge) => edge.from));
+  const terminalEdges = nodes
+    .filter((node) => !bundleEdgeSources.has(node.id))
+    .map((node) => ({
+      from: node.id,
+      to: "end",
+    }));
+  const flow = parseAgentFlow({
+    ...loaded.flow,
+    nodes: [...loaded.flow.nodes, ...nodes],
+    edges: [...loaded.flow.edges, ...entryEdges, ...bundleEdges, ...terminalEdges],
+  });
+  await writeFlowFile(loaded, flow);
+  return {
+    status: "ok",
+    item,
+    flow,
+    flowPath: loaded.relativePath,
+    node: flow.nodes.find((node) => node.id === nodes[0]?.id),
   };
 }
 
@@ -2335,6 +2529,10 @@ function skillCatalogContent(
   targetNodePatch?: Record<string, unknown>,
 ): string {
   return `${JSON.stringify({ format: SKILL_CATALOG_FORMAT, prompts, schemas, targetNodePatch }, null, 2)}\n`;
+}
+
+function toolBundleCatalogContent(nodes: AgentFlow["nodes"], edges: AgentFlow["edges"]): string {
+  return `${JSON.stringify({ format: TOOL_BUNDLE_FORMAT, nodes, edges }, null, 2)}\n`;
 }
 
 function starterFlow(input: CreateFlowInput): AgentFlow {
