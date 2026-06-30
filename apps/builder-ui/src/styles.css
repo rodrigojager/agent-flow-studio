@@ -857,6 +857,113 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.schema-visual-panel {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.schema-visual-panel.unavailable {
+  color: var(--text-muted);
+}
+
+.schema-visual-panel.unavailable p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.schema-property-list {
+  display: grid;
+  gap: 7px;
+}
+
+.schema-property-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px 46px 34px;
+  gap: 7px;
+  align-items: end;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-bg);
+}
+
+.schema-property-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schema-property-row label,
+.schema-property-add {
+  min-width: 0;
+}
+
+.schema-property-row label {
+  display: grid;
+  gap: 4px;
+}
+
+.schema-property-row label span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.schema-property-row input,
+.schema-property-row select,
+.schema-property-add input,
+.schema-property-add select {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface-bg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.schema-property-required input {
+  width: 18px;
+  min-height: 18px;
+  justify-self: center;
+}
+
+.schema-property-description {
+  grid-column: 1 / -1;
+}
+
+.schema-property-empty {
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: var(--surface-bg);
+  font-size: 12px;
+}
+
+.schema-property-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 7px;
+}
+
+.schema-property-add .command-button {
+  grid-column: 1 / -1;
+}
+
 .asset-editor {
   width: 100%;
   min-height: 230px;

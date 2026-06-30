@@ -453,6 +453,7 @@ const nodeTypeOptions = [
 ] as const;
 
 const palette = nodeTypeOptions;
+const schemaPropertyTypeOptions = ["string", "integer", "number", "boolean", "object", "array"] as const;
 const themeStorageKey = "agent-flow-builder.theme";
 const scenarioStorageKeyPrefix = "agent-flow-builder.studio-scenarios.";
 const nodePinStorageKeyPrefix = "agent-flow-builder.studio-node-pins.";
@@ -4566,6 +4567,7 @@ function AssetsPanel({
             </button>
           </div>
         ) : null}
+        {selectedSchema ? <SchemaVisualEditor content={schemaContent} onChange={onSchemaChange} /> : null}
         <textarea
           className="asset-editor schema-editor"
           value={schemaContent}
@@ -4578,6 +4580,229 @@ function AssetsPanel({
       </section>
     </div>
   );
+}
+
+function SchemaVisualEditor({ content, onChange }: { content: string; onChange: (value: string) => void }) {
+  const [newPropertyName, setNewPropertyName] = useState("");
+  const [newPropertyType, setNewPropertyType] = useState("string");
+  const parsed = useMemo(() => parseSchemaObject(content), [content]);
+  if (!parsed.ok) {
+    return (
+      <div className="schema-visual-panel unavailable">
+        <div className="asset-metadata-title">
+          <strong>Propriedades visuais</strong>
+          <span>JSON inválido</span>
+        </div>
+        <p>{parsed.message}</p>
+      </div>
+    );
+  }
+  const schema = parsed.schema;
+  const properties = readSchemaProperties(schema);
+  const required = readSchemaRequired(schema);
+  const canAddProperty = isValidSchemaPropertyName(newPropertyName) && !properties.some(([name]) => name === newPropertyName.trim());
+
+  function updateSchema(mutator: (schema: Record<string, unknown>) => void) {
+    const next = cloneJsonObject(schema);
+    mutator(next);
+    onChange(`${JSON.stringify(next, null, 2)}\n`);
+  }
+
+  function updateProperty(name: string, mutator: (property: Record<string, unknown>) => void) {
+    updateSchema((next) => {
+      const nextProperties = ensureSchemaProperties(next);
+      const property = isRecord(nextProperties[name]) ? { ...nextProperties[name] } : {};
+      mutator(property);
+      nextProperties[name] = property;
+    });
+  }
+
+  function updateRequired(name: string, checked: boolean) {
+    updateSchema((next) => {
+      const nextRequired = readSchemaRequired(next).filter((item) => item !== name);
+      if (checked) {
+        nextRequired.push(name);
+      }
+      next.required = nextRequired;
+    });
+  }
+
+  function addProperty() {
+    const name = newPropertyName.trim();
+    if (!isValidSchemaPropertyName(name)) {
+      return;
+    }
+    updateSchema((next) => {
+      next.type = "object";
+      const nextProperties = ensureSchemaProperties(next);
+      if (nextProperties[name]) {
+        return;
+      }
+      nextProperties[name] = { type: newPropertyType };
+    });
+    setNewPropertyName("");
+    setNewPropertyType("string");
+  }
+
+  function removeProperty(name: string) {
+    updateSchema((next) => {
+      const nextProperties = ensureSchemaProperties(next);
+      delete nextProperties[name];
+      next.required = readSchemaRequired(next).filter((item) => item !== name);
+    });
+  }
+
+  return (
+    <div className="schema-visual-panel">
+      <div className="asset-metadata-title">
+        <strong>Propriedades visuais</strong>
+        <span>
+          {properties.length} campo{properties.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="schema-property-list">
+        {properties.length ? (
+          properties.map(([name, property]) => (
+            <div className="schema-property-row" key={name}>
+              <strong title={name}>{name}</strong>
+              <label>
+                <span>Tipo</span>
+                <select
+                  aria-label={`Tipo de ${name}`}
+                  value={readSchemaPropertyType(property)}
+                  onChange={(event) =>
+                    updateProperty(name, (nextProperty) => {
+                      if (event.target.value) {
+                        nextProperty.type = event.target.value;
+                      } else {
+                        delete nextProperty.type;
+                      }
+                    })
+                  }
+                >
+                  <option value="">-</option>
+                  {schemaPropertyTypeOptions.map((type) => (
+                    <option value={type} key={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="schema-property-required">
+                <span>Req.</span>
+                <input
+                  type="checkbox"
+                  aria-label={`${name} obrigatório`}
+                  checked={required.includes(name)}
+                  onChange={(event) => updateRequired(name, event.target.checked)}
+                />
+              </label>
+              <label className="schema-property-description">
+                <span>Descrição</span>
+                <input
+                  aria-label={`Descrição de ${name}`}
+                  value={readSchemaPropertyDescription(property)}
+                  onChange={(event) =>
+                    updateProperty(name, (nextProperty) => {
+                      if (event.target.value.trim()) {
+                        nextProperty.description = event.target.value;
+                      } else {
+                        delete nextProperty.description;
+                      }
+                    })
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => removeProperty(name)}
+                title={`Remover propriedade ${name}`}
+                aria-label={`Remover propriedade ${name}`}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+              </button>
+            </div>
+          ))
+        ) : (
+          <div className="schema-property-empty">Sem propriedades top-level.</div>
+        )}
+      </div>
+      <div className="schema-property-add">
+        <input
+          value={newPropertyName}
+          onChange={(event) => setNewPropertyName(event.target.value)}
+          placeholder="nova_propriedade"
+          aria-label="Nova propriedade do schema"
+        />
+        <select
+          value={newPropertyType}
+          onChange={(event) => setNewPropertyType(event.target.value)}
+          aria-label="Tipo da nova propriedade"
+        >
+          {schemaPropertyTypeOptions.map((type) => (
+            <option value={type} key={type}>
+              {type}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="command-button" onClick={addProperty} disabled={!canAddProperty}>
+          <Plus size={15} aria-hidden="true" />
+          Adicionar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type SchemaParseResult =
+  | { ok: true; schema: Record<string, unknown> }
+  | { ok: false; message: string };
+
+function parseSchemaObject(content: string): SchemaParseResult {
+  try {
+    const value = JSON.parse(content) as unknown;
+    if (!isRecord(value)) {
+      return { ok: false, message: "Schema precisa ser um objeto JSON." };
+    }
+    return { ok: true, schema: value };
+  } catch (error) {
+    return { ok: false, message: `Corrija o JSON para usar o editor visual: ${error instanceof Error ? error.message : "erro desconhecido"}` };
+  }
+}
+
+function cloneJsonObject(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function readSchemaProperties(schema: Record<string, unknown>): Array<[string, Record<string, unknown>]> {
+  if (!isRecord(schema.properties)) {
+    return [];
+  }
+  return Object.entries(schema.properties).map(([name, value]) => [name, isRecord(value) ? value : {}]);
+}
+
+function ensureSchemaProperties(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(schema.properties)) {
+    schema.properties = {};
+  }
+  return schema.properties as Record<string, unknown>;
+}
+
+function readSchemaRequired(schema: Record<string, unknown>): string[] {
+  return Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : [];
+}
+
+function readSchemaPropertyType(property: Record<string, unknown>): string {
+  return typeof property.type === "string" ? property.type : "";
+}
+
+function readSchemaPropertyDescription(property: Record<string, unknown>): string {
+  return typeof property.description === "string" ? property.description : "";
+}
+
+function isValidSchemaPropertyName(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(value.trim());
 }
 
 function PanelNotice({ state }: { state: PanelLoadState }) {

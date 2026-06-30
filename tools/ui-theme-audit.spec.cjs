@@ -82,10 +82,19 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByLabel("Descrição do schema").fill("Estado público da sessão e saída estruturada.");
   await page.getByLabel("Tags do schema").fill("estado, contrato, sessão");
   await page.getByLabel("Versão do schema").fill("v2");
+  await page.getByLabel("Descrição de session_id").fill("Identificador público da sessão.");
+  await page.getByLabel("user_message obrigatório").check();
+  await page.getByLabel("Nova propriedade do schema").fill("review_score");
+  await page.getByLabel("Tipo da nova propriedade").selectOption("number");
+  await page.getByRole("button", { name: /^Adicionar$/ }).click();
+  await expect(page.locator(".schema-editor")).toHaveValue(/"review_score"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"user_message"/);
+  await page.getByRole("button", { name: /^Salvar schema$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Schema salvo em");
 
   await expect(page.getByText("workspace alterado").first()).toBeVisible();
   await page.getByRole("button", { name: /^Salvar metadados$/ }).first().click();
-  await expect(page.getByRole("status")).toContainText("Workspace reference-interview salvo.");
+  await expect(page.locator("footer[role='status']")).toContainText("Workspace reference-interview salvo.");
 
   await openInspectorTab(page, "JSON");
   const preview = page.locator(".json-preview");

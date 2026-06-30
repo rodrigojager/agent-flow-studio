@@ -103,6 +103,7 @@
 - Auditoria visual automatizada em Playwright (`npm run test:ui-theme`) prepara workspace isolado em `.tmp/ui-theme-workspace`, sobe API/UI em portas dedicadas, usa runner Docker mockado apenas por `AGENT_BUILDER_DOCKER_RUNNER=ui-audit-mock`, percorre tema claro/escuro em viewport desktop e compacta, abre as abas principais do inspector, valida atalhos iniciais, cobre busca/filtro/foco de nós no canvas, renderiza runs locais persistidos com timeline/cadeia causal/state/transcript, cobre diagnóstico automático de safety, prompt renderizado, usage, custo, spans e fork de checkpoint no drill-down de nó LLM, cobre status global de loading/erro fora do Docker, estados internos de loading/erro em `Arquivos`, `Runtime` e `Studio`, aprovação desatualizada bloqueando `API Docker`, o fluxo `LangGraph` -> `Aprovar` -> `API Docker` até o painel de artefato Docker final e exercita build/loading, inspect running, smoke com erro e inspect stopped.
 - Painéis `Arquivos`, `Runtime` e `Studio` exibem estados internos acessíveis de loading/erro, usando `role=status` para carregamento, `role=alert` para falhas e mensagens locais no painel sem depender apenas do status global.
 - Canvas da Builder UI possui finder compacto com busca textual, filtro por tipo, contador de resultados, chips de nós e foco/seleção do nó no React Flow sem alterar o contrato do `agent.flow.json`.
+- Aba `Arquivos` possui editor visual inicial para JSON Schema top-level: lista propriedades, altera tipo, descrição e obrigatoriedade, adiciona/remove campos e sincroniza o textarea JSON usado pelo salvamento do schema.
 
 ## Verificado
 
@@ -150,11 +151,11 @@ Também foi validado localmente:
 - `npm run test:builder-api` cobre percentuais estimados no progresso Docker ao vivo e 100% no evento final de build concluído.
 - Builder UI validado por screenshots Playwright temporários em `1440x900` e `390x844`, tema claro e escuro; a correção responsiva removeu o corte lateral mobile do shell principal.
 - `npm run typecheck` e `npm run build:builder-ui` passaram após a inclusão dos atalhos globais iniciais.
-- `npm run test:ui-theme` passou com 15 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, busca/filtro/foco de nós no canvas, edição visual de metadados de prompt/schema na aba `Arquivos`, estados internos de loading/erro nos painéis `Arquivos`, `Runtime` e `Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, origem observada de restore de checkpoint, pin local de input/output por nó, toggle de mock por pins em cenário, thresholds de regressão por cenário, importação/exportação de fixture JSON de replay, ação de execução em lote, comparação de runs com veredito de regressão, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, alertas operacionais persistentes de Build/Up/Smoke, e estados Docker de loading/progresso, container running, smoke com erro e container stopped.
+- `npm run test:ui-theme` passou com 15 cenários: tema claro/escuro em viewport `1440x900` e `390x844`, cobrindo render inicial, atalhos `A`/`F`, abas `Editar/Arquivos/Validação/JSON/Artefato/Runtime/Studio`, busca/filtro/foco de nós no canvas, edição visual de metadados de prompt/schema e propriedades top-level de JSON Schema na aba `Arquivos`, estados internos de loading/erro nos painéis `Arquivos`, `Runtime` e `Studio`, ausência de overflow horizontal/texto cortado, runs locais com dados em tema claro/escuro, origem observada de restore de checkpoint, pin local de input/output por nó, toggle de mock por pins em cenário, thresholds de regressão por cenário, importação/exportação de fixture JSON de replay, ação de execução em lote, comparação de runs com veredito de regressão, status global de loading/erro fora do Docker, aprovação desatualizada bloqueando `API Docker`, geração visual `LangGraph` -> `Aprovar` -> `API Docker` com controles `Status`, `Preparar .env`, `Build`, `Up`, `Smoke` e `Down`, alertas operacionais persistentes de Build/Up/Smoke, e estados Docker de loading/progresso, container running, smoke com erro e container stopped.
 
 ## Ainda não implementado
 
-- Ergonomia refinada do canvas, incluindo grupos colapsáveis, comandos contextuais mais completos, estado dirty/stale por nó/aresta e edição visual profunda do conteúdo de JSON Schema além dos metadados já cobertos.
+- Ergonomia refinada do canvas, incluindo grupos colapsáveis, comandos contextuais mais completos, estado dirty/stale por nó/aresta e edição visual profunda de JSON Schema para objetos aninhados, arrays/items e enums além das propriedades top-level já cobertas.
 - Adapters externos para contratos de código customizado fora dos executores nativos Python/JavaScript, incluindo TypeScript via sidecar/runtime adapter, dependências npm controladas por nó, HTTP/MCP configurável, sandbox isolado por nó e UI de logs/erros dedicada no Studio Local.
 - Evoluir a composição multiagente inicial para modelos públicos com `agent_id`, isolamento operacional mais explícito e testes com banco PostgreSQL real compartilhado.
 - Safety Harness completo.
@@ -169,7 +170,7 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
 
 1. **Canvas/produtos de trabalho refinados (Média prioridade)**
    - grupos colapsáveis e estado dirty/stale por nó/aresta;
-   - edição visual profunda de propriedades internas de JSON Schema no painel lateral sem precisar abrir JSON;
+   - edição visual profunda de objetos aninhados, arrays/items e enums de JSON Schema no painel lateral sem precisar abrir JSON;
    - ampliar comandos contextuais para executar ações comuns sem depender de mouse.
 
 2. **Cenários + pinning avançado (Média prioridade)**
