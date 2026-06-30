@@ -237,8 +237,11 @@ for (const theme of themes) {
     await expect(page.getByText("Runs locais")).toBeVisible();
     await expect(page.getByRole("button", { name: /ui-audit-error/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /ui-audit-ok/ })).toBeVisible();
+    await expect(page.getByText("Agentes", { exact: true })).toBeVisible();
+    await expect(page.locator(".studio-agent-list").getByRole("button", { name: /support-agent/ })).toBeVisible();
 
     await page.getByRole("button", { name: /ui-audit-error/ }).click();
+    await expect(page.getByLabel("Filtrar timeline por agente")).toHaveValue("support-agent");
     await expect(page.getByRole("button", { name: /#3\s+node_failed/ })).toBeVisible();
     await page.getByRole("button", { name: /#3\s+node_failed/ }).click();
     await expect(page.getByText("input_safety_check").first()).toBeVisible();
@@ -256,6 +259,7 @@ for (const theme of themes) {
     await expect(page.locator(".app-shell")).toHaveAttribute("data-theme", theme);
 
     await page.getByRole("button", { name: /ui-audit-ok/ }).click();
+    await expect(page.getByLabel("Filtrar timeline por agente")).toHaveValue("reference-interview");
     await page.getByRole("button", { name: /#4\s+llm_completed/ }).click();
     const promptSection = page.locator(".node-context-section", { hasText: "Prompt renderizado" });
     await expect(promptSection).toBeVisible();
@@ -574,7 +578,7 @@ async function seedStudioRuns(request) {
         phase: "completed",
         turn: 2,
         max_turns: 3,
-        metadata: { source: "ui-theme-audit", scenario: "success" },
+        metadata: { source: "ui-theme-audit", agent_id: "reference-interview", scenario: "success" },
         is_complete: true,
       },
       transcript: [
@@ -642,7 +646,7 @@ async function seedStudioRuns(request) {
         phase: "finalizing",
         turn: 1,
         max_turns: 3,
-        metadata: { source: "ui-theme-audit", scenario: "safety-error" },
+        metadata: { source: "ui-theme-audit", agent_id: "support-agent", scenario: "safety-error" },
         is_complete: true,
       },
       transcript: [

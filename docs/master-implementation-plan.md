@@ -38,7 +38,7 @@ Ja existe uma base funcional importante:
 - Codegen TypeScript para runtime Python/FastAPI.
 - Codegen para sandbox LangGraph compatível.
 - Codegen multiagente inicial por `runtime.manifest.json`.
-- Identidade operacional inicial por agente com `agent_id` em `/metadata`, sessão, eventos e runs locais do Studio.
+- Identidade operacional inicial por agente com `agent_id` em `/metadata`, sessão, eventos, runs locais, resumo por agente e timeline filtrável no Studio.
 - Builder API para flows, assets, validacao, artefatos, import/export, manifest e geracao.
 - Builder UI inicial com React Flow, canvas, inspector, arquivos, validacao, artefatos e runtime.
 - Suporte visual e runtime inicial para nodes avancados:
@@ -803,7 +803,8 @@ Entregaveis:
 - modelo publico com `agent_id` ja iniciado em runtime baseline/gerado, bundle e runs locais;
 - manifest editor visual;
 - runs por agente ja possuem filtro inicial no Studio;
-- trace filtravel por agente dedicado;
+- trace por agente ja possui filtro inicial na timeline e resumo por agente no Studio;
+- visão multiagente dedicada por bundle;
 - isolamento por rota/agente;
 - Postgres compartilhado em teste real;
 - validacao de bundle pela UI.

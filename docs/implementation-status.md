@@ -52,7 +52,7 @@
 - Flow Spec define `RuntimeManifest` para agrupamento monoagente ou multiagente, com agentes referenciando `agent.flow.json` por `flowPath`.
 - Codegen gera bundle a partir de `runtime.manifest.json`, com metadados, README e um runtime independente por agente em `generated/reference-runtime-bundle/agents/`.
 - Codegen gera app FastAPI raiz para manifestos `multiagent`, montando os agentes em um único processo pelos `routePrefix` e preservando idempotência por prefixo de rota.
-- Runtime baseline, runtime gerado e bundles multiagente agora expõem `agent_id` em `/metadata`, sessão e eventos; o Studio envia `agent_id` na criação de sessão, persiste `agentId` nos runs locais e filtra runs por agente.
+- Runtime baseline, runtime gerado e bundles multiagente agora expõem `agent_id` em `/metadata`, sessão e eventos; o Studio envia `agent_id` na criação de sessão, persiste `agentId` nos runs locais, mostra resumo por agente e filtra runs/timeline por agente.
 - Builder API lê, valida e gera bundles por manifesto via rotas `/runtime-manifest`, `/runtime-manifest/validate` e `/runtime-manifest/generate`.
 - Builder UI possui aba `Runtime` para carregar `runtime.manifest.json`, exibir agentes, validar o manifesto e gerar bundle por manifesto via Builder API.
 - Sandbox local inicial: Builder API inicia/para o runtime gerado, lista runtimes em memória, acompanha status/logs e aceita porta configurável; Builder UI permite iniciar/parar/atualizar, acompanhar logs recentes, escolher porta e acionar criação de sessão, turnos, finalização, transcript e events.
@@ -189,7 +189,7 @@ Para chegar ao objetivo completo de "studio local + aprovação + API Docker" se
 
 4. **Multiagente operacional**
    - rota/agent_id estável no runtime e no Studio já possui primeira implementação;
-   - ampliar trace e histórico por agente no UI;
+   - ampliar a visão multiagente dedicada no UI além do resumo/filtro inicial por agente;
    - validar bundle multiagente com PostgreSQL real compartilhado.
 
 ## Regras de bloqueio até fechamento de uma fase

@@ -378,6 +378,15 @@ interface StudioScenarioBatchReport {
   reportHash: string;
 }
 
+interface StudioAgentTraceSummary {
+  agentId: string;
+  eventCount: number;
+  runCount: number;
+  errorCount: number;
+  lastEventSeq: number | null;
+  updatedAt: string | null;
+}
+
 interface StudioNodePinDraft {
   nodeId: string;
   nodeType: string;
@@ -555,6 +564,7 @@ export default function App() {
   const [runtimeEventsData, setRuntimeEventsData] = useState<EventView[]>([]);
   const [studioStateSnapshots, setStudioStateSnapshots] = useState<StudioStateSnapshot[]>([]);
   const [selectedStudioEventSeq, setSelectedStudioEventSeq] = useState<number | null>(null);
+  const [studioTimelineAgentFilter, setStudioTimelineAgentFilter] = useState("");
   const [studioTimelineNodeFilter, setStudioTimelineNodeFilter] = useState("");
   const [studioRunCausalAnalysis, setStudioRunCausalAnalysis] = useState<StudioRunCausalAnalysis | null>(null);
   const [studioRuns, setStudioRuns] = useState<StudioRunSummary[]>([]);
@@ -769,6 +779,7 @@ export default function App() {
       setStudioRunAgentFilter("");
       setPromptAssetLoadState({ kind: "idle", message: "Nenhum prompt selecionado." });
       setSchemaAssetLoadState({ kind: "idle", message: "Nenhum schema selecionado." });
+      setStudioTimelineAgentFilter("");
       setStudioRunCompletionFilter("");
       setStudioTimelineNodeFilter("");
       setDockerHistoryFilterDraft({ ...dockerHistoryFilterDefaults });
@@ -797,6 +808,7 @@ export default function App() {
         setStudioRunStatusFilter("");
         setStudioRunPhaseFilter("");
         setStudioRunNodeFilter("");
+        setStudioTimelineAgentFilter("");
         setStudioRunMinDurationMsFilter("");
         setStudioRunMaxDurationMsFilter("");
         setStudioRunHasErrorsOnly(false);
@@ -908,6 +920,7 @@ export default function App() {
         setStudioRunStatusFilter("");
         setStudioRunPhaseFilter("");
         setStudioRunNodeFilter("");
+        setStudioTimelineAgentFilter("");
         setStudioRunMinDurationMsFilter("");
         setStudioRunMaxDurationMsFilter("");
         setStudioRunHasErrorsOnly(false);
@@ -1087,11 +1100,14 @@ export default function App() {
   }, [selectedFlowId, selectedSchemaId]);
 
   const studioTimelineEvents = useMemo(() => {
-    if (!studioTimelineNodeFilter) {
-      return runtimeEventsData;
-    }
-    return runtimeEventsData.filter((event) => event.node === studioTimelineNodeFilter);
-  }, [runtimeEventsData, studioTimelineNodeFilter]);
+    const agentFilter = studioTimelineAgentFilter.trim();
+    const fallbackAgentId = draftFlow?.id ?? "unknown-agent";
+    return runtimeEventsData.filter((event) => {
+      const matchesAgent = !agentFilter || readStudioEventAgentId(event, fallbackAgentId) === agentFilter;
+      const matchesNode = !studioTimelineNodeFilter || event.node === studioTimelineNodeFilter;
+      return matchesAgent && matchesNode;
+    });
+  }, [draftFlow?.id, runtimeEventsData, studioTimelineAgentFilter, studioTimelineNodeFilter]);
 
   useEffect(() => {
     if (!studioTimelineEvents.length) {
@@ -2523,6 +2539,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     ]);
     setTranscript(nextTranscript);
     setRuntimeEventsData(nextEvents);
+    setStudioTimelineAgentFilter(session.agent_id || draftFlow.id);
     setStudioRunCausalAnalysis(null);
     setSelectedStudioEventSeq(nextEvents.at(-1)?.seq ?? null);
     try {
@@ -2653,6 +2670,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       setRuntimeEventsData(run.events);
       setStudioStateSnapshots(run.stateSnapshots);
       setStudioRunCausalAnalysis(run.causalAnalysis);
+      setStudioTimelineAgentFilter(run.agentId);
       setStudioTimelineNodeFilter("");
       setSelectedStudioEventSeq(run.events.at(-1)?.seq ?? null);
       setSelectedStudioRunId(run.id);
@@ -3803,6 +3821,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               transcript={transcript}
               events={runtimeEventsData}
               timelineEvents={studioTimelineEvents}
+              timelineAgentFilter={studioTimelineAgentFilter}
               timelineNodeFilter={studioTimelineNodeFilter}
               selectedEvent={selectedStudioEvent}
               selectedStateSnapshot={selectedStateSnapshot}
@@ -3847,6 +3866,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onExportComparison={handleExportStudioRunComparison}
               onClearComparison={handleClearStudioRunComparison}
               onSelectEvent={setSelectedStudioEventSeq}
+              onTimelineAgentFilterChange={setStudioTimelineAgentFilter}
               onTimelineNodeFilterChange={setStudioTimelineNodeFilter}
               onRefreshRuns={handleRefreshStudioRuns}
               onLoadRun={handleLoadStudioRun}
@@ -6114,6 +6134,7 @@ function SandboxPanel({
   transcript,
   events,
   timelineEvents,
+  timelineAgentFilter,
   timelineNodeFilter,
   selectedEvent,
   selectedStateSnapshot,
@@ -6176,6 +6197,7 @@ function SandboxPanel({
   onExportComparison,
   onClearComparison,
   onSelectEvent,
+  onTimelineAgentFilterChange,
   onTimelineNodeFilterChange,
   onRefreshRuns,
   onLoadRun,
@@ -6199,6 +6221,7 @@ function SandboxPanel({
   transcript: MessageView[];
   events: EventView[];
   timelineEvents: EventView[];
+  timelineAgentFilter: string;
   timelineNodeFilter: string;
   selectedEvent: EventView | null;
   selectedStateSnapshot: StudioStateSnapshot | null;
@@ -6261,6 +6284,7 @@ function SandboxPanel({
   onStudioScenarioUseNodePinsChange: (value: boolean) => void;
   onStudioScenarioRegressionThresholdChange: (key: keyof StudioScenarioRegressionThresholds, value: string) => void;
   onSelectEvent: (seq: number) => void;
+  onTimelineAgentFilterChange: (value: string) => void;
   onTimelineNodeFilterChange: (value: string) => void;
   onRefreshRuns: () => void;
   onLoadRun: (runId: string) => void;
@@ -6274,8 +6298,18 @@ function SandboxPanel({
   onFinishSession: () => void;
 }) {
   const running = Boolean(sandbox?.running && sandbox.url);
+  const fallbackAgentId = session?.agent_id ?? flow?.id ?? "unknown-agent";
   const executedNodes = Array.from(new Set(events.map((event) => event.node).filter((node): node is string => Boolean(node))));
-  const timelineNodeOptions = Array.from(new Set(timelineEvents.map((event) => event.node).filter((node): node is string => Boolean(node)))).sort();
+  const agentTraceSummary = buildStudioAgentTraceSummary(events, studioRuns, fallbackAgentId);
+  const timelineAgentOptions = agentTraceSummary.map((item) => item.agentId);
+  const timelineNodeOptions = Array.from(
+    new Set(
+      events
+        .filter((event) => !timelineAgentFilter || readStudioEventAgentId(event, fallbackAgentId) === timelineAgentFilter)
+        .map((event) => event.node)
+        .filter((node): node is string => Boolean(node)),
+    ),
+  ).sort();
   const selectedPayload = selectedEvent?.payload ?? {};
   const nodeInput = inferEventInput(selectedEvent, transcript);
   const nodeOutput = inferEventOutput(selectedPayload);
@@ -6322,7 +6356,7 @@ function SandboxPanel({
   );
   const pinnedScenario = studioScenarios.find((scenario) => scenario.isPinned);
   const activeNodePinCount = activeStudioNodePins(studioNodePins, flow).length;
-  const agentFilterOptions = Array.from(new Set(studioRuns.map((run) => run.agentId).filter(Boolean))).sort();
+  const agentFilterOptions = timelineAgentOptions;
   const batchSummary = summarizeStudioScenarioBatchResults(studioScenarioBatchResults);
   const batchReportHash = studioScenarioBatchResults.length > 0
     ? studioScenarioBatchReportHash(flow, batchSummary, studioScenarioBatchResults)
@@ -6716,6 +6750,51 @@ function SandboxPanel({
 
       <section className="sandbox-section">
         <div className="sandbox-header">
+          <strong>Agentes</strong>
+          <span>{agentTraceSummary.length}</span>
+        </div>
+        <div className="sandbox-actions">
+          <button
+            type="button"
+            className="command-button"
+            onClick={() => {
+              onTimelineAgentFilterChange("");
+              onStudioRunAgentFilterChange("");
+            }}
+            disabled={!timelineAgentFilter && !studioRunAgentFilter}
+          >
+            Limpar agente
+          </button>
+        </div>
+        <div className="studio-agent-list">
+          {agentTraceSummary.map((agent) => (
+            <button
+              type="button"
+              className={`studio-agent-item ${
+                timelineAgentFilter === agent.agentId || studioRunAgentFilter === agent.agentId ? "selected" : ""
+              }`}
+              key={agent.agentId}
+              onClick={() => {
+                onTimelineAgentFilterChange(agent.agentId);
+                onStudioRunAgentFilterChange(agent.agentId);
+              }}
+            >
+              <span className="studio-run-main">
+                <strong>{agent.agentId}</strong>
+                <small>
+                  {agent.eventCount} ev · {agent.runCount} runs · {agent.errorCount} erros
+                </small>
+              </span>
+              <span className="studio-run-metrics">
+                #{agent.lastEventSeq ?? "-"}
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="sandbox-section">
+        <div className="sandbox-header">
           <strong>Runs locais</strong>
           <span>{studioRuns.length}</span>
         </div>
@@ -7073,6 +7152,21 @@ function SandboxPanel({
             </div>
             <div className="timeline-toolbar">
               <label>
+                <span className="visually-hidden">Filtrar timeline por agente</span>
+                <select
+                  value={timelineAgentFilter}
+                  onChange={(event) => onTimelineAgentFilterChange(event.target.value)}
+                  title="Filtrar eventos por agente"
+                >
+                  <option value="">Todos os agentes</option>
+                  {timelineAgentOptions.map((agentId) => (
+                    <option value={agentId} key={`timeline-agent-filter-${agentId}`}>
+                      {agentId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 <span className="visually-hidden">Filtrar timeline por nó</span>
                 <select
                   value={timelineNodeFilter}
@@ -7090,8 +7184,11 @@ function SandboxPanel({
               <button
                 type="button"
                 className="command-button"
-                onClick={() => onTimelineNodeFilterChange("")}
-                disabled={!timelineNodeFilter}
+                onClick={() => {
+                  onTimelineAgentFilterChange("");
+                  onTimelineNodeFilterChange("");
+                }}
+                disabled={!timelineAgentFilter && !timelineNodeFilter}
               >
                 Limpar filtro
               </button>
@@ -7108,7 +7205,7 @@ function SandboxPanel({
                 <span className="timeline-seq">#{event.seq}</span>
                 <span className="timeline-main">
                   <strong>{event.event_type}</strong>
-                  <small>{event.node ?? "runtime"}</small>
+                  <small>{event.node ?? "runtime"} · {readStudioEventAgentId(event, fallbackAgentId)}</small>
                 </span>
                 <span className="timeline-turn">t{String(event.payload.turn ?? "-")}</span>
               </button>
@@ -9035,6 +9132,58 @@ function isStudioErrorEvent(event: EventView): boolean {
     return true;
   }
   return typeof event.payload.status === "string" && ["error", "failed"].includes(event.payload.status.toLowerCase());
+}
+
+function readStudioEventAgentId(event: EventView, fallbackAgentId: string): string {
+  return typeof event.agent_id === "string" && event.agent_id.trim() ? event.agent_id.trim() : fallbackAgentId;
+}
+
+function buildStudioAgentTraceSummary(
+  events: EventView[],
+  runs: StudioRunSummary[],
+  fallbackAgentId: string,
+): StudioAgentTraceSummary[] {
+  const summaries = new Map<string, StudioAgentTraceSummary>();
+  const ensure = (agentId: string): StudioAgentTraceSummary => {
+    const normalized = agentId.trim() || fallbackAgentId;
+    const existing = summaries.get(normalized);
+    if (existing) {
+      return existing;
+    }
+    const created: StudioAgentTraceSummary = {
+      agentId: normalized,
+      eventCount: 0,
+      runCount: 0,
+      errorCount: 0,
+      lastEventSeq: null,
+      updatedAt: null,
+    };
+    summaries.set(normalized, created);
+    return created;
+  };
+
+  ensure(fallbackAgentId);
+  for (const event of events) {
+    const summary = ensure(readStudioEventAgentId(event, fallbackAgentId));
+    summary.eventCount += 1;
+    summary.lastEventSeq = Math.max(summary.lastEventSeq ?? 0, event.seq);
+    if (isStudioErrorEvent(event)) {
+      summary.errorCount += 1;
+    }
+  }
+  for (const run of runs) {
+    const summary = ensure(run.agentId || fallbackAgentId);
+    summary.runCount += 1;
+    summary.errorCount += run.errorCount;
+    if (!summary.updatedAt || run.updatedAt.localeCompare(summary.updatedAt) > 0) {
+      summary.updatedAt = run.updatedAt;
+    }
+  }
+
+  return Array.from(summaries.values()).sort((left, right) => {
+    const activityDelta = right.eventCount + right.runCount - (left.eventCount + left.runCount);
+    return activityDelta || left.agentId.localeCompare(right.agentId);
+  });
 }
 
 function studioEventCausalClass(event: EventView, causalAnalysis: StudioRunCausalAnalysis): string {

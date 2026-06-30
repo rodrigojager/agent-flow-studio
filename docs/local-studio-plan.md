@@ -509,6 +509,7 @@ Mas a ferramenta não deve depender disso para operar.
 6. multiagente operacional:
    - `agent_id` em runtime de teste e final já foi implementado em `/metadata`, sessão e eventos;
    - filtros por agente em runs locais do Studio já foram implementados;
+   - resumo por agente e filtro por agente na timeline já foram implementados;
    - falta ampliar o trace/histórico multiagente para uma visão dedicada de bundle.
 
 ## Regra de decisão para novos comportamentos
