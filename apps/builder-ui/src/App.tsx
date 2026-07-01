@@ -5576,6 +5576,7 @@ function AssetsPanel({
 
 function SchemaVisualEditor({ content, onChange }: { content: string; onChange: (value: string) => void }) {
   const parsed = useMemo(() => parseSchemaObject(content), [content]);
+  const semanticIssues = useMemo(() => (parsed.ok ? validateSchemaSemantics(parsed.schema) : []), [parsed]);
   if (!parsed.ok) {
     return (
       <div className="schema-visual-panel unavailable">
@@ -5605,6 +5606,7 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
         </span>
       </div>
       <SchemaAdvancedControls schema={schema} contextLabel="schema" onUpdateObject={updateSchema} />
+      <SchemaSemanticValidation issues={semanticIssues} />
       <SchemaDefinitionsEditor schema={schema} onUpdateObject={updateSchema} />
       <SchemaObjectVisualEditor
         schema={schema}
@@ -5617,6 +5619,36 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
         onUpdateObject={updateSchema}
       />
     </div>
+  );
+}
+
+function SchemaSemanticValidation({ issues }: { issues: SchemaSemanticIssue[] }) {
+  const errorCount = issues.filter((issue) => issue.severity === "error").length;
+  const warningCount = issues.length - errorCount;
+  const state = errorCount ? "error" : warningCount ? "warning" : "ready";
+  return (
+    <section className={`schema-semantic-validation ${state}`} role="status" aria-label="Consistência do schema" data-state={state}>
+      <div className="schema-semantic-title">
+        {state === "ready" ? <CheckCircle2 size={15} aria-hidden="true" /> : <AlertCircle size={15} aria-hidden="true" />}
+        <strong>{state === "ready" ? "Schema consistente" : "Revisar schema"}</strong>
+        <span>
+          {errorCount} erro{errorCount === 1 ? "" : "s"} · {warningCount} aviso{warningCount === 1 ? "" : "s"}
+        </span>
+      </div>
+      {issues.length ? (
+        <ul className="schema-semantic-list">
+          {issues.map((issue, index) => (
+            <li className={issue.severity} key={`${issue.path}-${issue.message}-${index}`}>
+              <span>{issue.severity === "error" ? "Erro" : "Aviso"}</span>
+              <strong>{issue.path}</strong>
+              <p>{issue.message}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>Refs locais, obrigatórios e composições estão resolvidos.</p>
+      )}
+    </section>
   );
 }
 
@@ -6161,6 +6193,12 @@ type SchemaParseResult =
   | { ok: true; schema: Record<string, unknown> }
   | { ok: false; message: string };
 
+type SchemaSemanticIssue = {
+  severity: "error" | "warning";
+  path: string;
+  message: string;
+};
+
 function parseSchemaObject(content: string): SchemaParseResult {
   try {
     const value = JSON.parse(content) as unknown;
@@ -6175,6 +6213,297 @@ function parseSchemaObject(content: string): SchemaParseResult {
 
 function cloneJsonObject(value: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanticIssue[] {
+  const issues: SchemaSemanticIssue[] = [];
+  const definitionNames = new Set(readSchemaDefinitions(schema).map(([name]) => name));
+  const visited = new Set<Record<string, unknown>>();
+
+  visitSchemaObject(schema, "schema");
+
+  if (schema.$defs !== undefined && !isRecord(schema.$defs)) {
+    issues.push({
+      severity: "error",
+      path: "schema.$defs",
+      message: "$defs precisa ser um objeto com definições nomeadas.",
+    });
+  }
+
+  if (isRecord(schema.$defs)) {
+    Object.entries(schema.$defs).forEach(([name, value]) => {
+      if (!isValidSchemaPropertyName(name)) {
+        issues.push({
+          severity: "warning",
+          path: `schema.$defs.${name}`,
+          message: "Nome de definição fora do padrão visual. Use letras, números, _ ou - e comece por letra ou _.",
+        });
+      }
+      if (!isRecord(value)) {
+        issues.push({
+          severity: "error",
+          path: `schema.$defs.${name}`,
+          message: "Definição precisa ser um objeto JSON Schema.",
+        });
+        return;
+      }
+      visitSchemaObject(value, `schema.$defs.${name}`);
+    });
+  }
+
+  return issues;
+
+  function visitSchemaObject(current: Record<string, unknown>, path: string) {
+    if (visited.has(current)) {
+      return;
+    }
+    visited.add(current);
+
+    validateRef(current, path);
+    validateRequired(current, path);
+    validateEnum(current, path);
+    validateAdditionalProperties(current, path);
+    validateArrayItems(current, path);
+    validateComposition(current, path);
+
+    if (isRecord(current.properties)) {
+      Object.entries(current.properties).forEach(([propertyName, propertyValue]) => {
+        const propertyPath = `${path}.properties.${propertyName}`;
+        if (!isRecord(propertyValue)) {
+          issues.push({
+            severity: "error",
+            path: propertyPath,
+            message: "Propriedade precisa ser um objeto JSON Schema.",
+          });
+          return;
+        }
+        visitSchemaObject(propertyValue, propertyPath);
+      });
+    } else if (current.properties !== undefined) {
+      issues.push({
+        severity: "error",
+        path: `${path}.properties`,
+        message: "properties precisa ser um objeto.",
+      });
+    }
+
+    if (isRecord(current.items)) {
+      visitSchemaObject(current.items, `${path}.items`);
+    } else if (current.items !== undefined && !Array.isArray(current.items)) {
+      issues.push({
+        severity: "error",
+        path: `${path}.items`,
+        message: "items precisa ser um schema ou uma lista de schemas.",
+      });
+    } else if (Array.isArray(current.items)) {
+      current.items.forEach((item, index) => {
+        if (isRecord(item)) {
+          visitSchemaObject(item, `${path}.items[${index}]`);
+        } else {
+          issues.push({
+            severity: "error",
+            path: `${path}.items[${index}]`,
+            message: "Item de array precisa ser um objeto JSON Schema.",
+          });
+        }
+      });
+    }
+
+    if (isRecord(current.additionalProperties)) {
+      visitSchemaObject(current.additionalProperties, `${path}.additionalProperties`);
+    }
+
+    schemaCompositionKeys.forEach((key) => {
+      const entries = current[key];
+      if (!Array.isArray(entries)) {
+        return;
+      }
+      entries.forEach((entry, index) => {
+        if (isRecord(entry)) {
+          visitSchemaObject(entry, `${path}.${key}[${index}]`);
+        }
+      });
+    });
+  }
+
+  function validateRef(current: Record<string, unknown>, path: string) {
+    if (current.$ref === undefined) {
+      return;
+    }
+    if (typeof current.$ref !== "string" || !current.$ref.trim()) {
+      issues.push({
+        severity: "error",
+        path: `${path}.$ref`,
+        message: "$ref precisa ser uma string não vazia.",
+      });
+      return;
+    }
+    const ref = current.$ref.trim();
+    if (ref.startsWith("#/$defs/")) {
+      const refName = safeDecodeSchemaRef(ref.slice("#/$defs/".length));
+      if (!refName) {
+        issues.push({
+          severity: "error",
+          path: `${path}.$ref`,
+          message: `Referência local inválida: ${ref}.`,
+        });
+        return;
+      }
+      if (!definitionNames.has(refName)) {
+        issues.push({
+          severity: "error",
+          path: `${path}.$ref`,
+          message: `Referência local não encontrada: ${ref}. Crie a definição em $defs ou ajuste o $ref.`,
+        });
+      }
+      return;
+    }
+    if (ref.startsWith("#/definitions/")) {
+      issues.push({
+        severity: "warning",
+        path: `${path}.$ref`,
+        message: "Este editor resolve localmente $defs. Migre definitions para $defs para validação visual completa.",
+      });
+    } else if (ref.startsWith("#/")) {
+      issues.push({
+        severity: "warning",
+        path: `${path}.$ref`,
+        message: "Referência local fora de $defs não é resolvida pelo editor visual.",
+      });
+    }
+  }
+
+  function safeDecodeSchemaRef(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return "";
+    }
+  }
+
+  function validateRequired(current: Record<string, unknown>, path: string) {
+    if (current.required === undefined) {
+      return;
+    }
+    if (!Array.isArray(current.required)) {
+      issues.push({
+        severity: "error",
+        path: `${path}.required`,
+        message: "required precisa ser uma lista de nomes de propriedades.",
+      });
+      return;
+    }
+    const propertyNames = isRecord(current.properties) ? new Set(Object.keys(current.properties)) : new Set<string>();
+    const seenRequired = new Set<string>();
+    current.required.forEach((item, index) => {
+      const itemPath = `${path}.required[${index}]`;
+      if (typeof item !== "string" || !item.trim()) {
+        issues.push({
+          severity: "error",
+          path: itemPath,
+          message: "Cada item de required precisa ser uma string não vazia.",
+        });
+        return;
+      }
+      if (seenRequired.has(item)) {
+        issues.push({
+          severity: "warning",
+          path: itemPath,
+          message: `Campo obrigatório duplicado: ${item}.`,
+        });
+      }
+      seenRequired.add(item);
+      if (!propertyNames.has(item)) {
+        issues.push({
+          severity: "warning",
+          path: itemPath,
+          message: `Campo obrigatório sem propriedade correspondente: ${item}.`,
+        });
+      }
+    });
+  }
+
+  function validateEnum(current: Record<string, unknown>, path: string) {
+    if (current.enum === undefined) {
+      return;
+    }
+    if (!Array.isArray(current.enum)) {
+      issues.push({
+        severity: "error",
+        path: `${path}.enum`,
+        message: "enum precisa ser uma lista.",
+      });
+      return;
+    }
+    const seenValues = new Set<string>();
+    current.enum.forEach((item, index) => {
+      const key = JSON.stringify(item);
+      if (seenValues.has(key)) {
+        issues.push({
+          severity: "warning",
+          path: `${path}.enum[${index}]`,
+          message: "Valor duplicado no enum.",
+        });
+      }
+      seenValues.add(key);
+    });
+  }
+
+  function validateAdditionalProperties(current: Record<string, unknown>, path: string) {
+    const additional = current.additionalProperties;
+    if (additional === undefined || typeof additional === "boolean" || isRecord(additional)) {
+      return;
+    }
+    issues.push({
+      severity: "error",
+      path: `${path}.additionalProperties`,
+      message: "additionalProperties precisa ser true, false ou um schema.",
+    });
+  }
+
+  function validateArrayItems(current: Record<string, unknown>, path: string) {
+    const type = current.type;
+    if (type === "array" && current.items === undefined) {
+      issues.push({
+        severity: "warning",
+        path: `${path}.items`,
+        message: "Array sem items deixa o formato de cada item indefinido.",
+      });
+    }
+  }
+
+  function validateComposition(current: Record<string, unknown>, path: string) {
+    schemaCompositionKeys.forEach((key) => {
+      const entries = current[key];
+      if (entries === undefined) {
+        return;
+      }
+      if (!Array.isArray(entries)) {
+        issues.push({
+          severity: "error",
+          path: `${path}.${key}`,
+          message: `${key} precisa ser uma lista de schemas.`,
+        });
+        return;
+      }
+      if (!entries.length) {
+        issues.push({
+          severity: "warning",
+          path: `${path}.${key}`,
+          message: `${key} vazio não adiciona uma alternativa válida.`,
+        });
+      }
+      entries.forEach((entry, index) => {
+        if (!isRecord(entry)) {
+          issues.push({
+            severity: "error",
+            path: `${path}.${key}[${index}]`,
+            message: `Entrada de ${key} precisa ser um objeto JSON Schema.`,
+          });
+        }
+      });
+    });
+  }
 }
 
 function readSchemaProperties(schema: Record<string, unknown>): Array<[string, Record<string, unknown>]> {

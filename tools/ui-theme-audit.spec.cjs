@@ -114,12 +114,16 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByLabel("Descrição do schema").fill("Estado público da sessão e saída estruturada.");
   await page.getByLabel("Tags do schema").fill("estado, contrato, sessão");
   await page.getByLabel("Versão do schema").fill("v2");
+  const schemaConsistency = page.getByLabel("Consistência do schema");
+  await expect(schemaConsistency).toContainText("Schema consistente");
   await page.getByLabel("$ref de schema").fill("#/$defs/SessionState");
+  await expect(schemaConsistency).toContainText("Referência local não encontrada: #/$defs/SessionState");
   await page.getByLabel("additionalProperties de schema").selectOption("schema");
   await page.getByLabel("Tipo de additionalProperties de schema").selectOption("string");
   await page.getByRole("button", { name: "Adicionar oneOf em schema" }).click();
   await page.getByRole("button", { name: "Adicionar anyOf em schema" }).click();
   await page.getByLabel("$ref de status").fill("#/$defs/Status");
+  await expect(schemaConsistency).toContainText("Referência local não encontrada: #/$defs/Status");
   await page.getByLabel("Nova definição do schema", { exact: true }).fill("SessionState");
   await page.getByLabel("Tipo da nova definição do schema").selectOption("object");
   await page.getByRole("button", { name: "Adicionar definição ao schema" }).click();
@@ -130,6 +134,7 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByLabel("Nova definição do schema", { exact: true }).fill("Status");
   await page.getByLabel("Tipo da nova definição do schema").selectOption("string");
   await page.getByRole("button", { name: "Adicionar definição ao schema" }).click();
+  await expect(schemaConsistency).toContainText("Schema consistente");
   await page.getByLabel("Descrição de session_id").fill("Identificador público da sessão.");
   await expect(page.getByLabel("Enum de status")).toHaveValue("created, active, completed");
   await page.getByLabel("Enum de status").fill("created, active, completed, archived");
