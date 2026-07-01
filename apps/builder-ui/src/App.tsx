@@ -5604,6 +5604,7 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
           {properties.length} campo{properties.length === 1 ? "" : "s"}
         </span>
       </div>
+      <SchemaAdvancedControls schema={schema} contextLabel="schema" onUpdateObject={updateSchema} />
       <SchemaObjectVisualEditor
         schema={schema}
         contextLabel="schema"
@@ -5614,6 +5615,120 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
         addButtonAriaLabel=""
         onUpdateObject={updateSchema}
       />
+    </div>
+  );
+}
+
+function SchemaAdvancedControls({
+  schema,
+  contextLabel,
+  onUpdateObject,
+}: {
+  schema: Record<string, unknown>;
+  contextLabel: string;
+  onUpdateObject: (mutator: (schema: Record<string, unknown>) => void) => void;
+}) {
+  const refValue = readSchemaRef(schema);
+  const additionalMode = readSchemaAdditionalPropertiesMode(schema);
+  const additionalObject = readSchemaAdditionalPropertiesObject(schema);
+  const compositionCounts = schemaCompositionKeys.map((key) => [key, readSchemaCompositionList(schema, key).length] as const);
+  return (
+    <div className="schema-advanced-controls">
+      <div className="schema-advanced-grid">
+        <label>
+          <span>$ref</span>
+          <input
+            aria-label={`$ref de ${contextLabel}`}
+            value={refValue}
+            placeholder="#/$defs/Item"
+            onChange={(event) =>
+              onUpdateObject((next) => {
+                const value = event.target.value.trim();
+                if (value) {
+                  next.$ref = value;
+                } else {
+                  delete next.$ref;
+                }
+              })
+            }
+          />
+        </label>
+        <label>
+          <span>Additional</span>
+          <select
+            aria-label={`additionalProperties de ${contextLabel}`}
+            value={additionalMode}
+            onChange={(event) =>
+              onUpdateObject((next) => {
+                updateSchemaAdditionalPropertiesMode(next, event.target.value);
+              })
+            }
+          >
+            <option value="unset">-</option>
+            <option value="true">true</option>
+            <option value="false">false</option>
+            <option value="schema">schema</option>
+          </select>
+        </label>
+        {additionalMode === "schema" ? (
+          <label>
+            <span>Tipo extra</span>
+            <select
+              aria-label={`Tipo de additionalProperties de ${contextLabel}`}
+              value={readSchemaPropertyType(additionalObject)}
+              onChange={(event) =>
+                onUpdateObject((next) => {
+                  const additional = isRecord(next.additionalProperties) ? next.additionalProperties : {};
+                  updateSchemaPropertyType(additional, event.target.value || "string");
+                  next.additionalProperties = additional;
+                })
+              }
+            >
+              {schemaPropertyTypeOptions.map((option) => (
+                <option value={option} key={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
+      <div className="schema-composition-grid" aria-label={`Composições de ${contextLabel}`}>
+        {compositionCounts.map(([key, count]) => (
+          <div className="schema-composition-row" key={`${contextLabel}-${key}`}>
+            <span>
+              {key} ({count})
+            </span>
+            <button
+              type="button"
+              className="command-button"
+              aria-label={`Adicionar ${key} em ${contextLabel}`}
+              onClick={() =>
+                onUpdateObject((next) => {
+                  addSchemaCompositionEntry(next, key);
+                })
+              }
+            >
+              <Plus size={14} aria-hidden="true" />
+              Adicionar
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              aria-label={`Remover ${key} em ${contextLabel}`}
+              onClick={() =>
+                onUpdateObject((next) => {
+                  removeSchemaCompositionEntry(next, key);
+                })
+              }
+              disabled={!count}
+            >
+              <Trash2 size={14} aria-hidden="true" />
+              Remover
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -5766,6 +5881,11 @@ function SchemaPropertyVisualRow({
     <div className={`schema-property-shell ${depth > 0 ? "nested" : ""}`}>
       <div className="schema-property-row">
         <strong title={propertyLabel}>{name}</strong>
+        <SchemaAdvancedControls
+          schema={property}
+          contextLabel={propertyLabel}
+          onUpdateObject={(mutator) => updateProperty(name, mutator)}
+        />
         <label>
           <span>Tipo</span>
           <select
@@ -5976,6 +6096,66 @@ function readSchemaArrayItemType(property: Record<string, unknown>): string {
 
 function readSchemaArrayItemsObject(property: Record<string, unknown>): Record<string, unknown> {
   return isRecord(property.items) ? property.items : { type: "object", properties: {} };
+}
+
+const schemaCompositionKeys = ["oneOf", "allOf", "anyOf"] as const;
+type SchemaCompositionKey = (typeof schemaCompositionKeys)[number];
+
+function readSchemaRef(schema: Record<string, unknown>): string {
+  return typeof schema.$ref === "string" ? schema.$ref : "";
+}
+
+function readSchemaAdditionalPropertiesMode(schema: Record<string, unknown>): "unset" | "true" | "false" | "schema" {
+  if (schema.additionalProperties === undefined) {
+    return "unset";
+  }
+  if (schema.additionalProperties === true) {
+    return "true";
+  }
+  if (schema.additionalProperties === false) {
+    return "false";
+  }
+  if (isRecord(schema.additionalProperties)) {
+    return "schema";
+  }
+  return "unset";
+}
+
+function readSchemaAdditionalPropertiesObject(schema: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(schema.additionalProperties) ? schema.additionalProperties : { type: "string" };
+}
+
+function updateSchemaAdditionalPropertiesMode(schema: Record<string, unknown>, mode: string): void {
+  if (mode === "true") {
+    schema.additionalProperties = true;
+    return;
+  }
+  if (mode === "false") {
+    schema.additionalProperties = false;
+    return;
+  }
+  if (mode === "schema") {
+    schema.additionalProperties = readSchemaAdditionalPropertiesObject(schema);
+    return;
+  }
+  delete schema.additionalProperties;
+}
+
+function readSchemaCompositionList(schema: Record<string, unknown>, key: SchemaCompositionKey): Record<string, unknown>[] {
+  return Array.isArray(schema[key]) ? schema[key].filter(isRecord) : [];
+}
+
+function addSchemaCompositionEntry(schema: Record<string, unknown>, key: SchemaCompositionKey): void {
+  schema[key] = [...readSchemaCompositionList(schema, key), { type: "object", properties: {} }];
+}
+
+function removeSchemaCompositionEntry(schema: Record<string, unknown>, key: SchemaCompositionKey): void {
+  const entries = readSchemaCompositionList(schema, key).slice(0, -1);
+  if (entries.length) {
+    schema[key] = entries;
+  } else {
+    delete schema[key];
+  }
 }
 
 function updateSchemaPropertyType(property: Record<string, unknown>, type: string): void {

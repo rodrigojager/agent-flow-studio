@@ -114,6 +114,12 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByLabel("Descrição do schema").fill("Estado público da sessão e saída estruturada.");
   await page.getByLabel("Tags do schema").fill("estado, contrato, sessão");
   await page.getByLabel("Versão do schema").fill("v2");
+  await page.getByLabel("$ref de schema").fill("#/$defs/SessionState");
+  await page.getByLabel("additionalProperties de schema").selectOption("schema");
+  await page.getByLabel("Tipo de additionalProperties de schema").selectOption("string");
+  await page.getByRole("button", { name: "Adicionar oneOf em schema" }).click();
+  await page.getByRole("button", { name: "Adicionar anyOf em schema" }).click();
+  await page.getByLabel("$ref de status").fill("#/$defs/Status");
   await page.getByLabel("Descrição de session_id").fill("Identificador público da sessão.");
   await expect(page.getByLabel("Enum de status")).toHaveValue("created, active, completed");
   await page.getByLabel("Enum de status").fill("created, active, completed, archived");
@@ -133,6 +139,11 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expect(page.locator(".schema-editor")).toHaveValue(/"review_score"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"user_message"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"archived"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"\$ref": "#\/\$defs\/SessionState"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"additionalProperties": \{\s+"type": "string"\s+\}/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"oneOf": \[/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"anyOf": \[/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"\$ref": "#\/\$defs\/Status"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"items": \{\s+"type": "string"\s+\}/);
   await expect(page.locator(".schema-editor")).not.toHaveValue(/"timestamp"/);
   await page.getByRole("button", { name: /^Salvar schema$/ }).click();

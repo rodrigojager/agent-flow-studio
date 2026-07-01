@@ -604,7 +604,7 @@ Entregaveis:
 - inspector por tipo;
 - edicao visual de LLM/provider/env vars;
 - edicao visual de prompts por blocos;
-- editor visual de schemas;
+- editor visual de schemas com propriedades comuns, `$ref`, `additionalProperties` e composições `oneOf`/`allOf`/`anyOf`;
 - editor visual de tools;
 - grupos/notas;
 - diagnostics clicaveis;

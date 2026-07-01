@@ -1594,6 +1594,46 @@ button:disabled {
   background: var(--surface-bg);
 }
 
+.schema-advanced-controls {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-soft) 64%, var(--surface-bg));
+}
+
+.schema-advanced-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px minmax(94px, 0.55fr);
+  gap: 7px;
+}
+
+.schema-composition-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.schema-composition-row {
+  display: grid;
+  grid-template-columns: minmax(78px, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.schema-composition-row > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .schema-property-row strong {
   min-width: 0;
   overflow: hidden;
@@ -1604,16 +1644,19 @@ button:disabled {
 }
 
 .schema-property-row label,
+.schema-advanced-controls label,
 .schema-property-add {
   min-width: 0;
 }
 
-.schema-property-row label {
+.schema-property-row label,
+.schema-advanced-controls label {
   display: grid;
   gap: 4px;
 }
 
-.schema-property-row label span {
+.schema-property-row label span,
+.schema-advanced-controls label span {
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 700;
@@ -1622,6 +1665,8 @@ button:disabled {
 
 .schema-property-row input,
 .schema-property-row select,
+.schema-advanced-controls input,
+.schema-advanced-controls select,
 .schema-property-add input,
 .schema-property-add select {
   width: 100%;
