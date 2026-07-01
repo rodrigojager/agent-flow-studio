@@ -5606,7 +5606,14 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
         </span>
       </div>
       <SchemaAdvancedControls schema={schema} contextLabel="schema" onUpdateObject={updateSchema} />
-      <SchemaSemanticValidation issues={semanticIssues} />
+      <SchemaSemanticValidation
+        issues={semanticIssues}
+        onApplyAction={(action) =>
+          updateSchema((next) => {
+            applySchemaSemanticAction(next, action);
+          })
+        }
+      />
       <SchemaDefinitionsEditor schema={schema} onUpdateObject={updateSchema} />
       <SchemaObjectVisualEditor
         schema={schema}
@@ -5622,7 +5629,13 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
   );
 }
 
-function SchemaSemanticValidation({ issues }: { issues: SchemaSemanticIssue[] }) {
+function SchemaSemanticValidation({
+  issues,
+  onApplyAction,
+}: {
+  issues: SchemaSemanticIssue[];
+  onApplyAction: (action: SchemaSemanticAction) => void;
+}) {
   const errorCount = issues.filter((issue) => issue.severity === "error").length;
   const warningCount = issues.length - errorCount;
   const state = errorCount ? "error" : warningCount ? "warning" : "ready";
@@ -5638,10 +5651,19 @@ function SchemaSemanticValidation({ issues }: { issues: SchemaSemanticIssue[] })
       {issues.length ? (
         <ul className="schema-semantic-list">
           {issues.map((issue, index) => (
-            <li className={issue.severity} key={`${issue.path}-${issue.message}-${index}`}>
+            <li className={`${issue.severity} ${issue.action ? "has-action" : ""}`} key={`${issue.path}-${issue.message}-${index}`}>
               <span>{issue.severity === "error" ? "Erro" : "Aviso"}</span>
               <strong>{issue.path}</strong>
               <p>{issue.message}</p>
+              {issue.action ? (
+                <button
+                  type="button"
+                  className="schema-semantic-action"
+                  onClick={() => onApplyAction(issue.action as SchemaSemanticAction)}
+                >
+                  {issue.action.label}
+                </button>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -6197,7 +6219,45 @@ type SchemaSemanticIssue = {
   severity: "error" | "warning";
   path: string;
   message: string;
+  action?: SchemaSemanticAction;
 };
+
+type SchemaPathSegment = string | number;
+
+type SchemaSemanticAction =
+  | {
+      type: "create-definition";
+      label: string;
+      definitionName: string;
+      sourcePath: SchemaPathSegment[];
+    }
+  | {
+      type: "remove-required";
+      label: string;
+      targetPath: SchemaPathSegment[];
+      propertyName: string;
+    }
+  | {
+      type: "dedupe-required";
+      label: string;
+      targetPath: SchemaPathSegment[];
+    }
+  | {
+      type: "add-array-items";
+      label: string;
+      targetPath: SchemaPathSegment[];
+    }
+  | {
+      type: "remove-empty-composition";
+      label: string;
+      targetPath: SchemaPathSegment[];
+      key: SchemaCompositionKey;
+    }
+  | {
+      type: "dedupe-enum";
+      label: string;
+      targetPath: SchemaPathSegment[];
+    };
 
 function parseSchemaObject(content: string): SchemaParseResult {
   try {
@@ -6220,7 +6280,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
   const definitionNames = new Set(readSchemaDefinitions(schema).map(([name]) => name));
   const visited = new Set<Record<string, unknown>>();
 
-  visitSchemaObject(schema, "schema");
+  visitSchemaObject(schema, "schema", []);
 
   if (schema.$defs !== undefined && !isRecord(schema.$defs)) {
     issues.push({
@@ -6247,24 +6307,24 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         });
         return;
       }
-      visitSchemaObject(value, `schema.$defs.${name}`);
+      visitSchemaObject(value, `schema.$defs.${name}`, ["$defs", name]);
     });
   }
 
   return issues;
 
-  function visitSchemaObject(current: Record<string, unknown>, path: string) {
+  function visitSchemaObject(current: Record<string, unknown>, path: string, targetPath: SchemaPathSegment[]) {
     if (visited.has(current)) {
       return;
     }
     visited.add(current);
 
-    validateRef(current, path);
-    validateRequired(current, path);
-    validateEnum(current, path);
+    validateRef(current, path, targetPath);
+    validateRequired(current, path, targetPath);
+    validateEnum(current, path, targetPath);
     validateAdditionalProperties(current, path);
-    validateArrayItems(current, path);
-    validateComposition(current, path);
+    validateArrayItems(current, path, targetPath);
+    validateComposition(current, path, targetPath);
 
     if (isRecord(current.properties)) {
       Object.entries(current.properties).forEach(([propertyName, propertyValue]) => {
@@ -6277,7 +6337,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           });
           return;
         }
-        visitSchemaObject(propertyValue, propertyPath);
+        visitSchemaObject(propertyValue, propertyPath, [...targetPath, "properties", propertyName]);
       });
     } else if (current.properties !== undefined) {
       issues.push({
@@ -6288,7 +6348,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
     }
 
     if (isRecord(current.items)) {
-      visitSchemaObject(current.items, `${path}.items`);
+      visitSchemaObject(current.items, `${path}.items`, [...targetPath, "items"]);
     } else if (current.items !== undefined && !Array.isArray(current.items)) {
       issues.push({
         severity: "error",
@@ -6298,7 +6358,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
     } else if (Array.isArray(current.items)) {
       current.items.forEach((item, index) => {
         if (isRecord(item)) {
-          visitSchemaObject(item, `${path}.items[${index}]`);
+          visitSchemaObject(item, `${path}.items[${index}]`, [...targetPath, "items", index]);
         } else {
           issues.push({
             severity: "error",
@@ -6310,7 +6370,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
     }
 
     if (isRecord(current.additionalProperties)) {
-      visitSchemaObject(current.additionalProperties, `${path}.additionalProperties`);
+      visitSchemaObject(current.additionalProperties, `${path}.additionalProperties`, [...targetPath, "additionalProperties"]);
     }
 
     schemaCompositionKeys.forEach((key) => {
@@ -6320,13 +6380,13 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
       }
       entries.forEach((entry, index) => {
         if (isRecord(entry)) {
-          visitSchemaObject(entry, `${path}.${key}[${index}]`);
+          visitSchemaObject(entry, `${path}.${key}[${index}]`, [...targetPath, key, index]);
         }
       });
     });
   }
 
-  function validateRef(current: Record<string, unknown>, path: string) {
+  function validateRef(current: Record<string, unknown>, path: string, targetPath: SchemaPathSegment[]) {
     if (current.$ref === undefined) {
       return;
     }
@@ -6354,6 +6414,12 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "error",
           path: `${path}.$ref`,
           message: `Referência local não encontrada: ${ref}. Crie a definição em $defs ou ajuste o $ref.`,
+          action: {
+            type: "create-definition",
+            label: `Criar $defs.${refName}`,
+            definitionName: refName,
+            sourcePath: targetPath,
+          },
         });
       }
       return;
@@ -6381,7 +6447,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
     }
   }
 
-  function validateRequired(current: Record<string, unknown>, path: string) {
+  function validateRequired(current: Record<string, unknown>, path: string, targetPath: SchemaPathSegment[]) {
     if (current.required === undefined) {
       return;
     }
@@ -6410,6 +6476,11 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: itemPath,
           message: `Campo obrigatório duplicado: ${item}.`,
+          action: {
+            type: "dedupe-required",
+            label: "Deduplicar required",
+            targetPath,
+          },
         });
       }
       seenRequired.add(item);
@@ -6418,12 +6489,18 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: itemPath,
           message: `Campo obrigatório sem propriedade correspondente: ${item}.`,
+          action: {
+            type: "remove-required",
+            label: `Remover required ${item}`,
+            targetPath,
+            propertyName: item,
+          },
         });
       }
     });
   }
 
-  function validateEnum(current: Record<string, unknown>, path: string) {
+  function validateEnum(current: Record<string, unknown>, path: string, targetPath: SchemaPathSegment[]) {
     if (current.enum === undefined) {
       return;
     }
@@ -6443,6 +6520,11 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: `${path}.enum[${index}]`,
           message: "Valor duplicado no enum.",
+          action: {
+            type: "dedupe-enum",
+            label: "Deduplicar enum",
+            targetPath,
+          },
         });
       }
       seenValues.add(key);
@@ -6461,18 +6543,23 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
     });
   }
 
-  function validateArrayItems(current: Record<string, unknown>, path: string) {
+  function validateArrayItems(current: Record<string, unknown>, path: string, targetPath: SchemaPathSegment[]) {
     const type = current.type;
     if (type === "array" && current.items === undefined) {
       issues.push({
         severity: "warning",
         path: `${path}.items`,
         message: "Array sem items deixa o formato de cada item indefinido.",
+        action: {
+          type: "add-array-items",
+          label: "Adicionar items",
+          targetPath,
+        },
       });
     }
   }
 
-  function validateComposition(current: Record<string, unknown>, path: string) {
+  function validateComposition(current: Record<string, unknown>, path: string, targetPath: SchemaPathSegment[]) {
     schemaCompositionKeys.forEach((key) => {
       const entries = current[key];
       if (entries === undefined) {
@@ -6491,6 +6578,12 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: `${path}.${key}`,
           message: `${key} vazio não adiciona uma alternativa válida.`,
+          action: {
+            type: "remove-empty-composition",
+            label: `Remover ${key}`,
+            targetPath,
+            key,
+          },
         });
       }
       entries.forEach((entry, index) => {
@@ -6504,6 +6597,111 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
       });
     });
   }
+}
+
+function applySchemaSemanticAction(schema: Record<string, unknown>, action: SchemaSemanticAction): void {
+  if (action.type === "create-definition") {
+    const definitions = ensureSchemaDefinitions(schema);
+    if (!definitions[action.definitionName]) {
+      definitions[action.definitionName] = createSchemaDefinitionFromSource(readSchemaObjectAtPath(schema, action.sourcePath), action.sourcePath);
+    }
+    return;
+  }
+
+  const target = "targetPath" in action ? readSchemaObjectAtPath(schema, action.targetPath) : undefined;
+  if (!target) {
+    return;
+  }
+
+  if (action.type === "remove-required") {
+    target.required = readSchemaRequired(target).filter((item) => item !== action.propertyName);
+    if (!readSchemaRequired(target).length) {
+      delete target.required;
+    }
+    return;
+  }
+
+  if (action.type === "dedupe-required") {
+    const deduped = uniqueJsonValues(readSchemaRequired(target));
+    if (deduped.length) {
+      target.required = deduped;
+    } else {
+      delete target.required;
+    }
+    return;
+  }
+
+  if (action.type === "add-array-items") {
+    target.type = "array";
+    if (!isRecord(target.items) && !Array.isArray(target.items)) {
+      target.items = { type: "string" };
+    }
+    return;
+  }
+
+  if (action.type === "remove-empty-composition") {
+    const entries = target[action.key];
+    if (Array.isArray(entries) && !entries.length) {
+      delete target[action.key];
+    }
+    return;
+  }
+
+  if (action.type === "dedupe-enum" && Array.isArray(target.enum)) {
+    target.enum = uniqueJsonValues(target.enum);
+  }
+}
+
+function readSchemaObjectAtPath(schema: Record<string, unknown>, path: SchemaPathSegment[]): Record<string, unknown> | undefined {
+  let current: unknown = schema;
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) {
+        return undefined;
+      }
+      current = current[segment];
+    } else {
+      if (!isRecord(current)) {
+        return undefined;
+      }
+      current = current[segment];
+    }
+  }
+  return isRecord(current) ? current : undefined;
+}
+
+function createSchemaDefinitionFromSource(source: Record<string, unknown> | undefined, sourcePath: SchemaPathSegment[]): Record<string, unknown> {
+  if (!source) {
+    return { type: "object", properties: {} };
+  }
+  if (!sourcePath.length) {
+    return createDefaultSchemaProperty(readSchemaPropertyType(source) || "object");
+  }
+  const definition = cloneJsonObject(source);
+  delete definition.$ref;
+  delete definition.$defs;
+  if (!Object.keys(definition).length) {
+    return { type: "object", properties: {} };
+  }
+  if (definition.type === "object" && !isRecord(definition.properties)) {
+    definition.properties = {};
+  }
+  if (definition.type === "array" && !isRecord(definition.items) && !Array.isArray(definition.items)) {
+    definition.items = { type: "string" };
+  }
+  return definition;
+}
+
+function uniqueJsonValues<T>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = JSON.stringify(item);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function readSchemaProperties(schema: Record<string, unknown>): Array<[string, Record<string, unknown>]> {

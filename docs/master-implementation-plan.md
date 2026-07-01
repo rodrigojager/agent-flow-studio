@@ -604,7 +604,7 @@ Entregaveis:
 - inspector por tipo;
 - edicao visual de LLM/provider/env vars;
 - edicao visual de prompts por blocos;
-- editor visual de schemas com propriedades comuns, `$defs`, `$ref`, `additionalProperties`, composições `oneOf`/`allOf`/`anyOf` e validação semântica local de refs, required, arrays, enums e composições;
+- editor visual de schemas com propriedades comuns, `$defs`, `$ref`, `additionalProperties`, composições `oneOf`/`allOf`/`anyOf`, validação semântica local de refs, required, arrays, enums e composições e correções guiadas iniciais;
 - editor visual de tools;
 - grupos/notas;
 - diagnostics clicaveis;
@@ -832,7 +832,7 @@ Status 2026-07-01:
 - implementada comparação selecionável: a UI permite escolher qual revisão histórica será comparada com a atual antes de restaurar ou reutilizar o item;
 - implementado import/export dedicado de itens reutilizáveis via pacotes `agent-flow-builder.catalog-item.v1` (`.afcatalog.json`), com cópia local segura quando o pacote tenta reutilizar ID de item built-in;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para biblioteca compartilhável real, governança de pacotes, correção assistida e editor avançado de schemas internos.
+- pendente evoluir para biblioteca compartilhável real, governança de pacotes, navegação por diagnóstico, correção assistida avançada e editor avançado de schemas internos.
 
 ### Fase 11: Multiagente Local
 
