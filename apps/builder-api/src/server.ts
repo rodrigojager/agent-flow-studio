@@ -20,9 +20,11 @@ import {
   createSchemaAsset,
   deletePrompt,
   deleteSchemaAsset,
+  exportLocalCatalogItem,
   exportFlowWorkspace,
   generateApprovedRuntime,
   generateLangGraphSandboxArtifact,
+  importLocalCatalogItemPackage,
   importFlowWorkspace,
   listLocalCatalog,
   generateRuntimeManifest,
@@ -46,6 +48,7 @@ import {
   applyCatalogItemToFlow,
   validateFlow,
   WorkspaceError,
+  type LocalCatalogItemKind,
 } from "./workspace.ts";
 
 export interface BuildAppOptions {
@@ -83,6 +86,15 @@ interface CreateFlowBody {
 interface ImportFlowWorkspaceBody {
   workspace?: unknown;
   overwrite?: boolean;
+}
+
+interface CatalogItemParams {
+  kind: string;
+  itemId: string;
+}
+
+interface ImportCatalogItemBody {
+  package?: unknown;
 }
 
 interface AssetBody {
@@ -208,6 +220,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.get("/catalog", async () => listLocalCatalog(workspaceRoot));
 
   app.post<{ Body: unknown }>("/catalog/items", async (request) => saveLocalCatalogItem(workspaceRoot, request.body));
+
+  app.get<{ Params: CatalogItemParams }>("/catalog/items/:kind/:itemId/export", async (request) =>
+    exportLocalCatalogItem(workspaceRoot, request.params.itemId, request.params.kind as LocalCatalogItemKind),
+  );
+
+  app.post<{ Body: ImportCatalogItemBody | unknown }>("/catalog/items/import", async (request) => {
+    const body = request.body;
+    const payload = body && typeof body === "object" && "package" in body ? (body as ImportCatalogItemBody).package : body;
+    return importLocalCatalogItemPackage(workspaceRoot, payload);
+  });
 
   app.post<{ Body: unknown }>("/catalog/items/restore-revision", async (request) =>
     restoreLocalCatalogRevision(workspaceRoot, request.body),

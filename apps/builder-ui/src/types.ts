@@ -519,6 +519,28 @@ export interface LocalCatalog {
   items: LocalCatalogItem[];
 }
 
+export interface LocalCatalogItemPackage {
+  format: "agent-flow-builder.catalog-item.v1";
+  exportedAt: string;
+  source: {
+    kind: LocalCatalogItemKind;
+    id: string;
+    name: string;
+    contentHash: string;
+    revision: number;
+  };
+  item: {
+    id: string;
+    kind: LocalCatalogItemKind;
+    name: string;
+    description?: string;
+    tags?: string[];
+    version?: string;
+    content?: string;
+    nodePatch?: Record<string, unknown>;
+  };
+}
+
 export interface LocalCatalogApplyResult {
   status: "ok";
   item: LocalCatalogItem;

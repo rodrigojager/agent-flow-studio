@@ -803,7 +803,8 @@ Entregaveis:
 - editar prompts e schemas internos de skills/templates locais com ID, path, conteúdo e validação antes do salvamento;
 - reutilizar prompt/schema/tool/skill em flows sem copiar arquivos manualmente;
 - criar novo flow a partir de template de agente;
-- evoluir catalogo para biblioteca compartilhável/importável e edição avançada de schemas internos;
+- exportar e importar pacotes versionados de itens reutilizáveis;
+- evoluir catalogo para biblioteca compartilhável opcional e edição avançada de schemas internos;
 - filtro shared quando existir compartilhamento real.
 
 Aceite:
@@ -829,8 +830,9 @@ Status 2026-07-01:
 - implementado histórico local de revisões: ao sobrescrever item local, o snapshot anterior fica em `history` e o card mostra diff compacto contra a revisão atual;
 - implementada restauração de revisão: snapshots antigos podem ser restaurados pela API/UI, criando nova revisão sem apagar o histórico;
 - implementada comparação selecionável: a UI permite escolher qual revisão histórica será comparada com a atual antes de restaurar ou reutilizar o item;
+- implementado import/export dedicado de itens reutilizáveis via pacotes `agent-flow-builder.catalog-item.v1` (`.afcatalog.json`), com cópia local segura quando o pacote tenta reutilizar ID de item built-in;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para import/export dedicado de blocos, biblioteca compartilhável real e editor avançado de schemas internos.
+- pendente evoluir para biblioteca compartilhável real, governança de pacotes e editor avançado de schemas internos.
 
 ### Fase 11: Multiagente Local
 

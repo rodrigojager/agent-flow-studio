@@ -30,7 +30,7 @@ O fluxo principal foi desenhado para funcionar sem LangSmith Cloud, sem cobranç
 - Criação, listagem, leitura, salvamento e validação de flows.
 - Edição visual de propriedades de nós, adapters LLM, modelos e variáveis de ambiente.
 - Criação e edição de prompts Markdown e schemas JSON referenciados pelo flow.
-- Catálogo local inicial na aba `Catálogo`, com registry em `.agent-flow/catalog/registry.json`, busca/filtros por tipo/origem/tag, versão/revisão/hash de conteúdo por item, histórico local de revisões com comparação selecionável, diff visual compacto e restauração por revisão, seeds locais para prompt/schema/tools/templates de agente/skills, primeira camada de tools/skills compostas por bundle de nós/arestas, resumo visual de blocos/templates com etapas, conexões, assets e preview JSON, curadoria visual de itens locais com edição de metadados, criação/reordenação/remoção de etapas, alteração de IDs com remapeamento de conexões, refs de prompt/schema, criação/remoção de conexões internas, condições, prompts/schemas internos com ID/path/conteúdo editáveis e validação guiada antes de salvar, ações para salvar o prompt/schema atual, salvar o nó atual como tool/skill reutilizável, salvar subgrafos selecionados como tool/skill composta, aplicar prompt/schema/tool/skill no flow e criar um novo flow a partir de template reutilizável.
+- Catálogo local inicial na aba `Catálogo`, com registry em `.agent-flow/catalog/registry.json`, busca/filtros por tipo/origem/tag, versão/revisão/hash de conteúdo por item, histórico local de revisões com comparação selecionável, diff visual compacto e restauração por revisão, seeds locais para prompt/schema/tools/templates de agente/skills, primeira camada de tools/skills compostas por bundle de nós/arestas, resumo visual de blocos/templates com etapas, conexões, assets e preview JSON, curadoria visual de itens locais com edição de metadados, criação/reordenação/remoção de etapas, alteração de IDs com remapeamento de conexões, refs de prompt/schema, criação/remoção de conexões internas, condições, prompts/schemas internos com ID/path/conteúdo editáveis e validação guiada antes de salvar, importação/exportação de pacotes `.afcatalog.json`, ações para salvar o prompt/schema atual, salvar o nó atual como tool/skill reutilizável, salvar subgrafos selecionados como tool/skill composta, aplicar prompt/schema/tool/skill no flow e criar um novo flow a partir de template reutilizável.
 - Importação e exportação de workspace de flow.
 - Diagnósticos estruturados de validação com navegação para o ponto afetado.
 - Preview do JSON do flow.
@@ -157,7 +157,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 
 - Playground avançado com forms derivados de schema, output render/raw e secrets locais mascarados.
 - Alertas de regressão configuráveis por tipo de nó.
-- Evoluir o catálogo local para biblioteca compartilhável opcional, import/export dedicado de blocos reutilizáveis e edição avançada de schemas internos.
+- Evoluir o catálogo local para biblioteca compartilhável opcional, governança de pacotes reutilizáveis e edição avançada de schemas internos.
 - Ações operacionais por agente dentro do bundle multiagente, ampliando o mapa atual de rotas/endpoints.
 - Testes com PostgreSQL real compartilhado em bundles multiagente.
 

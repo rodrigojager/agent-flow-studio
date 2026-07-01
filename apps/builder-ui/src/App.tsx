@@ -79,6 +79,7 @@ import {
   dockerRuntimeUp,
   downloadGeneratedArtifactArchive,
   compareStudioRuns,
+  exportLocalCatalogItem,
   exportStudioRun,
   exportFlowWorkspace,
   finishRuntimeSession,
@@ -86,6 +87,7 @@ import {
   generateFlow,
   generateLangGraphSandbox,
   generateRuntimeManifest,
+  importLocalCatalogItem,
   importFlowWorkspace,
   applyLocalCatalogItem,
   listGeneratedArtifact,
@@ -145,6 +147,7 @@ import type {
   DockerRuntimeOperationStatus,
   LocalCatalog,
   LocalCatalogItem,
+  LocalCatalogItemPackage,
   LocalCatalogItemKind,
   LocalCatalogRevision,
   LangGraphSandboxApproval,
@@ -2592,6 +2595,41 @@ export default function App() {
     }
   }
 
+  async function handleExportCatalogItem(item: LocalCatalogItem): Promise<void> {
+    setStatus({ kind: "busy", message: `Exportando ${item.name || item.id}.` });
+    try {
+      const itemPackage = await exportLocalCatalogItem(item.id, item.kind);
+      downloadJsonFile(`${catalogPackageFileName(itemPackage)}.afcatalog.json`, itemPackage);
+      setStatus({ kind: "ok", message: `Pacote de catálogo ${itemPackage.item.name} exportado.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleImportCatalogPackage(itemPackage: unknown): Promise<LocalCatalogItem | null> {
+    setStatus({ kind: "busy", message: "Importando pacote de catálogo." });
+    try {
+      const result = await importLocalCatalogItem(itemPackage);
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Pacote importado como ${result.item.name} rev. ${result.item.revision}.` });
+      return result.item;
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+      return null;
+    }
+  }
+
+  async function handleImportCatalogPackageFile(file: File): Promise<void> {
+    setStatus({ kind: "busy", message: `Importando pacote ${file.name}.` });
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      await handleImportCatalogPackage(parsed);
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleCreateFlowFromCatalogTemplate(item: LocalCatalogItem) {
     const rawId = window.prompt("ID do novo flow", `${item.id}-flow`);
     const flowId = rawId?.trim();
@@ -4385,6 +4423,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onSaveSkill={handleSaveSelectedNodeAsSkillToCatalog}
               onSaveSkillBlock={handleSaveSelectedBlockAsSkillToCatalog}
               onSaveCatalogEdit={handleSaveCatalogEditDraft}
+              onExportItem={handleExportCatalogItem}
+              onImportPackageFile={handleImportCatalogPackageFile}
             />
           ) : inspectorTab === "validation" ? (
             <ValidationPanel
@@ -6023,6 +6063,8 @@ function CatalogPanel({
   onSaveSkill,
   onSaveSkillBlock,
   onSaveCatalogEdit,
+  onExportItem,
+  onImportPackageFile,
 }: {
   flow: AgentFlow | null;
   selectedNodeId: string;
@@ -6043,6 +6085,8 @@ function CatalogPanel({
   onSaveSkill: () => void;
   onSaveSkillBlock: () => void;
   onSaveCatalogEdit: (draft: CatalogEditDraft) => Promise<LocalCatalogItem | null>;
+  onExportItem: (item: LocalCatalogItem) => void;
+  onImportPackageFile: (file: File) => void;
 }) {
   const [kindFilter, setKindFilter] = useState<LocalCatalogItemKind | "">("");
   const [sourceFilter, setSourceFilter] = useState<LocalCatalogItem["source"] | "">("");
@@ -6051,6 +6095,7 @@ function CatalogPanel({
   const [compareRevisionByItem, setCompareRevisionByItem] = useState<Record<string, number>>({});
   const [editDraft, setEditDraft] = useState<CatalogEditDraft | null>(null);
   const [editSaving, setEditSaving] = useState(false);
+  const catalogImportInputRef = useRef<HTMLInputElement | null>(null);
   const availableTags = useMemo(() => {
     const tags = new Set<string>();
     for (const item of catalog?.items ?? []) {
@@ -6132,6 +6177,19 @@ function CatalogPanel({
 
   return (
     <div className="assets-body catalog-body">
+      <input
+        ref={catalogImportInputRef}
+        type="file"
+        accept="application/json,.json,.afcatalog"
+        className="visually-hidden catalog-import-input"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.currentTarget.value = "";
+          if (file) {
+            onImportPackageFile(file);
+          }
+        }}
+      />
       <section className="asset-section">
         <div className="asset-metadata-title">
           <strong>Catálogo local</strong>
@@ -6247,6 +6305,10 @@ function CatalogPanel({
           >
             <Save size={16} aria-hidden="true" />
             Salvar bloco skill
+          </button>
+          <button type="button" className="command-button" onClick={() => catalogImportInputRef.current?.click()}>
+            <Upload size={16} aria-hidden="true" />
+            Importar pacote
           </button>
         </div>
       </section>
@@ -6414,6 +6476,10 @@ function CatalogPanel({
                     />
                   ) : null}
                   <div className="catalog-card-actions">
+                    <button type="button" className="command-button" onClick={() => onExportItem(item)}>
+                      <Download size={16} aria-hidden="true" />
+                      Exportar
+                    </button>
                     {item.source === "local" ? (
                       <button type="button" className="command-button" onClick={() => setEditDraft(catalogEditDraftFromItem(item))}>
                         <Pencil size={16} aria-hidden="true" />
@@ -13516,6 +13582,10 @@ function isFlowWorkspaceExport(value: unknown): value is FlowWorkspaceExport {
 function downloadJsonFile(fileName: string, value: unknown): void {
   const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: "application/json" });
   downloadBlobFile(fileName, blob);
+}
+
+function catalogPackageFileName(itemPackage: LocalCatalogItemPackage): string {
+  return localCatalogId("catalog", `${itemPackage.item.kind}-${itemPackage.item.id}`);
 }
 
 function sanitizeFileNamePart(value: string): string {

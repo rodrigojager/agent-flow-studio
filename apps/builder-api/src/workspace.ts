@@ -197,6 +197,19 @@ export interface LocalCatalog {
   items: LocalCatalogItem[];
 }
 
+export interface LocalCatalogItemPackage {
+  format: typeof LOCAL_CATALOG_ITEM_PACKAGE_FORMAT;
+  exportedAt: string;
+  source: {
+    kind: LocalCatalogItemKind;
+    id: string;
+    name: string;
+    contentHash: string;
+    revision: number;
+  };
+  item: LocalCatalogItemInput;
+}
+
 export interface SaveLocalCatalogItemResult {
   status: "ok";
   item: LocalCatalogItem;
@@ -261,6 +274,7 @@ export interface GeneratedArtifactArchive {
 
 const FLOW_WORKSPACE_EXPORT_FORMAT = "agent-flow-builder.flow-workspace.v1";
 const LOCAL_CATALOG_FORMAT = "agent-flow-builder.local-catalog.v1";
+const LOCAL_CATALOG_ITEM_PACKAGE_FORMAT = "agent-flow-builder.catalog-item.v1";
 const AGENT_TEMPLATE_FORMAT = "agent-flow-builder.agent-template.v1";
 const SKILL_CATALOG_FORMAT = "agent-flow-builder.skill.v1";
 const TOOL_BUNDLE_FORMAT = "agent-flow-builder.tool-bundle.v1";
@@ -995,6 +1009,52 @@ export async function listLocalCatalog(workspaceRoot: string): Promise<LocalCata
   };
 }
 
+export async function exportLocalCatalogItem(
+  workspaceRoot: string,
+  itemId: string,
+  kind?: LocalCatalogItemKind,
+): Promise<LocalCatalogItemPackage> {
+  const catalog = await listLocalCatalog(workspaceRoot);
+  const item = findCatalogItem(catalog.items, itemId, kind);
+  if (!item) {
+    throw new WorkspaceError(`Item de catálogo não encontrado: ${itemId}`, 404);
+  }
+  return {
+    format: LOCAL_CATALOG_ITEM_PACKAGE_FORMAT,
+    exportedAt: new Date().toISOString(),
+    source: {
+      kind: item.kind,
+      id: item.id,
+      name: item.name,
+      contentHash: item.contentHash,
+      revision: item.revision,
+    },
+    item: localCatalogItemInputFromItem(item),
+  };
+}
+
+export async function importLocalCatalogItemPackage(
+  workspaceRoot: string,
+  value: unknown,
+): Promise<SaveLocalCatalogItemResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const itemPackage = parseLocalCatalogItemPackage(value);
+  const builtIns = builtInCatalogItems();
+  const stored = await readStoredCatalogItems(root);
+  const isBuiltInConflict = builtIns.some((item) => catalogItemKey(item.kind, item.id) === catalogItemKey(itemPackage.item.kind, itemPackage.item.id));
+  const item = isBuiltInConflict
+    ? {
+        ...itemPackage.item,
+        id: uniqueCatalogImportItemId(
+          itemPackage.item.id,
+          itemPackage.item.kind,
+          [...builtIns, ...stored],
+        ),
+      }
+    : itemPackage.item;
+  return saveLocalCatalogItem(root, item);
+}
+
 export async function saveLocalCatalogItem(workspaceRoot: string, value: unknown): Promise<SaveLocalCatalogItemResult> {
   const root = normalizeWorkspaceRoot(workspaceRoot);
   const input = parseLocalCatalogItemInput(value);
@@ -1205,7 +1265,7 @@ async function writeFlowFile(loaded: LoadedFlow, flow: AgentFlow): Promise<void>
   await rename(tempPath, loaded.absolutePath);
 }
 
-interface LocalCatalogItemInput {
+export interface LocalCatalogItemInput {
   id: string;
   kind: LocalCatalogItemKind;
   name: string;
@@ -1640,6 +1700,55 @@ function parseStoredCatalogItem(value: unknown): LocalCatalogItem {
     createdAt: readCatalogTimestamp(value.createdAt, "createdAt"),
     updatedAt: readCatalogTimestamp(value.updatedAt, "updatedAt"),
     history: readCatalogRevisionHistory(value.history),
+  };
+}
+
+function localCatalogItemInputFromItem(item: LocalCatalogItem): LocalCatalogItemInput {
+  return {
+    id: item.id,
+    kind: item.kind,
+    name: item.name,
+    description: item.description,
+    tags: [...item.tags],
+    version: item.version,
+    ...(typeof item.content === "string" ? { content: item.content } : {}),
+    ...(item.nodePatch ? { nodePatch: { ...item.nodePatch } } : {}),
+  };
+}
+
+function parseLocalCatalogItemPackage(value: unknown): LocalCatalogItemPackage {
+  if (!isRecord(value)) {
+    throw new WorkspaceError("Pacote de catálogo deve ser objeto JSON.", 422);
+  }
+  if (value.format !== LOCAL_CATALOG_ITEM_PACKAGE_FORMAT) {
+    throw new WorkspaceError(`Formato de pacote de catálogo inválido: ${String(value.format)}`, 422);
+  }
+  const item = parseLocalCatalogItemInput(value.item);
+  const exportedAt = typeof value.exportedAt === "string" && value.exportedAt.trim()
+    ? value.exportedAt.trim()
+    : new Date().toISOString();
+  const source = isRecord(value.source)
+    ? {
+        kind: parseCatalogKind(value.source.kind ?? item.kind),
+        id: typeof value.source.id === "string" && value.source.id.trim() ? value.source.id.trim() : item.id,
+        name: typeof value.source.name === "string" && value.source.name.trim() ? value.source.name.trim() : item.name,
+        contentHash: typeof value.source.contentHash === "string" && value.source.contentHash.trim()
+          ? value.source.contentHash.trim()
+          : catalogItemContentHash(item),
+        revision: value.source.revision === undefined ? 1 : readCatalogRevision(value.source.revision),
+      }
+    : {
+        kind: item.kind,
+        id: item.id,
+        name: item.name,
+        contentHash: catalogItemContentHash(item),
+        revision: 1,
+      };
+  return {
+    format: LOCAL_CATALOG_ITEM_PACKAGE_FORMAT,
+    exportedAt,
+    source,
+    item,
   };
 }
 
@@ -2444,6 +2553,19 @@ function sortCatalogItems(items: LocalCatalogItem[]): LocalCatalogItem[] {
 
 function catalogItemKey(kind: LocalCatalogItemKind, id: string): string {
   return `${kind}:${id}`;
+}
+
+function uniqueCatalogImportItemId(preferred: string, kind: LocalCatalogItemKind, existing: LocalCatalogItem[]): string {
+  const base = slugAssetId(`${preferred}-imported`);
+  const used = new Set(existing.filter((item) => item.kind === kind).map((item) => item.id));
+  if (!used.has(base)) {
+    return base;
+  }
+  let index = 2;
+  while (used.has(`${base}-${index}`)) {
+    index += 1;
+  }
+  return `${base}-${index}`;
 }
 
 function catalogItemContentHash(item: LocalCatalogItemInput): string {

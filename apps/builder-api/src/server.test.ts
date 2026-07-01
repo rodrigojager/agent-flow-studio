@@ -1683,6 +1683,55 @@ test("Builder API saves and applies local catalog items", async (t) => {
   assert.match(savedToolBundle.json().item.content, /agent-flow-builder\.tool-bundle\.v1/);
   assert.equal(savedToolBundle.json().item.nodePatch, undefined);
 
+  const exportedToolBundle = await app.inject({
+    method: "GET",
+    url: "/catalog/items/tool/local-tool-bundle/export",
+  });
+  assert.equal(exportedToolBundle.statusCode, 200);
+  assert.equal(exportedToolBundle.json().format, "agent-flow-builder.catalog-item.v1");
+  assert.equal(exportedToolBundle.json().source.id, "local-tool-bundle");
+  assert.equal(exportedToolBundle.json().item.id, "local-tool-bundle");
+  assert.equal(exportedToolBundle.json().item.kind, "tool");
+  assert.match(exportedToolBundle.json().item.content, /normalize_payload/);
+
+  const importedToolBundle = await app.inject({
+    method: "POST",
+    url: "/catalog/items/import",
+    headers: { "content-type": "application/json" },
+    payload: {
+      package: {
+        ...exportedToolBundle.json(),
+        item: {
+          ...exportedToolBundle.json().item,
+          id: "local-tool-bundle-copy",
+          name: "Tool composta importada",
+          tags: ["tool", "bundle", "imported"],
+        },
+      },
+    },
+  });
+  assert.equal(importedToolBundle.statusCode, 200);
+  assert.equal(importedToolBundle.json().item.source, "local");
+  assert.equal(importedToolBundle.json().item.id, "local-tool-bundle-copy");
+  assert.equal(importedToolBundle.json().item.revision, 1);
+  assert.match(importedToolBundle.json().item.content, /normalize_payload/);
+
+  const exportedBuiltinTool = await app.inject({
+    method: "GET",
+    url: "/catalog/items/tool/http-json-tool/export",
+  });
+  assert.equal(exportedBuiltinTool.statusCode, 200);
+  const importedBuiltinTool = await app.inject({
+    method: "POST",
+    url: "/catalog/items/import",
+    headers: { "content-type": "application/json" },
+    payload: { package: exportedBuiltinTool.json() },
+  });
+  assert.equal(importedBuiltinTool.statusCode, 200);
+  assert.equal(importedBuiltinTool.json().item.source, "local");
+  assert.equal(importedBuiltinTool.json().item.id, "http-json-tool-imported");
+  assert.equal(importedBuiltinTool.json().item.name, "HTTP JSON tool");
+
   const savedSkill = await app.inject({
     method: "POST",
     url: "/catalog/items",

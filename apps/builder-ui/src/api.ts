@@ -21,6 +21,7 @@ import type {
   LocalCatalog,
   LocalCatalogCreateFlowResult,
   LocalCatalogApplyResult,
+  LocalCatalogItemPackage,
   LocalCatalogItemKind,
   LocalCatalogSaveResult,
   LlmAdapterCatalogResult,
@@ -87,6 +88,20 @@ export async function saveLocalCatalogItem(item: {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(item),
+  });
+}
+
+export async function exportLocalCatalogItem(itemId: string, kind: LocalCatalogItemKind): Promise<LocalCatalogItemPackage> {
+  return request<LocalCatalogItemPackage>(
+    `/catalog/items/${encodeURIComponent(kind)}/${encodeURIComponent(itemId)}/export`,
+  );
+}
+
+export async function importLocalCatalogItem(itemPackage: unknown): Promise<LocalCatalogSaveResult> {
+  return request<LocalCatalogSaveResult>("/catalog/items/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ package: itemPackage }),
   });
 }
 

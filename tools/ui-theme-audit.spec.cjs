@@ -154,7 +154,7 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   expect(pageErrors, "Unexpected browser errors while editing asset metadata").toEqual([]);
 });
 
-test("catalog panel saves local assets and applies a tool", async ({ page, request }) => {
+test("catalog panel saves local assets and applies a tool", async ({ page, request }, testInfo) => {
   const pageErrors = attachBrowserErrorCollector(page);
   const originalFlowResponse = await request.get(`${apiUrl}/flows/reference-interview`);
   await expectApiOk(originalFlowResponse, "load original reference flow before catalog test");
@@ -273,6 +273,28 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(curatedToolBlock.locator(".catalog-block-node-list")).toContainText("manual_review_step");
   await expect(curatedToolBlock.locator(".catalog-block-edge-list")).toContainText("safety.decision == 'allow'");
   await expect(curatedToolBlock.locator(".catalog-block-edge-list")).toContainText("review.required == true");
+
+  const downloadPromise = page.waitForEvent("download");
+  await curatedToolBlock.getByRole("button", { name: /^Exportar$/ }).click();
+  const catalogDownload = await downloadPromise;
+  expect(catalogDownload.suggestedFilename()).toMatch(/catalog-tool-.*\.afcatalog\.json$/);
+  const catalogExportPath = await catalogDownload.path();
+  expect(catalogExportPath).toBeTruthy();
+  const exportedPackage = JSON.parse(await fs.readFile(catalogExportPath, "utf-8"));
+  expect(exportedPackage.format).toBe("agent-flow-builder.catalog-item.v1");
+  exportedPackage.item.id = "ui-imported-tool-block";
+  exportedPackage.item.name = "Bloco Safety importado";
+  exportedPackage.item.tags = ["tool", "bundle", "imported"];
+  const importPackagePath = testInfo.outputPath("catalog-package.afcatalog.json");
+  await fs.writeFile(importPackagePath, `${JSON.stringify(exportedPackage, null, 2)}\n`);
+  await page.locator(".catalog-import-input").setInputFiles(importPackagePath);
+  await expect(page.locator("footer[role='status']")).toContainText("Pacote importado como Bloco Safety importado rev. 1", {
+    timeout: 10_000,
+  });
+  const importedToolBlock = page.locator(".catalog-card", { hasText: "Bloco Safety importado" });
+  await expect(importedToolBlock).toBeVisible();
+  await expect(importedToolBlock).toContainText("imported");
+
   await page.getByRole("button", { name: /^Salvar bloco skill$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Bloco salvo como skill composta", { timeout: 10_000 });
   const savedSkillBlock = page.locator(".catalog-card", { hasText: "output_safety_check skill block" });
