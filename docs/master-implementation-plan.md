@@ -798,9 +798,11 @@ Entregaveis:
 - salvar subgrafos selecionados como tool/skill composta reutilizável;
 - inspecionar visualmente blocos/templates com etapas, conexões internas, assets e preview JSON compacto;
 - editar visualmente a curadoria de itens locais, incluindo metadados, etapas, refs de prompt/schema e condições internas;
+- criar, reordenar e remover etapas de blocos locais, remapeando conexões quando o ID da etapa muda;
+- criar e remover conexões internas de blocos locais com validação antes do salvamento;
 - reutilizar prompt/schema/tool/skill em flows sem copiar arquivos manualmente;
 - criar novo flow a partir de template de agente;
-- evoluir catalogo para editor visual completo com criação/reordenação de etapas, edição completa de assets e validação guiada;
+- evoluir catalogo para editor visual completo com edição profunda de assets internos e compartilhamento;
 - filtro shared quando existir compartilhamento real.
 
 Aceite:
@@ -821,13 +823,13 @@ Status 2026-06-30:
 - implementada primeira camada de skill composta: item `skill` pode declarar `nodes`/`edges` no formato `agent-flow-builder.skill.v1`, o seed `Skill composta de revisão com contexto` cria `file_extract -> rag_retrieval -> llm_structured`, e a UI trata a skill como bloco anexável;
 - implementada primeira camada de curadoria visual de blocos: seleção múltipla no canvas pode ser salva diretamente como tool composta ou skill composta, preservando posições relativas e arestas internas;
 - cards de catálogo agora mostram resumo visual de tools/skills compostas e templates de agente, incluindo etapas, conexões internas, contagem de prompts/schemas, patch alvo e preview JSON compacto;
-- itens locais do catalogo agora podem ser curados visualmente: nome, versão, descrição, tags, descrição/tipo de etapas, refs de prompt/schema e condições internas são editáveis e salvos como nova revisão local;
+- itens locais do catalogo agora podem ser curados visualmente: nome, versão, descrição, tags, criação/reordenação/remoção de etapas, alteração de IDs com remapeamento de conexões, descrição/tipo de etapas, refs de prompt/schema, criação/remoção de conexões internas, condições internas e validação guiada são editáveis e salvos como nova revisão local;
 - implementada primeira camada de versionamento/curadoria: itens do catalogo carregam versão, revisão local incremental e hash curto de conteúdo, com metadados visíveis nos cards;
 - implementado histórico local de revisões: ao sobrescrever item local, o snapshot anterior fica em `history` e o card mostra diff compacto contra a revisão atual;
 - implementada restauração de revisão: snapshots antigos podem ser restaurados pela API/UI, criando nova revisão sem apagar o histórico;
 - implementada comparação selecionável: a UI permite escolher qual revisão histórica será comparada com a atual antes de restaurar ou reutilizar o item;
 - verificado por `npm run test:builder-api` e `npm run test:ui-theme`;
-- pendente evoluir para editor visual completo de tools/skills compostas, curadoria visual completa e compartilhamento real.
+- pendente evoluir para edição profunda de assets internos de tools/skills compostas, import/export dedicado de blocos e compartilhamento real.
 
 ### Fase 11: Multiagente Local
 

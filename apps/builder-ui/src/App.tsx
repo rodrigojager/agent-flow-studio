@@ -21,6 +21,8 @@ import {
 } from "@xyflow/react";
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   BarChart3,
   Boxes,
   ChevronDown,
@@ -6159,7 +6161,11 @@ function CatalogPanel({
           </label>
           <label>
             <span>Origem</span>
-            <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as LocalCatalogItem["source"] | "")}>
+            <select
+              value={sourceFilter}
+              aria-label="Filtrar origem do catálogo"
+              onChange={(event) => setSourceFilter(event.target.value as LocalCatalogItem["source"] | "")}
+            >
               <option value="">Todas</option>
               <option value="builtin">Embutidos</option>
               <option value="local">Locais</option>
@@ -6471,6 +6477,31 @@ interface CatalogEditableContent {
   contentError: string;
 }
 
+const CATALOG_NODE_TYPES = [
+  "start",
+  "end",
+  "llm_prompt",
+  "llm_structured",
+  "code",
+  "switch",
+  "human_input",
+  "safety_gate",
+  "http_request",
+  "transform_json",
+  "database_query",
+  "database_save",
+  "file_extract",
+  "rag_retrieval",
+  "approval_gate",
+  "scoring",
+  "analytics",
+] as const;
+
+interface CatalogEditorValidation {
+  errors: string[];
+  warnings: string[];
+}
+
 function CatalogItemEditor({
   draft,
   onDraftChange,
@@ -6486,8 +6517,13 @@ function CatalogItemEditor({
 }) {
   const editableContent = catalogEditableContent(draft);
   const nodePatchError = catalogNodePatchDraftError(draft);
-  const saveDisabled = saving || !draft.name.trim() || Boolean(editableContent.contentError || nodePatchError);
+  const validation = catalogEditorValidation(draft, editableContent, nodePatchError);
+  const saveDisabled = saving || validation.errors.length > 0;
   const showNodePatchEditor = Boolean(draft.nodePatchText.trim()) || (!draft.content.trim() && draft.kind === "tool");
+  const canEditStructuredContent = !editableContent.contentError
+    && Boolean(draft.content.trim())
+    && (draft.kind === "tool" || draft.kind === "skill" || draft.kind === "agent_template");
+  const nextNodeId = uniqueCatalogNodeId(editableContent.nodes.map((node) => node.id), "catalog_step");
 
   return (
     <div className="catalog-item-editor">
@@ -6516,19 +6552,69 @@ function CatalogItemEditor({
 
       {editableContent.contentError ? <div className="catalog-editor-error">{editableContent.contentError}</div> : null}
 
-      {editableContent.nodes.length ? (
+      {canEditStructuredContent ? (
         <div className="catalog-edit-subsection">
-          <strong>Etapas</strong>
+          <div className="catalog-edit-heading">
+            <strong>Etapas</strong>
+            <button type="button" className="command-button" onClick={() => onDraftChange(addCatalogDraftNode(draft, nextNodeId))}>
+              <Plus size={14} aria-hidden="true" />
+              Adicionar etapa
+            </button>
+          </div>
           <div className="catalog-edit-node-grid">
             {editableContent.nodes.map((node, index) => (
               <fieldset key={`${draft.itemKey}-edit-node-${node.id}-${index}`}>
-                <legend>{node.id}</legend>
+                <legend>{node.id || `etapa ${index + 1}`}</legend>
+                <div className="catalog-edit-row-actions" aria-label={`Ações da etapa ${node.id || index + 1}`}>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={`Subir etapa ${node.id}`}
+                    aria-label={`Subir etapa ${node.id}`}
+                    onClick={() => onDraftChange(moveCatalogDraftNode(draft, index, -1))}
+                    disabled={index === 0 || saving}
+                  >
+                    <ArrowUp size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={`Descer etapa ${node.id}`}
+                    aria-label={`Descer etapa ${node.id}`}
+                    onClick={() => onDraftChange(moveCatalogDraftNode(draft, index, 1))}
+                    disabled={index === editableContent.nodes.length - 1 || saving}
+                  >
+                    <ArrowDown size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    title={`Remover etapa ${node.id}`}
+                    aria-label={`Remover etapa ${node.id}`}
+                    onClick={() => onDraftChange(removeCatalogDraftNode(draft, index))}
+                    disabled={saving}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </div>
+                <label>
+                  <span>ID da etapa {node.id || index + 1}</span>
+                  <input
+                    value={node.id}
+                    onChange={(event) => onDraftChange(updateCatalogDraftNodeId(draft, index, event.target.value))}
+                  />
+                </label>
                 <label>
                   <span>Tipo da etapa {node.id}</span>
-                  <input
+                  <select
                     value={node.type}
                     onChange={(event) => onDraftChange(updateCatalogDraftNodeField(draft, index, "type", event.target.value))}
-                  />
+                  >
+                    <option value="">Selecione</option>
+                    {CATALOG_NODE_TYPES.map((type) => (
+                      <option key={type} value={type}>{type}</option>
+                    ))}
+                  </select>
                 </label>
                 <label>
                   <span>Descrição da etapa {node.id}</span>
@@ -6557,21 +6643,103 @@ function CatalogItemEditor({
         </div>
       ) : null}
 
-      {editableContent.edges.length ? (
+      {canEditStructuredContent ? (
         <div className="catalog-edit-subsection">
-          <strong>Conexões internas</strong>
+          <div className="catalog-edit-heading">
+            <strong>Conexões internas</strong>
+          </div>
+          {editableContent.nodes.length >= 2 ? (
+            <div className="catalog-edit-edge-composer">
+              <label>
+                <span>Origem da nova conexão</span>
+                <select defaultValue={editableContent.nodes[0]?.id ?? ""} data-catalog-edge-from>
+                  {editableContent.nodes.map((node) => (
+                    <option key={`edge-from-${node.id}`} value={node.id}>{node.id}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Destino da nova conexão</span>
+                <select defaultValue={editableContent.nodes[1]?.id ?? editableContent.nodes[0]?.id ?? ""} data-catalog-edge-to>
+                  {editableContent.nodes.map((node) => (
+                    <option key={`edge-to-${node.id}`} value={node.id}>{node.id}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Condição opcional</span>
+                <input placeholder="Ex.: state.approved == true" data-catalog-edge-condition />
+              </label>
+              <button
+                type="button"
+                className="command-button"
+                onClick={(event) => {
+                  const container = event.currentTarget.closest(".catalog-edit-edge-composer");
+                  const from = container?.querySelector<HTMLSelectElement>("[data-catalog-edge-from]")?.value ?? "";
+                  const to = container?.querySelector<HTMLSelectElement>("[data-catalog-edge-to]")?.value ?? "";
+                  const conditionInput = container?.querySelector<HTMLInputElement>("[data-catalog-edge-condition]");
+                  onDraftChange(addCatalogDraftEdge(draft, from, to, conditionInput?.value ?? ""));
+                  if (conditionInput) {
+                    conditionInput.value = "";
+                  }
+                }}
+                disabled={saving || editableContent.nodes.length < 2}
+              >
+                <Plus size={14} aria-hidden="true" />
+                Adicionar conexão
+              </button>
+            </div>
+          ) : null}
           <div className="catalog-edit-edge-grid">
             {editableContent.edges.map((edge, index) => (
-              <label key={`${draft.itemKey}-edit-edge-${edge.from}-${edge.to}-${index}`}>
-                <span>Condição da conexão {edge.from} para {edge.to}</span>
-                <input
-                  value={edge.condition}
-                  placeholder="Sem condição"
-                  onChange={(event) => onDraftChange(updateCatalogDraftEdgeCondition(draft, index, event.target.value))}
-                />
-              </label>
+              <fieldset key={`${draft.itemKey}-edit-edge-${edge.from}-${edge.to}-${index}`}>
+                <legend>{edge.from} {"->"} {edge.to}</legend>
+                <div className="catalog-edit-row-actions" aria-label={`Ações da conexão ${edge.from} para ${edge.to}`}>
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    title={`Remover conexão ${edge.from} para ${edge.to}`}
+                    aria-label={`Remover conexão ${edge.from} para ${edge.to}`}
+                    onClick={() => onDraftChange(removeCatalogDraftEdge(draft, index))}
+                    disabled={saving}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </div>
+                <label>
+                  <span>Origem da conexão {index + 1}</span>
+                  <select
+                    value={edge.from}
+                    onChange={(event) => onDraftChange(updateCatalogDraftEdgeEndpoint(draft, index, "from", event.target.value))}
+                  >
+                    {catalogEdgeEndpointOptions(editableContent.nodes, edge.from).map((nodeId) => (
+                      <option key={`edge-${index}-from-${nodeId}`} value={nodeId}>{nodeId}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Destino da conexão {index + 1}</span>
+                  <select
+                    value={edge.to}
+                    onChange={(event) => onDraftChange(updateCatalogDraftEdgeEndpoint(draft, index, "to", event.target.value))}
+                  >
+                    {catalogEdgeEndpointOptions(editableContent.nodes, edge.to).map((nodeId) => (
+                      <option key={`edge-${index}-to-${nodeId}`} value={nodeId}>{nodeId}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Condição da conexão {edge.from} para {edge.to}</span>
+                  <input
+                    value={edge.condition}
+                    placeholder="Sem condição"
+                    onChange={(event) => onDraftChange(updateCatalogDraftEdgeCondition(draft, index, event.target.value))}
+                  />
+                </label>
+              </fieldset>
             ))}
           </div>
+          {!editableContent.edges.length ? <p className="catalog-edit-empty">Nenhuma conexão interna.</p> : null}
         </div>
       ) : null}
 
@@ -6586,6 +6754,20 @@ function CatalogItemEditor({
         </label>
       ) : null}
       {nodePatchError ? <div className="catalog-editor-error">{nodePatchError}</div> : null}
+
+      <div className={`catalog-editor-validation ${validation.errors.length ? "invalid" : "valid"}`} role="status">
+        <strong>{validation.errors.length ? "Ajustes necessários antes de salvar" : "Pronto para salvar"}</strong>
+        {validation.errors.length ? (
+          <ul>
+            {validation.errors.map((error) => <li key={`catalog-editor-error-${error}`}>{error}</li>)}
+          </ul>
+        ) : null}
+        {validation.warnings.length ? (
+          <ul>
+            {validation.warnings.map((warning) => <li key={`catalog-editor-warning-${warning}`}>{warning}</li>)}
+          </ul>
+        ) : null}
+      </div>
 
       <div className="catalog-editor-actions">
         <button type="button" className="command-button primary" onClick={onSave} disabled={saveDisabled}>
@@ -6638,13 +6820,9 @@ function catalogEditableContent(draft: CatalogEditDraft): CatalogEditableContent
         }];
       })
     : [];
-  const nodeIds = new Set(nodes.map((node) => node.id));
   const edges = Array.isArray(root.edges)
     ? root.edges.flatMap((rawEdge) => {
         if (!isRecord(rawEdge) || typeof rawEdge.from !== "string" || typeof rawEdge.to !== "string") {
-          return [];
-        }
-        if (!nodeIds.has(rawEdge.from) || !nodeIds.has(rawEdge.to)) {
           return [];
         }
         return [{
@@ -6669,6 +6847,98 @@ function catalogNodePatchDraftError(draft: CatalogEditDraft): string {
   }
 }
 
+function catalogEdgeEndpointOptions(
+  nodes: CatalogEditableContent["nodes"],
+  selectedId: string,
+): string[] {
+  const ids = nodes.map((node) => node.id).filter(Boolean);
+  if (selectedId && !ids.includes(selectedId)) {
+    return [selectedId, ...ids];
+  }
+  return ids;
+}
+
+function catalogEditorValidation(
+  draft: CatalogEditDraft,
+  editableContent: CatalogEditableContent,
+  nodePatchError: string,
+): CatalogEditorValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (!draft.name.trim()) {
+    errors.push("Informe o nome do item.");
+  }
+  if (!draft.version.trim()) {
+    errors.push("Informe a versão do item.");
+  }
+  if (editableContent.contentError) {
+    errors.push(editableContent.contentError);
+  }
+  if (nodePatchError) {
+    errors.push(nodePatchError);
+  }
+  if (!editableContent.contentError && draft.content.trim()) {
+    const idCounts = new Map<string, number>();
+    for (const node of editableContent.nodes) {
+      const id = node.id.trim();
+      if (!id) {
+        errors.push("Toda etapa precisa ter ID.");
+      } else {
+        idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
+        if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(id)) {
+          errors.push(`ID da etapa "${id}" deve começar com letra e usar apenas letras, números, "_" ou "-".`);
+        }
+      }
+      if (!node.type.trim()) {
+        errors.push(`Etapa "${id || "sem ID"}" precisa ter tipo.`);
+      } else if (!CATALOG_NODE_TYPES.includes(node.type as typeof CATALOG_NODE_TYPES[number])) {
+        errors.push(`Tipo "${node.type}" da etapa "${id || "sem ID"}" não é suportado.`);
+      }
+    }
+    for (const [id, count] of idCounts) {
+      if (count > 1) {
+        errors.push(`ID de etapa duplicado: "${id}".`);
+      }
+    }
+    const nodeIds = new Set(editableContent.nodes.map((node) => node.id));
+    const edgeKeys = new Set<string>();
+    for (const edge of editableContent.edges) {
+      if (!nodeIds.has(edge.from)) {
+        errors.push(`Conexão referencia origem inexistente: "${edge.from}".`);
+      }
+      if (!nodeIds.has(edge.to)) {
+        errors.push(`Conexão referencia destino inexistente: "${edge.to}".`);
+      }
+      if (edge.from && edge.from === edge.to) {
+        warnings.push(`Conexão "${edge.from} -> ${edge.to}" aponta para a própria etapa.`);
+      }
+      const edgeKey = `${edge.from}->${edge.to}`;
+      if (edgeKeys.has(edgeKey)) {
+        warnings.push(`Conexão duplicada: "${edge.from} -> ${edge.to}".`);
+      }
+      edgeKeys.add(edgeKey);
+    }
+  }
+  return {
+    errors: Array.from(new Set(errors)),
+    warnings: Array.from(new Set(warnings)),
+  };
+}
+
+function uniqueCatalogNodeId(existingIds: string[], baseId: string): string {
+  const existing = new Set(existingIds);
+  if (!existing.has(baseId)) {
+    return baseId;
+  }
+  for (let index = 2; index < 1_000; index += 1) {
+    const candidate = `${baseId}_${index}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${baseId}_${Date.now()}`;
+}
+
 function updateCatalogDraftNodeField(
   draft: CatalogEditDraft,
   index: number,
@@ -6683,12 +6953,119 @@ function updateCatalogDraftNodeField(
   });
 }
 
+function updateCatalogDraftNodeId(draft: CatalogEditDraft, index: number, value: string): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    if (!Array.isArray(root.nodes) || !isRecord(root.nodes[index])) {
+      return;
+    }
+    const node = root.nodes[index];
+    const previousId = typeof node.id === "string" ? node.id : "";
+    setDraftRecordStringField(node, "id", value, true);
+    const nextId = typeof node.id === "string" ? node.id : "";
+    if (!previousId || !nextId || previousId === nextId || !Array.isArray(root.edges)) {
+      return;
+    }
+    for (const edge of root.edges) {
+      if (!isRecord(edge)) {
+        continue;
+      }
+      if (edge.from === previousId) {
+        edge.from = nextId;
+      }
+      if (edge.to === previousId) {
+        edge.to = nextId;
+      }
+    }
+  });
+}
+
+function addCatalogDraftNode(draft: CatalogEditDraft, nodeId: string): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    const nodes: unknown[] = Array.isArray(root.nodes) ? root.nodes : [];
+    root.nodes = nodes;
+    const previousNode = nodes.length ? nodes[nodes.length - 1] : undefined;
+    const previousPosition = isRecord(previousNode) && isRecord(previousNode.position)
+      ? previousNode.position
+      : undefined;
+    nodes.push({
+      id: nodeId,
+      type: "code",
+      description: "Nova etapa do bloco.",
+      position: {
+        x: typeof previousPosition?.x === "number" ? previousPosition.x + 220 : nodes.length * 220,
+        y: typeof previousPosition?.y === "number" ? previousPosition.y : 0,
+      },
+    });
+  });
+}
+
+function moveCatalogDraftNode(draft: CatalogEditDraft, index: number, direction: -1 | 1): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    if (!Array.isArray(root.nodes)) {
+      return;
+    }
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= root.nodes.length) {
+      return;
+    }
+    const [node] = root.nodes.splice(index, 1);
+    root.nodes.splice(nextIndex, 0, node);
+  });
+}
+
+function removeCatalogDraftNode(draft: CatalogEditDraft, index: number): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    if (!Array.isArray(root.nodes) || !isRecord(root.nodes[index])) {
+      return;
+    }
+    const nodeId = typeof root.nodes[index].id === "string" ? root.nodes[index].id : "";
+    root.nodes.splice(index, 1);
+    if (!Array.isArray(root.edges) || !nodeId) {
+      return;
+    }
+    root.edges = root.edges.filter((edge) => !isRecord(edge) || (edge.from !== nodeId && edge.to !== nodeId));
+  });
+}
+
 function updateCatalogDraftEdgeCondition(draft: CatalogEditDraft, index: number, value: string): CatalogEditDraft {
   return updateCatalogDraftContent(draft, (root) => {
     if (!Array.isArray(root.edges) || !isRecord(root.edges[index])) {
       return;
     }
     setDraftRecordStringField(root.edges[index], "condition", value, false);
+  });
+}
+
+function updateCatalogDraftEdgeEndpoint(
+  draft: CatalogEditDraft,
+  index: number,
+  field: "from" | "to",
+  value: string,
+): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    if (!Array.isArray(root.edges) || !isRecord(root.edges[index])) {
+      return;
+    }
+    setDraftRecordStringField(root.edges[index], field, value, true);
+  });
+}
+
+function addCatalogDraftEdge(draft: CatalogEditDraft, from: string, to: string, condition: string): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    const edges: unknown[] = Array.isArray(root.edges) ? root.edges : [];
+    root.edges = edges;
+    const edge: Record<string, unknown> = { from, to };
+    setDraftRecordStringField(edge, "condition", condition, false);
+    edges.push(edge);
+  });
+}
+
+function removeCatalogDraftEdge(draft: CatalogEditDraft, index: number): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    if (!Array.isArray(root.edges)) {
+      return;
+    }
+    root.edges.splice(index, 1);
   });
 }
 

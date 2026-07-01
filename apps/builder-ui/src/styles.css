@@ -198,6 +198,12 @@ button:disabled {
   background: #fff7f7;
 }
 
+.icon-button.danger {
+  border-color: var(--danger, #9b2c2c);
+  color: var(--danger, #9b2c2c);
+  background: var(--danger-soft, #fff7f7);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 276px minmax(460px, 1fr) 330px;
@@ -1243,8 +1249,10 @@ button:disabled {
 }
 
 .catalog-edit-grid input,
+.catalog-edit-grid select,
 .catalog-edit-grid textarea,
 .catalog-edit-subsection input,
+.catalog-edit-subsection select,
 .catalog-edit-subsection textarea,
 .catalog-editor-wide input,
 .catalog-editor-wide textarea {
@@ -1274,6 +1282,15 @@ button:disabled {
   gap: 8px;
 }
 
+.catalog-edit-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.catalog-edit-heading strong,
 .catalog-edit-subsection > strong {
   color: var(--text-strong);
   font-size: 12px;
@@ -1285,7 +1302,8 @@ button:disabled {
   gap: 8px;
 }
 
-.catalog-edit-node-grid fieldset {
+.catalog-edit-node-grid fieldset,
+.catalog-edit-edge-grid fieldset {
   display: grid;
   min-width: 0;
   gap: 7px;
@@ -1296,11 +1314,44 @@ button:disabled {
   background: var(--surface-bg);
 }
 
-.catalog-edit-node-grid legend {
+.catalog-edit-node-grid legend,
+.catalog-edit-edge-grid legend {
   padding: 0 4px;
   color: var(--text);
   font-size: 11px;
   font-weight: 700;
+}
+
+.catalog-edit-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.catalog-edit-row-actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.catalog-edit-edge-composer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 7px;
+  align-items: end;
+  border: 1px dashed var(--border-strong);
+  border-radius: 7px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface-bg));
+}
+
+.catalog-edit-edge-composer label {
+  min-width: 0;
+}
+
+.catalog-edit-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .catalog-editor-code {
@@ -1315,6 +1366,40 @@ button:disabled {
   color: var(--danger);
   background: var(--danger-soft);
   font-size: 12px;
+}
+
+.catalog-editor-validation {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 8px;
+  background: var(--surface-bg);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.catalog-editor-validation.valid {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.catalog-editor-validation.invalid {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.catalog-editor-validation strong {
+  font-size: 12px;
+}
+
+.catalog-editor-validation ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
 }
 
 .catalog-editor-actions {

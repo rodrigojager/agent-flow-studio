@@ -249,6 +249,17 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await savedToolBlock
     .getByLabel("Condição da conexão output_safety_check para deterministic_gate")
     .fill("safety.decision == 'allow'");
+  await expect(savedToolBlock.locator(".catalog-editor-validation")).toContainText("Pronto para salvar");
+  await savedToolBlock.getByRole("button", { name: /^Adicionar etapa$/ }).click();
+  await savedToolBlock.getByLabel("ID da etapa catalog_step").fill("manual_review_step");
+  await savedToolBlock.getByLabel("Descrição da etapa manual_review_step").fill("Etapa manual opcional para revisão de segurança.");
+  await savedToolBlock.getByRole("button", { name: /^Subir etapa manual_review_step$/ }).click();
+  const edgeComposer = savedToolBlock.locator(".catalog-edit-edge-composer");
+  await edgeComposer.locator("[data-catalog-edge-from]").selectOption("deterministic_gate");
+  await edgeComposer.locator("[data-catalog-edge-to]").selectOption("manual_review_step");
+  await edgeComposer.locator("[data-catalog-edge-condition]").fill("review.required == true");
+  await edgeComposer.getByRole("button", { name: /^Adicionar conexão$/ }).click();
+  await expect(savedToolBlock.locator(".catalog-editor-validation")).toContainText("Pronto para salvar");
   await savedToolBlock.getByRole("button", { name: /^Salvar curadoria$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Curadoria de Bloco Safety curado salva como rev. 2", {
     timeout: 10_000,
@@ -257,8 +268,11 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(curatedToolBlock).toContainText("rev. 2");
   await expect(curatedToolBlock).toContainText("reviewed");
   await curatedToolBlock.locator(".catalog-block-preview summary").click();
+  await expect(curatedToolBlock).toContainText("Tool composta: 3 nós, 2 aresta(s)");
   await expect(curatedToolBlock.locator(".catalog-block-node-list")).toContainText("Normaliza safety de saída");
+  await expect(curatedToolBlock.locator(".catalog-block-node-list")).toContainText("manual_review_step");
   await expect(curatedToolBlock.locator(".catalog-block-edge-list")).toContainText("safety.decision == 'allow'");
+  await expect(curatedToolBlock.locator(".catalog-block-edge-list")).toContainText("review.required == true");
   await page.getByRole("button", { name: /^Salvar bloco skill$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Bloco salvo como skill composta", { timeout: 10_000 });
   const savedSkillBlock = page.locator(".catalog-card", { hasText: "output_safety_check skill block" });
@@ -271,7 +285,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
     hasText: /Prompt principal para conduzir|Prompt system de Agente de Referência/,
   });
   await expect(savedPromptCard).toBeVisible();
-  await catalogPanel.getByLabel("Origem").selectOption("local");
+  await catalogPanel.getByLabel("Filtrar origem do catálogo").selectOption("local");
   await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toBeVisible();
   await expect(savedPromptCard).toBeVisible();
   await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toHaveCount(0);
