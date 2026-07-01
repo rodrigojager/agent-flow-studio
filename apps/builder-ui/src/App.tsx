@@ -5615,6 +5615,7 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
           })
         }
       />
+      <SchemaPatternLibrary schema={schema} onUpdateObject={updateSchema} />
       <SchemaDefinitionsEditor schema={schema} onUpdateObject={updateSchema} />
       <SchemaObjectVisualEditor
         schema={schema}
@@ -5628,6 +5629,52 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
         onUpdateObject={updateSchema}
       />
     </div>
+  );
+}
+
+function SchemaPatternLibrary({
+  schema,
+  onUpdateObject,
+}: {
+  schema: Record<string, unknown>;
+  onUpdateObject: (mutator: (schema: Record<string, unknown>) => void) => void;
+}) {
+  const definitions = new Set(readSchemaDefinitions(schema).map(([name]) => name));
+  const properties = new Set(readSchemaProperties(schema).map(([name]) => name));
+  return (
+    <section className="schema-pattern-library" aria-label="Padrões reutilizáveis de schema">
+      <div className="schema-nested-title">
+        <span>Padrões</span>
+        <strong>{schemaReusablePatterns.length} reutilizáveis</strong>
+      </div>
+      <div className="schema-pattern-grid">
+        {schemaReusablePatterns.map((pattern) => {
+          const hasDefinition = definitions.has(pattern.definitionName);
+          const hasProperty = properties.has(pattern.propertyName);
+          const applied = hasDefinition && hasProperty;
+          return (
+            <button
+              type="button"
+              className="schema-pattern-button"
+              key={pattern.id}
+              disabled={applied}
+              onClick={() =>
+                onUpdateObject((next) => {
+                  applySchemaReusablePattern(next, pattern);
+                })
+              }
+            >
+              <span>{applied ? "Aplicado" : hasDefinition || hasProperty ? "Completar" : "Adicionar"}</span>
+              <strong>{pattern.title}</strong>
+              <p>{pattern.description}</p>
+              <small>
+                $defs.{pattern.definitionName} {"->"} {pattern.propertyName}
+              </small>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -6316,6 +6363,109 @@ type SchemaSemanticAction =
       targetPath: SchemaPathSegment[];
     };
 
+type SchemaReusablePattern = {
+  id: string;
+  title: string;
+  description: string;
+  definitionName: string;
+  definitionSchema: Record<string, unknown>;
+  propertyName: string;
+  propertySchema: Record<string, unknown>;
+};
+
+const schemaReusablePatterns: SchemaReusablePattern[] = [
+  {
+    id: "conversation-message",
+    title: "Mensagem de conversa",
+    description: "Histórico com role, conteúdo, timestamp e metadados livres.",
+    definitionName: "ConversationMessage",
+    propertyName: "messages",
+    definitionSchema: {
+      type: "object",
+      required: ["role", "content"],
+      properties: {
+        role: { type: "string", enum: ["system", "user", "assistant", "tool"] },
+        content: { type: "string" },
+        name: { type: "string" },
+        timestamp: { type: "string" },
+        metadata: { type: "object", additionalProperties: true },
+      },
+      additionalProperties: false,
+    },
+    propertySchema: {
+      type: "array",
+      items: { $ref: "#/$defs/ConversationMessage" },
+    },
+  },
+  {
+    id: "rag-citation",
+    title: "Citação RAG",
+    description: "Fontes recuperadas com título, URL, trecho e score opcional.",
+    definitionName: "RagCitation",
+    propertyName: "citations",
+    definitionSchema: {
+      type: "object",
+      required: ["source", "excerpt"],
+      properties: {
+        source: { type: "string" },
+        title: { type: "string" },
+        url: { type: "string" },
+        excerpt: { type: "string" },
+        score: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    propertySchema: {
+      type: "array",
+      items: { $ref: "#/$defs/RagCitation" },
+    },
+  },
+  {
+    id: "tool-call",
+    title: "Chamada de tool",
+    description: "Registro tipado de tool, argumentos, resultado, status e duração.",
+    definitionName: "ToolCallRecord",
+    propertyName: "tool_calls",
+    definitionSchema: {
+      type: "object",
+      required: ["name", "status"],
+      properties: {
+        name: { type: "string" },
+        arguments: { type: "object", additionalProperties: true },
+        result: { type: "object", additionalProperties: true },
+        status: { type: "string", enum: ["pending", "success", "error"] },
+        duration_ms: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    propertySchema: {
+      type: "array",
+      items: { $ref: "#/$defs/ToolCallRecord" },
+    },
+  },
+  {
+    id: "error-info",
+    title: "Erro estruturado",
+    description: "Contrato comum para código, mensagem e detalhes de falha.",
+    definitionName: "ErrorInfo",
+    propertyName: "error",
+    definitionSchema: {
+      type: "object",
+      required: ["code", "message"],
+      properties: {
+        code: { type: "string" },
+        message: { type: "string" },
+        details: { type: "object", additionalProperties: true },
+        retryable: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    propertySchema: {
+      $ref: "#/$defs/ErrorInfo",
+    },
+  },
+];
+
 function parseSchemaObject(content: string): SchemaParseResult {
   try {
     const value = JSON.parse(content) as unknown;
@@ -6763,6 +6913,18 @@ function applySchemaSemanticAction(schema: Record<string, unknown>, action: Sche
 
   if (action.type === "dedupe-enum" && Array.isArray(target.enum)) {
     target.enum = uniqueJsonValues(target.enum);
+  }
+}
+
+function applySchemaReusablePattern(schema: Record<string, unknown>, pattern: SchemaReusablePattern): void {
+  schema.type = "object";
+  const definitions = ensureSchemaDefinitions(schema);
+  if (!definitions[pattern.definitionName]) {
+    definitions[pattern.definitionName] = cloneJsonObject(pattern.definitionSchema);
+  }
+  const properties = ensureSchemaProperties(schema);
+  if (!properties[pattern.propertyName]) {
+    properties[pattern.propertyName] = cloneJsonObject(pattern.propertySchema);
   }
 }
 

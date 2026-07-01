@@ -116,6 +116,11 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByLabel("Versão do schema").fill("v2");
   const schemaConsistency = page.getByLabel("Consistência do schema");
   await expect(schemaConsistency).toContainText("Schema consistente");
+  await page.getByRole("button", { name: /Mensagem de conversa/ }).click();
+  await expect(schemaConsistency).toContainText("Schema consistente");
+  await expect(page.locator(".schema-editor")).toHaveValue(/"ConversationMessage": \{/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"messages": \{\s+"type": "array"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"\$ref": "#\/\$defs\/ConversationMessage"/);
   await page.getByLabel("$ref de schema").fill("#/$defs/SessionState");
   await expect(schemaConsistency).toContainText("Referência local não encontrada: #/$defs/SessionState");
   await page.getByRole("button", { name: "Ir para schema.$ref" }).click();
@@ -165,7 +170,6 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expect(page.locator(".schema-editor")).toHaveValue(/"state_id"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"Status": \{\s+"type": "string"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"items": \{\s+"type": "string"\s+\}/);
-  await expect(page.locator(".schema-editor")).not.toHaveValue(/"timestamp"/);
   await page.getByRole("button", { name: /^Salvar schema$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Schema salvo em");
 

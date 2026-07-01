@@ -1593,6 +1593,70 @@ button:disabled {
   background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface-bg));
 }
 
+.schema-pattern-library {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface-bg));
+}
+
+.schema-pattern-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.schema-pattern-button {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface-bg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.schema-pattern-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.schema-pattern-button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.schema-pattern-button > span,
+.schema-pattern-button small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.schema-pattern-button strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schema-pattern-button p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .schema-definition-list {
   display: grid;
   min-width: 0;
@@ -3081,6 +3145,10 @@ button:disabled {
   }
 
   .docker-alert-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .schema-pattern-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
