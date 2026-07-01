@@ -6474,6 +6474,8 @@ interface CatalogEditDraft {
 interface CatalogEditableContent {
   nodes: Array<{ id: string; type: string; description: string; promptId: string; outputSchema: string }>;
   edges: Array<{ from: string; to: string; condition: string }>;
+  prompts: Array<{ id: string; path: string; content: string }>;
+  schemas: Array<{ id: string; path: string; content: string }>;
   contentError: string;
 }
 
@@ -6524,6 +6526,11 @@ function CatalogItemEditor({
     && Boolean(draft.content.trim())
     && (draft.kind === "tool" || draft.kind === "skill" || draft.kind === "agent_template");
   const nextNodeId = uniqueCatalogNodeId(editableContent.nodes.map((node) => node.id), "catalog_step");
+  const canEditInternalAssets = !editableContent.contentError
+    && Boolean(draft.content.trim())
+    && (draft.kind === "skill" || draft.kind === "agent_template");
+  const nextPromptId = uniqueCatalogAssetId(editableContent.prompts.map((asset) => asset.id), "catalog_prompt");
+  const nextSchemaId = uniqueCatalogAssetId(editableContent.schemas.map((asset) => asset.id), "catalog_schema");
 
   return (
     <div className="catalog-item-editor">
@@ -6743,6 +6750,107 @@ function CatalogItemEditor({
         </div>
       ) : null}
 
+      {canEditInternalAssets ? (
+        <div className="catalog-edit-subsection">
+          <div className="catalog-edit-heading">
+            <strong>Assets internos</strong>
+            <div className="catalog-edit-heading-actions">
+              <button type="button" className="command-button" onClick={() => onDraftChange(addCatalogDraftAsset(draft, "prompts", nextPromptId))}>
+                <Plus size={14} aria-hidden="true" />
+                Adicionar prompt
+              </button>
+              <button type="button" className="command-button" onClick={() => onDraftChange(addCatalogDraftAsset(draft, "schemas", nextSchemaId))}>
+                <Plus size={14} aria-hidden="true" />
+                Adicionar schema
+              </button>
+            </div>
+          </div>
+          <div className="catalog-edit-asset-grid">
+            {editableContent.prompts.map((asset, index) => (
+              <fieldset key={`${draft.itemKey}-prompt-${asset.id}-${index}`}>
+                <legend>Prompt {asset.id || index + 1}</legend>
+                <div className="catalog-edit-row-actions" aria-label={`Ações do prompt ${asset.id || index + 1}`}>
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    title={`Remover prompt ${asset.id}`}
+                    aria-label={`Remover prompt ${asset.id}`}
+                    onClick={() => onDraftChange(removeCatalogDraftAsset(draft, "prompts", index))}
+                    disabled={saving}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </div>
+                <label>
+                  <span>ID do prompt {asset.id || index + 1}</span>
+                  <input
+                    value={asset.id}
+                    onChange={(event) => onDraftChange(updateCatalogDraftAssetField(draft, "prompts", index, "id", event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Path do prompt {asset.id || index + 1}</span>
+                  <input
+                    value={asset.path}
+                    onChange={(event) => onDraftChange(updateCatalogDraftAssetField(draft, "prompts", index, "path", event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Conteúdo do prompt {asset.id || index + 1}</span>
+                  <textarea
+                    className="catalog-editor-code"
+                    value={asset.content}
+                    onChange={(event) => onDraftChange(updateCatalogDraftAssetField(draft, "prompts", index, "content", event.target.value))}
+                  />
+                </label>
+              </fieldset>
+            ))}
+            {editableContent.schemas.map((asset, index) => (
+              <fieldset key={`${draft.itemKey}-schema-${asset.id}-${index}`}>
+                <legend>Schema {asset.id || index + 1}</legend>
+                <div className="catalog-edit-row-actions" aria-label={`Ações do schema ${asset.id || index + 1}`}>
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    title={`Remover schema ${asset.id}`}
+                    aria-label={`Remover schema ${asset.id}`}
+                    onClick={() => onDraftChange(removeCatalogDraftAsset(draft, "schemas", index))}
+                    disabled={saving}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </div>
+                <label>
+                  <span>ID do schema {asset.id || index + 1}</span>
+                  <input
+                    value={asset.id}
+                    onChange={(event) => onDraftChange(updateCatalogDraftAssetField(draft, "schemas", index, "id", event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Path do schema {asset.id || index + 1}</span>
+                  <input
+                    value={asset.path}
+                    onChange={(event) => onDraftChange(updateCatalogDraftAssetField(draft, "schemas", index, "path", event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Conteúdo do schema {asset.id || index + 1}</span>
+                  <textarea
+                    className="catalog-editor-code"
+                    value={asset.content}
+                    onChange={(event) => onDraftChange(updateCatalogDraftAssetField(draft, "schemas", index, "content", event.target.value))}
+                  />
+                </label>
+              </fieldset>
+            ))}
+          </div>
+          {!editableContent.prompts.length && !editableContent.schemas.length ? (
+            <p className="catalog-edit-empty">Nenhum prompt ou schema interno.</p>
+          ) : null}
+        </div>
+      ) : null}
+
       {showNodePatchEditor ? (
         <label className="catalog-editor-wide">
           <span>Patch JSON do nó</span>
@@ -6799,11 +6907,11 @@ function catalogEditDraftFromItem(item: LocalCatalogItem): CatalogEditDraft {
 
 function catalogEditableContent(draft: CatalogEditDraft): CatalogEditableContent {
   if (!draft.content.trim() || (draft.kind !== "tool" && draft.kind !== "skill" && draft.kind !== "agent_template")) {
-    return { nodes: [], edges: [], contentError: "" };
+    return { nodes: [], edges: [], prompts: [], schemas: [], contentError: "" };
   }
   const parsed = catalogDraftParsedContent(draft);
   if (!parsed) {
-    return { nodes: [], edges: [], contentError: "Conteúdo estruturado inválido; cancele ou restaure uma revisão antes de editar." };
+    return { nodes: [], edges: [], prompts: [], schemas: [], contentError: "Conteúdo estruturado inválido; cancele ou restaure uma revisão antes de editar." };
   }
   const root = catalogDraftContentRoot(parsed);
   const nodes = Array.isArray(root.nodes)
@@ -6832,7 +6940,25 @@ function catalogEditableContent(draft: CatalogEditDraft): CatalogEditableContent
         }];
       })
     : [];
-  return { nodes, edges, contentError: "" };
+  const prompts = catalogEditableAssets(parsed.prompts);
+  const schemas = catalogEditableAssets(parsed.schemas);
+  return { nodes, edges, prompts, schemas, contentError: "" };
+}
+
+function catalogEditableAssets(value: unknown): Array<{ id: string; path: string; content: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((rawAsset) => {
+    if (!isRecord(rawAsset)) {
+      return [];
+    }
+    return [{
+      id: typeof rawAsset.id === "string" ? rawAsset.id : "",
+      path: typeof rawAsset.path === "string" ? rawAsset.path : "",
+      content: typeof rawAsset.content === "string" ? rawAsset.content : "",
+    }];
+  });
 }
 
 function catalogNodePatchDraftError(draft: CatalogEditDraft): string {
@@ -6918,11 +7044,67 @@ function catalogEditorValidation(
       }
       edgeKeys.add(edgeKey);
     }
+    validateCatalogEditorAssets(editableContent.prompts, "prompt", "prompts", errors);
+    validateCatalogEditorAssets(editableContent.schemas, "schema", "schemas", errors);
   }
   return {
     errors: Array.from(new Set(errors)),
     warnings: Array.from(new Set(warnings)),
   };
+}
+
+function validateCatalogEditorAssets(
+  assets: Array<{ id: string; path: string; content: string }>,
+  label: "prompt" | "schema",
+  prefix: "prompts" | "schemas",
+  errors: string[],
+): void {
+  const seenIds = new Map<string, number>();
+  const seenPaths = new Map<string, number>();
+  for (const [index, asset] of assets.entries()) {
+    const number = index + 1;
+    const id = asset.id.trim();
+    const path = catalogNormalizedAssetPath(asset.path);
+    if (!id) {
+      errors.push(`Asset ${label} ${number} precisa ter ID.`);
+    } else {
+      seenIds.set(id, (seenIds.get(id) ?? 0) + 1);
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) {
+        errors.push(`ID do ${label} "${id}" deve usar apenas letras, números, "_" ou "-".`);
+      }
+    }
+    if (!path) {
+      errors.push(`Asset ${label} "${id || number}" precisa ter path.`);
+    } else {
+      seenPaths.set(path, (seenPaths.get(path) ?? 0) + 1);
+      if (path === "agent.flow.json" || path.includes("\0") || path.split("/").includes("..") || /^[A-Za-z]:\//.test(path) || path.startsWith("/")) {
+        errors.push(`Path do ${label} "${id || number}" é inválido.`);
+      }
+      if (path !== prefix && !path.startsWith(`${prefix}/`)) {
+        errors.push(`Path do ${label} "${id || number}" deve ficar em ${prefix}/.`);
+      }
+    }
+    if (!asset.content.trim()) {
+      errors.push(`Asset ${label} "${id || number}" precisa ter conteúdo.`);
+    }
+    if (label === "schema" && asset.content.trim()) {
+      try {
+        JSON.parse(asset.content);
+      } catch {
+        errors.push(`Conteúdo do schema "${id || number}" precisa ser JSON válido.`);
+      }
+    }
+  }
+  for (const [id, count] of seenIds) {
+    if (count > 1) {
+      errors.push(`ID de ${label} duplicado: "${id}".`);
+    }
+  }
+  for (const [path, count] of seenPaths) {
+    if (count > 1) {
+      errors.push(`Path de ${label} duplicado: "${path}".`);
+    }
+  }
 }
 
 function uniqueCatalogNodeId(existingIds: string[], baseId: string): string {
@@ -6937,6 +7119,10 @@ function uniqueCatalogNodeId(existingIds: string[], baseId: string): string {
     }
   }
   return `${baseId}_${Date.now()}`;
+}
+
+function uniqueCatalogAssetId(existingIds: string[], baseId: string): string {
+  return uniqueCatalogNodeId(existingIds, baseId);
 }
 
 function updateCatalogDraftNodeField(
@@ -7069,13 +7255,96 @@ function removeCatalogDraftEdge(draft: CatalogEditDraft, index: number): Catalog
   });
 }
 
-function updateCatalogDraftContent(draft: CatalogEditDraft, updater: (root: Record<string, unknown>) => void): CatalogEditDraft {
+function updateCatalogDraftAssetField(
+  draft: CatalogEditDraft,
+  collection: "prompts" | "schemas",
+  index: number,
+  field: "id" | "path" | "content",
+  value: string,
+): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root, parsed) => {
+    const targetRoot = isRecord(parsed) ? parsed : root;
+    if (!Array.isArray(targetRoot[collection]) || !isRecord(targetRoot[collection][index])) {
+      return;
+    }
+    const asset = targetRoot[collection][index];
+    const previousId = field === "id" && typeof asset.id === "string" ? asset.id : "";
+    setDraftRecordStringField(asset, field, field === "path" ? catalogNormalizedAssetPath(value) : value, true);
+    if (field === "id") {
+      const nextId = typeof asset.id === "string" ? asset.id : "";
+      if (previousId && nextId && previousId !== nextId) {
+        remapCatalogDraftAssetRefs(root, collection, previousId, nextId);
+      }
+    }
+  });
+}
+
+function addCatalogDraftAsset(
+  draft: CatalogEditDraft,
+  collection: "prompts" | "schemas",
+  assetId: string,
+): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (_root, parsed) => {
+    const targetRoot = isRecord(parsed) ? parsed : _root;
+    const assets: unknown[] = Array.isArray(targetRoot[collection]) ? targetRoot[collection] : [];
+    targetRoot[collection] = assets;
+    assets.push({
+      id: assetId,
+      path: collection === "prompts" ? `prompts/${assetId}.md` : `schemas/${assetId}.schema.json`,
+      content: collection === "prompts"
+        ? `# ${assetId}\n\nDescreva o comportamento esperado deste prompt.\n`
+        : `${JSON.stringify({ type: "object", properties: {} }, null, 2)}\n`,
+    });
+  });
+}
+
+function removeCatalogDraftAsset(
+  draft: CatalogEditDraft,
+  collection: "prompts" | "schemas",
+  index: number,
+): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (_root, parsed) => {
+    const targetRoot = isRecord(parsed) ? parsed : _root;
+    if (!Array.isArray(targetRoot[collection])) {
+      return;
+    }
+    targetRoot[collection].splice(index, 1);
+  });
+}
+
+function remapCatalogDraftAssetRefs(
+  root: Record<string, unknown>,
+  collection: "prompts" | "schemas",
+  previousId: string,
+  nextId: string,
+): void {
+  const field = collection === "prompts" ? "promptId" : "outputSchema";
+  if (Array.isArray(root.nodes)) {
+    for (const node of root.nodes) {
+      if (isRecord(node) && node[field] === previousId) {
+        node[field] = nextId;
+      }
+    }
+  }
+  if (isRecord(root.targetNodePatch) && root.targetNodePatch[field] === previousId) {
+    root.targetNodePatch[field] = nextId;
+  }
+}
+
+function catalogNormalizedAssetPath(value: string): string {
+  return value.trim().replaceAll("\\", "/").replace(/^\.\/+/, "");
+}
+
+function updateCatalogDraftContent(
+  draft: CatalogEditDraft,
+  updater: (root: Record<string, unknown>, parsed: Record<string, unknown>) => void,
+): CatalogEditDraft {
   const parsed = catalogDraftParsedContent(draft);
   if (!parsed) {
     return draft;
   }
   const root = catalogDraftContentRoot(parsed);
-  updater(root);
+  updater(root, parsed);
   return {
     ...draft,
     content: `${JSON.stringify(parsed, null, 2)}\n`,

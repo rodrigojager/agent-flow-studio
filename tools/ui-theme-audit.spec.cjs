@@ -327,8 +327,41 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.locator("footer[role='status']")).toContainText("Skill do nó llm_step salva no catálogo local", {
     timeout: 10_000,
   });
-  await expect(page.locator(".catalog-card", { hasText: "llm_step skill" })).toBeVisible();
+  const savedLlmSkill = page.locator(".catalog-card", { hasText: "llm_step skill" });
+  await expect(savedLlmSkill).toBeVisible();
+  await savedLlmSkill.getByRole("button", { name: /^Editar item$/ }).click();
+  await savedLlmSkill.getByLabel("ID do prompt question_generation").fill("curated_question_prompt");
+  await savedLlmSkill.getByLabel("Path do prompt curated_question_prompt").fill("prompts/curated_question_prompt.md");
+  await savedLlmSkill
+    .getByLabel("Conteúdo do prompt curated_question_prompt")
+    .fill("Você gera perguntas revisadas com base no conteúdo aprovado.\n");
+  await savedLlmSkill
+    .getByLabel("Conteúdo do schema question_list")
+    .fill(JSON.stringify({ type: "object", required: ["questions", "confidence"], properties: { questions: { type: "array", items: { type: "string" } }, confidence: { type: "number" } } }, null, 2));
+  await savedLlmSkill.getByRole("button", { name: /^Adicionar prompt$/ }).click();
+  await savedLlmSkill.getByLabel("ID do prompt catalog_prompt").fill("followup_prompt");
+  await savedLlmSkill.getByLabel("Path do prompt followup_prompt").fill("prompts/followup_prompt.md");
+  await savedLlmSkill.getByLabel("Conteúdo do prompt followup_prompt").fill("Prompt auxiliar para continuidade da conversa.\n");
+  await expect(savedLlmSkill.locator(".catalog-editor-validation")).toContainText("Pronto para salvar");
+  await savedLlmSkill.getByRole("button", { name: /^Salvar curadoria$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Curadoria de llm_step skill salva como rev. 2", {
+    timeout: 10_000,
+  });
+  await expect(savedLlmSkill).toContainText("rev. 2");
+  await savedLlmSkill.locator(".catalog-block-preview summary").click();
+  await expect(savedLlmSkill).toContainText("2 prompt(s)");
+  await expect(savedLlmSkill.locator(".catalog-block-json")).toContainText("curated_question_prompt");
+  const catalogAfterSkillEdit = await request.get(`${apiUrl}/catalog`);
+  await expectApiOk(catalogAfterSkillEdit, "load catalog after internal skill asset edit");
+  const editedLlmSkill = (await catalogAfterSkillEdit.json()).items.find((item) => item.name === "llm_step skill");
+  expect(JSON.parse(editedLlmSkill.content).schemas[0].content).toContain("confidence");
+  await savedLlmSkill.getByRole("button", { name: /^Usar no nó$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("llm_step skill aplicado ao flow", {
+    timeout: 10_000,
+  });
+  await expect(labeledSelect(page.locator(".inspector-body"), "Prompt")).toHaveValue("curated_question_prompt");
 
+  await openInspectorTab(page, "Catálogo");
   const contextReviewSkill = page.locator(".catalog-card", { hasText: "Skill composta de revisão com contexto" });
   await expect(contextReviewSkill).toBeVisible();
   await contextReviewSkill.getByRole("button", { name: /^Anexar ao nó$/ }).click();
