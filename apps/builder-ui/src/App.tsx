@@ -5605,9 +5605,10 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
           {properties.length} campo{properties.length === 1 ? "" : "s"}
         </span>
       </div>
-      <SchemaAdvancedControls schema={schema} contextLabel="schema" onUpdateObject={updateSchema} />
+      <SchemaAdvancedControls schema={schema} schemaPath={[]} contextLabel="schema" onUpdateObject={updateSchema} />
       <SchemaSemanticValidation
         issues={semanticIssues}
+        onFocusIssue={focusSchemaSemanticIssue}
         onApplyAction={(action) =>
           updateSchema((next) => {
             applySchemaSemanticAction(next, action);
@@ -5618,6 +5619,7 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
       <SchemaObjectVisualEditor
         schema={schema}
         contextLabel="schema"
+        schemaPath={[]}
         depth={0}
         emptyMessage="Sem propriedades top-level."
         addNameLabel="Nova propriedade do schema"
@@ -5631,9 +5633,11 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
 
 function SchemaSemanticValidation({
   issues,
+  onFocusIssue,
   onApplyAction,
 }: {
   issues: SchemaSemanticIssue[];
+  onFocusIssue: (issue: SchemaSemanticIssue) => void;
   onApplyAction: (action: SchemaSemanticAction) => void;
 }) {
   const errorCount = issues.filter((issue) => issue.severity === "error").length;
@@ -5651,18 +5655,35 @@ function SchemaSemanticValidation({
       {issues.length ? (
         <ul className="schema-semantic-list">
           {issues.map((issue, index) => (
-            <li className={`${issue.severity} ${issue.action ? "has-action" : ""}`} key={`${issue.path}-${issue.message}-${index}`}>
+            <li
+              className={`${issue.severity} ${issue.action || issue.focus ? "has-actions" : ""}`}
+              key={`${issue.path}-${issue.message}-${index}`}
+            >
               <span>{issue.severity === "error" ? "Erro" : "Aviso"}</span>
               <strong>{issue.path}</strong>
               <p>{issue.message}</p>
-              {issue.action ? (
-                <button
-                  type="button"
-                  className="schema-semantic-action"
-                  onClick={() => onApplyAction(issue.action as SchemaSemanticAction)}
-                >
-                  {issue.action.label}
-                </button>
+              {issue.action || issue.focus ? (
+                <div className="schema-semantic-actions">
+                  {issue.focus ? (
+                    <button
+                      type="button"
+                      className="schema-semantic-action"
+                      onClick={() => onFocusIssue(issue)}
+                      aria-label={`Ir para ${issue.path}`}
+                    >
+                      Ir
+                    </button>
+                  ) : null}
+                  {issue.action ? (
+                    <button
+                      type="button"
+                      className="schema-semantic-action"
+                      onClick={() => onApplyAction(issue.action as SchemaSemanticAction)}
+                    >
+                      {issue.action.label}
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
             </li>
           ))}
@@ -5721,7 +5742,7 @@ function SchemaDefinitionsEditor({
   }
 
   return (
-    <section className="schema-definitions-panel" aria-label="$defs do schema">
+    <section className="schema-definitions-panel" aria-label="$defs do schema" data-schema-focus-target={schemaPathKey([])}>
       <div className="schema-nested-title">
         <span>$defs</span>
         <strong>
@@ -5751,12 +5772,14 @@ function SchemaDefinitionsEditor({
                 </summary>
                 <SchemaAdvancedControls
                   schema={definition}
+                  schemaPath={["$defs", name]}
                   contextLabel={contextLabel}
                   onUpdateObject={(mutator) => updateDefinition(name, mutator)}
                 />
                 <SchemaObjectVisualEditor
                   schema={definition}
                   contextLabel={contextLabel}
+                  schemaPath={["$defs", name]}
                   depth={1}
                   emptyMessage={`Sem propriedades em ${contextLabel}.`}
                   addNameLabel={`Nome da propriedade em ${contextLabel}`}
@@ -5777,6 +5800,7 @@ function SchemaDefinitionsEditor({
           onChange={(event) => setNewDefinitionName(event.target.value)}
           placeholder="NomeDefinicao"
           aria-label="Nova definição do schema"
+          data-schema-focus-field="definition"
         />
         <select
           value={newDefinitionType}
@@ -5806,10 +5830,12 @@ function SchemaDefinitionsEditor({
 
 function SchemaAdvancedControls({
   schema,
+  schemaPath,
   contextLabel,
   onUpdateObject,
 }: {
   schema: Record<string, unknown>;
+  schemaPath: SchemaPathSegment[];
   contextLabel: string;
   onUpdateObject: (mutator: (schema: Record<string, unknown>) => void) => void;
 }) {
@@ -5818,11 +5844,12 @@ function SchemaAdvancedControls({
   const additionalObject = readSchemaAdditionalPropertiesObject(schema);
   const compositionCounts = schemaCompositionKeys.map((key) => [key, readSchemaCompositionList(schema, key).length] as const);
   return (
-    <div className="schema-advanced-controls">
+    <div className="schema-advanced-controls" data-schema-focus-target={schemaPathKey(schemaPath)}>
       <div className="schema-advanced-grid">
         <label>
           <span>$ref</span>
           <input
+            data-schema-focus-field="ref"
             aria-label={`$ref de ${contextLabel}`}
             value={refValue}
             placeholder="#/$defs/Item"
@@ -5841,6 +5868,7 @@ function SchemaAdvancedControls({
         <label>
           <span>Additional</span>
           <select
+            data-schema-focus-field="additionalProperties"
             aria-label={`additionalProperties de ${contextLabel}`}
             value={additionalMode}
             onChange={(event) =>
@@ -5859,6 +5887,7 @@ function SchemaAdvancedControls({
           <label>
             <span>Tipo extra</span>
             <select
+              data-schema-focus-field="additionalProperties"
               aria-label={`Tipo de additionalProperties de ${contextLabel}`}
               value={readSchemaPropertyType(additionalObject)}
               onChange={(event) =>
@@ -5887,6 +5916,7 @@ function SchemaAdvancedControls({
             <button
               type="button"
               className="command-button"
+              data-schema-focus-field={`composition:${key}`}
               aria-label={`Adicionar ${key} em ${contextLabel}`}
               onClick={() =>
                 onUpdateObject((next) => {
@@ -5921,6 +5951,7 @@ function SchemaAdvancedControls({
 function SchemaObjectVisualEditor({
   schema,
   contextLabel,
+  schemaPath,
   depth,
   emptyMessage,
   addNameLabel,
@@ -5930,6 +5961,7 @@ function SchemaObjectVisualEditor({
 }: {
   schema: Record<string, unknown>;
   contextLabel: string;
+  schemaPath: SchemaPathSegment[];
   depth: number;
   emptyMessage: string;
   addNameLabel: string;
@@ -5990,22 +6022,30 @@ function SchemaObjectVisualEditor({
   }
 
   return (
-    <div className={`schema-object-editor ${depth > 0 ? "nested" : ""}`} data-depth={Math.min(depth, 3)}>
+    <div
+      className={`schema-object-editor ${depth > 0 ? "nested" : ""}`}
+      data-depth={Math.min(depth, 3)}
+      data-schema-focus-target={schemaPathKey(schemaPath)}
+    >
       <div className="schema-property-list">
         {properties.length ? (
-          properties.map(([name, property]) => (
-            <SchemaPropertyVisualRow
-              key={name}
-              name={name}
-              property={property}
-              propertyLabel={depth === 0 ? name : `${contextLabel}.${name}`}
-              depth={depth}
-              required={required.includes(name)}
-              updateProperty={updateProperty}
-              updateRequired={updateRequired}
-              removeProperty={removeProperty}
-            />
-          ))
+          properties.map(([name, property]) => {
+            const propertyPath = [...schemaPath, "properties", name];
+            return (
+              <SchemaPropertyVisualRow
+                key={name}
+                name={name}
+                property={property}
+                schemaPath={propertyPath}
+                propertyLabel={depth === 0 ? name : `${contextLabel}.${name}`}
+                depth={depth}
+                required={required.includes(name)}
+                updateProperty={updateProperty}
+                updateRequired={updateRequired}
+                removeProperty={removeProperty}
+              />
+            );
+          })
         ) : (
           <div className="schema-property-empty">{emptyMessage}</div>
         )}
@@ -6016,6 +6056,7 @@ function SchemaObjectVisualEditor({
           onChange={(event) => setNewPropertyName(event.target.value)}
           placeholder="nova_propriedade"
           aria-label={addNameLabel}
+          data-schema-focus-field="addProperty"
         />
         <select value={newPropertyType} onChange={(event) => setNewPropertyType(event.target.value)} aria-label={addTypeLabel}>
           {schemaPropertyTypeOptions.map((type) => (
@@ -6042,6 +6083,7 @@ function SchemaObjectVisualEditor({
 function SchemaPropertyVisualRow({
   name,
   property,
+  schemaPath,
   propertyLabel,
   depth,
   required,
@@ -6051,6 +6093,7 @@ function SchemaPropertyVisualRow({
 }: {
   name: string;
   property: Record<string, unknown>;
+  schemaPath: SchemaPathSegment[];
   propertyLabel: string;
   depth: number;
   required: boolean;
@@ -6063,11 +6106,12 @@ function SchemaPropertyVisualRow({
   const nestedObjectLabel = propertyLabel;
   const nestedArrayLabel = `${propertyLabel}[]`;
   return (
-    <div className={`schema-property-shell ${depth > 0 ? "nested" : ""}`}>
+    <div className={`schema-property-shell ${depth > 0 ? "nested" : ""}`} data-schema-focus-target={schemaPathKey(schemaPath)}>
       <div className="schema-property-row">
         <strong title={propertyLabel}>{name}</strong>
         <SchemaAdvancedControls
           schema={property}
+          schemaPath={schemaPath}
           contextLabel={propertyLabel}
           onUpdateObject={(mutator) => updateProperty(name, mutator)}
         />
@@ -6075,6 +6119,7 @@ function SchemaPropertyVisualRow({
           <span>Tipo</span>
           <select
             aria-label={`Tipo de ${propertyLabel}`}
+            data-schema-focus-field="type"
             value={type}
             onChange={(event) =>
               updateProperty(name, (nextProperty) => {
@@ -6095,6 +6140,7 @@ function SchemaPropertyVisualRow({
           <input
             type="checkbox"
             aria-label={`${propertyLabel} obrigatório`}
+            data-schema-focus-field="required"
             checked={required}
             onChange={(event) => updateRequired(name, event.target.checked)}
           />
@@ -6103,6 +6149,7 @@ function SchemaPropertyVisualRow({
           <span>Descrição</span>
           <input
             aria-label={`Descrição de ${propertyLabel}`}
+            data-schema-focus-field="description"
             value={readSchemaPropertyDescription(property)}
             onChange={(event) =>
               updateProperty(name, (nextProperty) => {
@@ -6119,6 +6166,7 @@ function SchemaPropertyVisualRow({
           <span>Enum</span>
           <input
             aria-label={`Enum de ${propertyLabel}`}
+            data-schema-focus-field="enum"
             value={readSchemaPropertyEnum(property).join(", ")}
             placeholder="valor_a, valor_b"
             onChange={(event) =>
@@ -6138,6 +6186,7 @@ function SchemaPropertyVisualRow({
             <span>Items</span>
             <select
               aria-label={`Tipo dos itens de ${propertyLabel}`}
+              data-schema-focus-field="items"
               value={itemType}
               onChange={(event) =>
                 updateProperty(name, (nextProperty) => {
@@ -6173,6 +6222,7 @@ function SchemaPropertyVisualRow({
           <SchemaObjectVisualEditor
             schema={property}
             contextLabel={nestedObjectLabel}
+            schemaPath={schemaPath}
             depth={depth + 1}
             emptyMessage={`Sem propriedades em ${nestedObjectLabel}.`}
             addNameLabel={`Nome da propriedade em ${nestedObjectLabel}`}
@@ -6191,6 +6241,7 @@ function SchemaPropertyVisualRow({
           <SchemaObjectVisualEditor
             schema={readSchemaArrayItemsObject(property)}
             contextLabel={nestedArrayLabel}
+            schemaPath={[...schemaPath, "items"]}
             depth={depth + 1}
             emptyMessage={`Sem propriedades em ${nestedArrayLabel}.`}
             addNameLabel={`Nome da propriedade em ${nestedArrayLabel}`}
@@ -6219,10 +6270,16 @@ type SchemaSemanticIssue = {
   severity: "error" | "warning";
   path: string;
   message: string;
+  focus?: SchemaDiagnosticFocus;
   action?: SchemaSemanticAction;
 };
 
 type SchemaPathSegment = string | number;
+
+type SchemaDiagnosticFocus = {
+  targetPath: SchemaPathSegment[];
+  field: string;
+};
 
 type SchemaSemanticAction =
   | {
@@ -6275,6 +6332,40 @@ function cloneJsonObject(value: Record<string, unknown>): Record<string, unknown
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
+function focusSchemaSemanticIssue(issue: SchemaSemanticIssue): void {
+  if (!issue.focus) {
+    return;
+  }
+  const targetKey = schemaPathKey(issue.focus.targetPath);
+  const targets = Array.from(document.querySelectorAll<HTMLElement>("[data-schema-focus-target]")).filter(
+    (target) => target.getAttribute("data-schema-focus-target") === targetKey,
+  );
+  if (!targets.length) {
+    return;
+  }
+  const field = findSchemaFocusField(targets, issue.focus.field);
+  const target = field?.closest<HTMLElement>("[data-schema-focus-target]") ?? targets[0];
+  target.setAttribute("data-schema-focus-active", "true");
+  window.setTimeout(() => {
+    target.removeAttribute("data-schema-focus-active");
+  }, 1200);
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  window.setTimeout(() => {
+    (field ?? target).focus({ preventScroll: true });
+  }, 120);
+}
+
+function findSchemaFocusField(targets: HTMLElement[], field: string): HTMLElement | undefined {
+  for (const target of targets) {
+    const candidates = Array.from(target.querySelectorAll<HTMLElement>("[data-schema-focus-field]"));
+    const match = candidates.find((candidate) => candidate.getAttribute("data-schema-focus-field") === field);
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
+}
+
 function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanticIssue[] {
   const issues: SchemaSemanticIssue[] = [];
   const definitionNames = new Set(readSchemaDefinitions(schema).map(([name]) => name));
@@ -6287,6 +6378,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
       severity: "error",
       path: "schema.$defs",
       message: "$defs precisa ser um objeto com definições nomeadas.",
+      focus: { targetPath: [], field: "definition" },
     });
   }
 
@@ -6297,6 +6389,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: `schema.$defs.${name}`,
           message: "Nome de definição fora do padrão visual. Use letras, números, _ ou - e comece por letra ou _.",
+          focus: { targetPath: [], field: "definition" },
         });
       }
       if (!isRecord(value)) {
@@ -6304,6 +6397,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "error",
           path: `schema.$defs.${name}`,
           message: "Definição precisa ser um objeto JSON Schema.",
+          focus: { targetPath: ["$defs", name], field: "type" },
         });
         return;
       }
@@ -6322,7 +6416,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
     validateRef(current, path, targetPath);
     validateRequired(current, path, targetPath);
     validateEnum(current, path, targetPath);
-    validateAdditionalProperties(current, path);
+    validateAdditionalProperties(current, path, targetPath);
     validateArrayItems(current, path, targetPath);
     validateComposition(current, path, targetPath);
 
@@ -6334,6 +6428,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
             severity: "error",
             path: propertyPath,
             message: "Propriedade precisa ser um objeto JSON Schema.",
+            focus: { targetPath: [...targetPath, "properties", propertyName], field: "type" },
           });
           return;
         }
@@ -6344,6 +6439,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         severity: "error",
         path: `${path}.properties`,
         message: "properties precisa ser um objeto.",
+        focus: { targetPath, field: "addProperty" },
       });
     }
 
@@ -6354,6 +6450,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         severity: "error",
         path: `${path}.items`,
         message: "items precisa ser um schema ou uma lista de schemas.",
+        focus: { targetPath, field: "items" },
       });
     } else if (Array.isArray(current.items)) {
       current.items.forEach((item, index) => {
@@ -6364,6 +6461,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
             severity: "error",
             path: `${path}.items[${index}]`,
             message: "Item de array precisa ser um objeto JSON Schema.",
+            focus: { targetPath, field: "items" },
           });
         }
       });
@@ -6395,6 +6493,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         severity: "error",
         path: `${path}.$ref`,
         message: "$ref precisa ser uma string não vazia.",
+        focus: { targetPath, field: "ref" },
       });
       return;
     }
@@ -6406,6 +6505,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "error",
           path: `${path}.$ref`,
           message: `Referência local inválida: ${ref}.`,
+          focus: { targetPath, field: "ref" },
         });
         return;
       }
@@ -6414,6 +6514,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "error",
           path: `${path}.$ref`,
           message: `Referência local não encontrada: ${ref}. Crie a definição em $defs ou ajuste o $ref.`,
+          focus: { targetPath, field: "ref" },
           action: {
             type: "create-definition",
             label: `Criar $defs.${refName}`,
@@ -6429,12 +6530,14 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         severity: "warning",
         path: `${path}.$ref`,
         message: "Este editor resolve localmente $defs. Migre definitions para $defs para validação visual completa.",
+        focus: { targetPath, field: "ref" },
       });
     } else if (ref.startsWith("#/")) {
       issues.push({
         severity: "warning",
         path: `${path}.$ref`,
         message: "Referência local fora de $defs não é resolvida pelo editor visual.",
+        focus: { targetPath, field: "ref" },
       });
     }
   }
@@ -6456,6 +6559,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         severity: "error",
         path: `${path}.required`,
         message: "required precisa ser uma lista de nomes de propriedades.",
+        focus: { targetPath, field: "addProperty" },
       });
       return;
     }
@@ -6468,6 +6572,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "error",
           path: itemPath,
           message: "Cada item de required precisa ser uma string não vazia.",
+          focus: { targetPath, field: "addProperty" },
         });
         return;
       }
@@ -6476,6 +6581,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: itemPath,
           message: `Campo obrigatório duplicado: ${item}.`,
+          focus: { targetPath, field: "addProperty" },
           action: {
             type: "dedupe-required",
             label: "Deduplicar required",
@@ -6489,6 +6595,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: itemPath,
           message: `Campo obrigatório sem propriedade correspondente: ${item}.`,
+          focus: { targetPath, field: "addProperty" },
           action: {
             type: "remove-required",
             label: `Remover required ${item}`,
@@ -6509,6 +6616,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         severity: "error",
         path: `${path}.enum`,
         message: "enum precisa ser uma lista.",
+        focus: { targetPath, field: "enum" },
       });
       return;
     }
@@ -6520,6 +6628,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: `${path}.enum[${index}]`,
           message: "Valor duplicado no enum.",
+          focus: { targetPath, field: "enum" },
           action: {
             type: "dedupe-enum",
             label: "Deduplicar enum",
@@ -6531,7 +6640,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
     });
   }
 
-  function validateAdditionalProperties(current: Record<string, unknown>, path: string) {
+  function validateAdditionalProperties(current: Record<string, unknown>, path: string, targetPath: SchemaPathSegment[]) {
     const additional = current.additionalProperties;
     if (additional === undefined || typeof additional === "boolean" || isRecord(additional)) {
       return;
@@ -6540,6 +6649,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
       severity: "error",
       path: `${path}.additionalProperties`,
       message: "additionalProperties precisa ser true, false ou um schema.",
+      focus: { targetPath, field: "additionalProperties" },
     });
   }
 
@@ -6550,6 +6660,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
         severity: "warning",
         path: `${path}.items`,
         message: "Array sem items deixa o formato de cada item indefinido.",
+        focus: { targetPath, field: "items" },
         action: {
           type: "add-array-items",
           label: "Adicionar items",
@@ -6570,6 +6681,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "error",
           path: `${path}.${key}`,
           message: `${key} precisa ser uma lista de schemas.`,
+          focus: { targetPath, field: `composition:${key}` },
         });
         return;
       }
@@ -6578,6 +6690,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
           severity: "warning",
           path: `${path}.${key}`,
           message: `${key} vazio não adiciona uma alternativa válida.`,
+          focus: { targetPath, field: `composition:${key}` },
           action: {
             type: "remove-empty-composition",
             label: `Remover ${key}`,
@@ -6592,6 +6705,7 @@ function validateSchemaSemantics(schema: Record<string, unknown>): SchemaSemanti
             severity: "error",
             path: `${path}.${key}[${index}]`,
             message: `Entrada de ${key} precisa ser um objeto JSON Schema.`,
+            focus: { targetPath, field: `composition:${key}` },
           });
         }
       });
@@ -6668,6 +6782,10 @@ function readSchemaObjectAtPath(schema: Record<string, unknown>, path: SchemaPat
     }
   }
   return isRecord(current) ? current : undefined;
+}
+
+function schemaPathKey(path: SchemaPathSegment[]): string {
+  return path.length ? path.map((segment) => encodeURIComponent(String(segment))).join("/") : "schema";
 }
 
 function createSchemaDefinitionFromSource(source: Record<string, unknown> | undefined, sourcePath: SchemaPathSegment[]): Record<string, unknown> {

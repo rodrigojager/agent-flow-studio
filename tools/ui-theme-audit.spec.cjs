@@ -118,6 +118,8 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expect(schemaConsistency).toContainText("Schema consistente");
   await page.getByLabel("$ref de schema").fill("#/$defs/SessionState");
   await expect(schemaConsistency).toContainText("Referência local não encontrada: #/$defs/SessionState");
+  await page.getByRole("button", { name: "Ir para schema.$ref" }).click();
+  await expect(page.getByLabel("$ref de schema")).toBeFocused();
   await page.getByRole("button", { name: "Criar $defs.SessionState" }).click();
   await expect(schemaConsistency).toContainText("Schema consistente");
   await page.getByLabel("additionalProperties de schema").selectOption("schema");
@@ -126,6 +128,8 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByRole("button", { name: "Adicionar anyOf em schema" }).click();
   await page.getByLabel("$ref de status").fill("#/$defs/Status");
   await expect(schemaConsistency).toContainText("Referência local não encontrada: #/$defs/Status");
+  await page.getByRole("button", { name: "Ir para schema.properties.status.$ref" }).click();
+  await expect(page.getByLabel("$ref de status")).toBeFocused();
   await page.getByRole("button", { name: "Criar $defs.Status" }).click();
   await expect(schemaConsistency).toContainText("Schema consistente");
   await page.getByLabel("Nome da propriedade em $defs.SessionState", { exact: true }).fill("state_id");
