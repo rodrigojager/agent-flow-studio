@@ -796,6 +796,7 @@ Entregaveis:
 - salvar prompt/schema atual no registry local;
 - salvar nó atual como tool/skill local reutilizável;
 - salvar subgrafos selecionados como tool/skill composta reutilizável;
+- inspecionar visualmente blocos/templates com etapas, conexões internas, assets e preview JSON compacto;
 - reutilizar prompt/schema/tool/skill em flows sem copiar arquivos manualmente;
 - criar novo flow a partir de template de agente;
 - evoluir catalogo para editor visual completo de tools/skills compostas;
@@ -818,6 +819,7 @@ Status 2026-06-30:
 - implementada primeira camada de tool composta: item `tool` pode usar `content` no formato `agent-flow-builder.tool-bundle.v1`, o seed `Bloco HTTP JSON validado` cria `transform_json -> code/http`, e a UI diferencia `Criar bloco` de `Criar nó`;
 - implementada primeira camada de skill composta: item `skill` pode declarar `nodes`/`edges` no formato `agent-flow-builder.skill.v1`, o seed `Skill composta de revisão com contexto` cria `file_extract -> rag_retrieval -> llm_structured`, e a UI trata a skill como bloco anexável;
 - implementada primeira camada de curadoria visual de blocos: seleção múltipla no canvas pode ser salva diretamente como tool composta ou skill composta, preservando posições relativas e arestas internas;
+- cards de catálogo agora mostram resumo visual de tools/skills compostas e templates de agente, incluindo etapas, conexões internas, contagem de prompts/schemas, patch alvo e preview JSON compacto;
 - implementada primeira camada de versionamento/curadoria: itens do catalogo carregam versão, revisão local incremental e hash curto de conteúdo, com metadados visíveis nos cards;
 - implementado histórico local de revisões: ao sobrescrever item local, o snapshot anterior fica em `history` e o card mostra diff compacto contra a revisão atual;
 - implementada restauração de revisão: snapshots antigos podem ser restaurados pela API/UI, criando nova revisão sem apagar o histórico;

@@ -6202,6 +6202,7 @@ function CatalogPanel({
             {items.map((item) => {
               const itemKey = localCatalogItemKey(item);
               const createsBlock = catalogItemCreatesBlock(item);
+              const visualSummary = catalogItemVisualSummary(item);
               const revisions = catalogRevisionTimeline(item);
               const compareRevision =
                 revisions.find((revision) => revision.revision === compareRevisionByItem[itemKey]) ?? revisions[0] ?? null;
@@ -6220,6 +6221,60 @@ function CatalogPanel({
                     <span>rev. {item.revision}</span>
                     <span>{item.contentHash}</span>
                   </div>
+                  {visualSummary ? (
+                    <details className="catalog-block-preview">
+                      <summary>
+                        <GitBranch size={14} aria-hidden="true" />
+                        <span>{catalogVisualSummaryHeadline(visualSummary)}</span>
+                      </summary>
+                      <div className="catalog-block-stats">
+                        {visualSummary.nodes.length ? (
+                          <>
+                            <span>{visualSummary.entryNodeIds.length || visualSummary.nodes.length} entrada(s)</span>
+                            <span>{visualSummary.exitNodeIds.length || visualSummary.nodes.length} saída(s)</span>
+                          </>
+                        ) : null}
+                        <span>{visualSummary.promptCount} prompt(s)</span>
+                        <span>{visualSummary.schemaCount} schema(s)</span>
+                      </div>
+                      {visualSummary.nodes.length ? (
+                        <>
+                          <ol className="catalog-block-node-list" aria-label={`Etapas de ${item.name}`}>
+                            {visualSummary.nodes.slice(0, 8).map((node, index) => (
+                              <li key={`${itemKey}-node-${node.id}-${index}`}>
+                                <strong>{node.id}</strong>
+                                <small>{node.type}</small>
+                                {node.promptId ? <span>prompt: {node.promptId}</span> : null}
+                                {node.outputSchema ? <span>schema: {node.outputSchema}</span> : null}
+                              </li>
+                            ))}
+                          </ol>
+                          {visualSummary.nodes.length > 8 ? (
+                            <div className="catalog-block-more">+{visualSummary.nodes.length - 8} etapa(s)</div>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {visualSummary.edges.length ? (
+                        <div className="catalog-block-edge-list" aria-label={`Conexões de ${item.name}`}>
+                          {visualSummary.edges.slice(0, 6).map((edge, index) => (
+                            <code key={`${itemKey}-edge-${index}`}>
+                              {edge.from} -&gt; {edge.to}
+                              {edge.condition ? ` | ${edge.condition}` : ""}
+                            </code>
+                          ))}
+                        </div>
+                      ) : null}
+                      {visualSummary.targetPatchKeys.length ? (
+                        <div className="catalog-block-assets">
+                          <span>Patch alvo</span>
+                          {visualSummary.targetPatchKeys.slice(0, 6).map((key) => (
+                            <code key={`${itemKey}-patch-${key}`}>{key}</code>
+                          ))}
+                        </div>
+                      ) : null}
+                      <pre className="catalog-block-json">{visualSummary.jsonPreview}</pre>
+                    </details>
+                  ) : null}
                   {compareRevision ? (
                     <details className="catalog-history">
                       <summary>
@@ -6348,6 +6403,126 @@ function catalogItemCreatesBlock(item: LocalCatalogItem): boolean {
   } catch {
     return false;
   }
+}
+
+interface CatalogVisualSummary {
+  label: string;
+  nodes: Array<{ id: string; type: string; promptId?: string; outputSchema?: string }>;
+  edges: Array<{ from: string; to: string; condition?: string }>;
+  promptCount: number;
+  schemaCount: number;
+  targetPatchKeys: string[];
+  entryNodeIds: string[];
+  exitNodeIds: string[];
+  jsonPreview: string;
+}
+
+function catalogItemVisualSummary(item: LocalCatalogItem): CatalogVisualSummary | null {
+  if (!item.content || (item.kind !== "tool" && item.kind !== "skill" && item.kind !== "agent_template")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(item.content) as unknown;
+    if (!isRecord(parsed)) {
+      return null;
+    }
+    const contentRoot = item.kind === "agent_template" && isRecord(parsed.flow) ? parsed.flow : parsed;
+    const nodes = catalogVisualNodes(contentRoot.nodes);
+    const edges = catalogVisualEdges(contentRoot.edges, nodes);
+    const promptCount = Array.isArray(parsed.prompts) ? parsed.prompts.length : 0;
+    const schemaCount = Array.isArray(parsed.schemas) ? parsed.schemas.length : 0;
+    const targetPatchKeys = isRecord(parsed.targetNodePatch) ? Object.keys(parsed.targetNodePatch).sort() : [];
+    if (!nodes.length && !targetPatchKeys.length) {
+      return null;
+    }
+    return {
+      label: catalogVisualSummaryLabel(item, parsed.format, nodes.length),
+      nodes,
+      edges,
+      promptCount,
+      schemaCount,
+      targetPatchKeys,
+      entryNodeIds: catalogEntryNodeIds(nodes, edges),
+      exitNodeIds: catalogExitNodeIds(nodes, edges),
+      jsonPreview: catalogVisualJsonPreview(parsed),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function catalogVisualSummaryLabel(item: LocalCatalogItem, format: unknown, nodeCount: number): string {
+  if (item.kind === "agent_template") {
+    return "Template visual";
+  }
+  if (format === "agent-flow-builder.tool-bundle.v1") {
+    return "Tool composta";
+  }
+  if (item.kind === "skill") {
+    return nodeCount ? "Skill composta" : "Skill reutilizável";
+  }
+  return catalogKindLabel(item.kind);
+}
+
+function catalogVisualSummaryHeadline(summary: CatalogVisualSummary): string {
+  if (summary.nodes.length) {
+    return `${summary.label}: ${summary.nodes.length} nós, ${summary.edges.length} aresta(s)`;
+  }
+  return `${summary.label}: ${summary.targetPatchKeys.length} campo(s) do nó`;
+}
+
+function catalogVisualNodes(value: unknown): CatalogVisualSummary["nodes"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((rawNode) => {
+    if (!isRecord(rawNode) || typeof rawNode.id !== "string") {
+      return [];
+    }
+    return [{
+      id: rawNode.id,
+      type: typeof rawNode.type === "string" ? rawNode.type : "node",
+      promptId: typeof rawNode.promptId === "string" ? rawNode.promptId : undefined,
+      outputSchema: typeof rawNode.outputSchema === "string" ? rawNode.outputSchema : undefined,
+    }];
+  });
+}
+
+function catalogVisualEdges(value: unknown, nodes: CatalogVisualSummary["nodes"]): CatalogVisualSummary["edges"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  return value.flatMap((rawEdge) => {
+    if (!isRecord(rawEdge) || typeof rawEdge.from !== "string" || typeof rawEdge.to !== "string") {
+      return [];
+    }
+    if (!nodeIds.has(rawEdge.from) || !nodeIds.has(rawEdge.to)) {
+      return [];
+    }
+    return [{
+      from: rawEdge.from,
+      to: rawEdge.to,
+      condition: typeof rawEdge.condition === "string" ? rawEdge.condition : undefined,
+    }];
+  });
+}
+
+function catalogEntryNodeIds(nodes: CatalogVisualSummary["nodes"], edges: CatalogVisualSummary["edges"]): string[] {
+  const targeted = new Set(edges.map((edge) => edge.to));
+  return nodes.map((node) => node.id).filter((id) => !targeted.has(id));
+}
+
+function catalogExitNodeIds(nodes: CatalogVisualSummary["nodes"], edges: CatalogVisualSummary["edges"]): string[] {
+  const sourced = new Set(edges.map((edge) => edge.from));
+  return nodes.map((node) => node.id).filter((id) => !sourced.has(id));
+}
+
+function catalogVisualJsonPreview(value: unknown): string {
+  const text = JSON.stringify(value, null, 2) ?? "";
+  const lines = text.split("\n");
+  const preview = lines.slice(0, 18).join("\n");
+  return lines.length > 18 ? `${preview}\n...` : preview;
 }
 
 function catalogRevisionDiff(

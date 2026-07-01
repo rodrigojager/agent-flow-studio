@@ -196,6 +196,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.getByText("Prompt de perguntas guiadas")).toBeVisible();
   await expect(page.getByText("Agente gerador de perguntas por conteúdo")).toBeVisible();
   await expect(page.getByText("Skill de perguntas estruturadas")).toBeVisible();
+  await expect(page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" })).toContainText("Template visual");
   const revisionCard = page.locator(".catalog-card", { hasText: "Prompt com histórico UI" });
   await expect(revisionCard).toContainText("v1.1.0");
   await expect(revisionCard).toContainText("rev. 2");
@@ -232,17 +233,28 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await openInspectorTab(page, "Catálogo");
   await page.getByRole("button", { name: /^Salvar bloco tool$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Bloco salvo como tool composta", { timeout: 10_000 });
-  await expect(page.locator(".catalog-card", { hasText: "output_safety_check block" })).toBeVisible();
+  const savedToolBlock = page.locator(".catalog-card", { hasText: "output_safety_check block" });
+  await expect(savedToolBlock).toBeVisible();
+  await expect(savedToolBlock).toContainText("Tool composta: 2 nós, 1 aresta(s)");
+  await savedToolBlock.locator(".catalog-block-preview summary").click();
+  await expect(savedToolBlock.locator(".catalog-block-node-list")).toContainText("output_safety_check");
+  await expect(savedToolBlock.locator(".catalog-block-node-list")).toContainText("deterministic_gate");
+  await expect(savedToolBlock.locator(".catalog-block-edge-list")).toContainText("output_safety_check -> deterministic_gate");
   await page.getByRole("button", { name: /^Salvar bloco skill$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Bloco salvo como skill composta", { timeout: 10_000 });
-  await expect(page.locator(".catalog-card", { hasText: "output_safety_check skill block" })).toBeVisible();
+  const savedSkillBlock = page.locator(".catalog-card", { hasText: "output_safety_check skill block" });
+  await expect(savedSkillBlock).toBeVisible();
+  await expect(savedSkillBlock).toContainText("Skill composta: 2 nós, 1 aresta(s)");
 
   await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
-  await expect(page.locator(".catalog-card", { hasText: "Prompt principal para conduzir" })).toBeVisible();
+  const savedPromptCard = page.locator(".catalog-card", {
+    hasText: /Prompt principal para conduzir|Prompt system de Agente de Referência/,
+  });
+  await expect(savedPromptCard).toBeVisible();
   await catalogPanel.getByLabel("Origem").selectOption("local");
   await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toBeVisible();
-  await expect(page.locator(".catalog-card", { hasText: "Prompt principal para conduzir" })).toBeVisible();
+  await expect(savedPromptCard).toBeVisible();
   await expect(page.locator(".catalog-card", { hasText: "HTTP JSON tool" })).toHaveCount(0);
   await catalogPanel.getByRole("button", { name: /^Limpar$/ }).click();
 
