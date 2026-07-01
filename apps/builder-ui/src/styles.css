@@ -1583,6 +1583,50 @@ button:disabled {
   border-left: 2px solid color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
+.schema-definitions-panel {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface-bg));
+}
+
+.schema-definition-list {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.schema-definition-item {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-bg);
+}
+
+.schema-definition-item summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.schema-definition-item summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .schema-property-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 92px 46px 34px;
@@ -1645,18 +1689,21 @@ button:disabled {
 
 .schema-property-row label,
 .schema-advanced-controls label,
+.schema-definitions-panel label,
 .schema-property-add {
   min-width: 0;
 }
 
 .schema-property-row label,
-.schema-advanced-controls label {
+.schema-advanced-controls label,
+.schema-definitions-panel label {
   display: grid;
   gap: 4px;
 }
 
 .schema-property-row label span,
-.schema-advanced-controls label span {
+.schema-advanced-controls label span,
+.schema-definitions-panel label span {
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 700;
@@ -1667,6 +1714,8 @@ button:disabled {
 .schema-property-row select,
 .schema-advanced-controls input,
 .schema-advanced-controls select,
+.schema-definitions-panel input,
+.schema-definitions-panel select,
 .schema-property-add input,
 .schema-property-add select {
   width: 100%;

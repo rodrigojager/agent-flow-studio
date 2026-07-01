@@ -120,6 +120,16 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByRole("button", { name: "Adicionar oneOf em schema" }).click();
   await page.getByRole("button", { name: "Adicionar anyOf em schema" }).click();
   await page.getByLabel("$ref de status").fill("#/$defs/Status");
+  await page.getByLabel("Nova definição do schema", { exact: true }).fill("SessionState");
+  await page.getByLabel("Tipo da nova definição do schema").selectOption("object");
+  await page.getByRole("button", { name: "Adicionar definição ao schema" }).click();
+  await page.getByLabel("Nome da propriedade em $defs.SessionState").fill("state_id");
+  await page.getByLabel("Tipo da nova propriedade em $defs.SessionState").selectOption("string");
+  await page.getByRole("button", { name: "Adicionar propriedade em $defs.SessionState" }).click();
+  await page.getByLabel("Descrição de $defs.SessionState.state_id").fill("Identificador interno do estado.");
+  await page.getByLabel("Nova definição do schema", { exact: true }).fill("Status");
+  await page.getByLabel("Tipo da nova definição do schema").selectOption("string");
+  await page.getByRole("button", { name: "Adicionar definição ao schema" }).click();
   await page.getByLabel("Descrição de session_id").fill("Identificador público da sessão.");
   await expect(page.getByLabel("Enum de status")).toHaveValue("created, active, completed");
   await page.getByLabel("Enum de status").fill("created, active, completed, archived");
@@ -134,7 +144,7 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await page.getByLabel("Tipo dos itens de recent_messages").selectOption("string");
   await page.getByLabel("user_message obrigatório").check();
   await page.getByLabel("Nova propriedade do schema").fill("review_score");
-  await page.getByLabel("Tipo da nova propriedade").selectOption("number");
+  await page.getByLabel("Tipo da nova propriedade", { exact: true }).selectOption("number");
   await page.getByRole("button", { name: /^Adicionar$/ }).click();
   await expect(page.locator(".schema-editor")).toHaveValue(/"review_score"/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"user_message"/);
@@ -144,6 +154,10 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expect(page.locator(".schema-editor")).toHaveValue(/"oneOf": \[/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"anyOf": \[/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"\$ref": "#\/\$defs\/Status"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"\$defs": \{/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"SessionState": \{\s+"type": "object"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"state_id"/);
+  await expect(page.locator(".schema-editor")).toHaveValue(/"Status": \{\s+"type": "string"\s+\}/);
   await expect(page.locator(".schema-editor")).toHaveValue(/"items": \{\s+"type": "string"\s+\}/);
   await expect(page.locator(".schema-editor")).not.toHaveValue(/"timestamp"/);
   await page.getByRole("button", { name: /^Salvar schema$/ }).click();

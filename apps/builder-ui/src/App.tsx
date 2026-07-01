@@ -5605,6 +5605,7 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
         </span>
       </div>
       <SchemaAdvancedControls schema={schema} contextLabel="schema" onUpdateObject={updateSchema} />
+      <SchemaDefinitionsEditor schema={schema} onUpdateObject={updateSchema} />
       <SchemaObjectVisualEditor
         schema={schema}
         contextLabel="schema"
@@ -5616,6 +5617,136 @@ function SchemaVisualEditor({ content, onChange }: { content: string; onChange: 
         onUpdateObject={updateSchema}
       />
     </div>
+  );
+}
+
+function SchemaDefinitionsEditor({
+  schema,
+  onUpdateObject,
+}: {
+  schema: Record<string, unknown>;
+  onUpdateObject: (mutator: (schema: Record<string, unknown>) => void) => void;
+}) {
+  const [newDefinitionName, setNewDefinitionName] = useState("");
+  const [newDefinitionType, setNewDefinitionType] = useState("object");
+  const definitions = readSchemaDefinitions(schema);
+  const trimmedName = newDefinitionName.trim();
+  const canAddDefinition =
+    isValidSchemaPropertyName(trimmedName) && !definitions.some(([name]) => name === trimmedName);
+
+  function updateDefinition(name: string, mutator: (definition: Record<string, unknown>) => void) {
+    onUpdateObject((next) => {
+      const nextDefinitions = ensureSchemaDefinitions(next);
+      const definition = isRecord(nextDefinitions[name]) ? { ...nextDefinitions[name] } : {};
+      mutator(definition);
+      nextDefinitions[name] = definition;
+    });
+  }
+
+  function addDefinition() {
+    const name = trimmedName;
+    if (!canAddDefinition) {
+      return;
+    }
+    onUpdateObject((next) => {
+      const nextDefinitions = ensureSchemaDefinitions(next);
+      nextDefinitions[name] = createDefaultSchemaProperty(newDefinitionType);
+    });
+    setNewDefinitionName("");
+    setNewDefinitionType("object");
+  }
+
+  function removeDefinition(name: string) {
+    onUpdateObject((next) => {
+      const nextDefinitions = ensureSchemaDefinitions(next);
+      delete nextDefinitions[name];
+      if (!Object.keys(nextDefinitions).length) {
+        delete next.$defs;
+      }
+    });
+  }
+
+  return (
+    <section className="schema-definitions-panel" aria-label="$defs do schema">
+      <div className="schema-nested-title">
+        <span>$defs</span>
+        <strong>
+          {definitions.length} definição{definitions.length === 1 ? "" : "ções"}
+        </strong>
+      </div>
+      {definitions.length ? (
+        <div className="schema-definition-list">
+          {definitions.map(([name, definition]) => {
+            const contextLabel = `$defs.${name}`;
+            return (
+              <details className="schema-definition-item" open key={name}>
+                <summary>
+                  <span>{name}</span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      removeDefinition(name);
+                    }}
+                    title={`Remover definição ${name}`}
+                    aria-label={`Remover definição ${name}`}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </summary>
+                <SchemaAdvancedControls
+                  schema={definition}
+                  contextLabel={contextLabel}
+                  onUpdateObject={(mutator) => updateDefinition(name, mutator)}
+                />
+                <SchemaObjectVisualEditor
+                  schema={definition}
+                  contextLabel={contextLabel}
+                  depth={1}
+                  emptyMessage={`Sem propriedades em ${contextLabel}.`}
+                  addNameLabel={`Nome da propriedade em ${contextLabel}`}
+                  addTypeLabel={`Tipo da nova propriedade em ${contextLabel}`}
+                  addButtonAriaLabel={`Adicionar propriedade em ${contextLabel}`}
+                  onUpdateObject={(mutator) => updateDefinition(name, mutator)}
+                />
+              </details>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="schema-property-empty">Nenhuma definição local.</div>
+      )}
+      <div className="schema-property-add">
+        <input
+          value={newDefinitionName}
+          onChange={(event) => setNewDefinitionName(event.target.value)}
+          placeholder="NomeDefinicao"
+          aria-label="Nova definição do schema"
+        />
+        <select
+          value={newDefinitionType}
+          onChange={(event) => setNewDefinitionType(event.target.value)}
+          aria-label="Tipo da nova definição do schema"
+        >
+          {schemaPropertyTypeOptions.map((type) => (
+            <option value={type} key={type}>
+              {type}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="command-button"
+          onClick={addDefinition}
+          disabled={!canAddDefinition}
+          aria-label="Adicionar definição ao schema"
+        >
+          <Plus size={15} aria-hidden="true" />
+          Adicionar
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -6058,6 +6189,20 @@ function ensureSchemaProperties(schema: Record<string, unknown>): Record<string,
     schema.properties = {};
   }
   return schema.properties as Record<string, unknown>;
+}
+
+function readSchemaDefinitions(schema: Record<string, unknown>): Array<[string, Record<string, unknown>]> {
+  if (!isRecord(schema.$defs)) {
+    return [];
+  }
+  return Object.entries(schema.$defs).map(([name, value]) => [name, isRecord(value) ? value : {}]);
+}
+
+function ensureSchemaDefinitions(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(schema.$defs)) {
+    schema.$defs = {};
+  }
+  return schema.$defs as Record<string, unknown>;
 }
 
 function createDefaultSchemaProperty(type: string): Record<string, unknown> {
