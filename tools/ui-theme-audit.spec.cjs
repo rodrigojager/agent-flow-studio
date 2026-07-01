@@ -87,11 +87,26 @@ test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
   await expect(page.locator(".react-flow__node.stale-node.selected")).toContainText("input_safety_check");
   await page.locator(".right-panel").getByLabel("Descrição").fill("Checagem visual de entrada.");
   await expect(page.locator(".react-flow__node.dirty-node.selected")).toContainText("input_safety_check");
+  const canvasActions = page.getByLabel("Ações da seleção do canvas");
+  await expect(canvasActions).toContainText("input_safety_check");
+  await canvasActions.getByRole("button", { name: "Focar seleção" }).click();
+  await expect(canvasActions.getByRole("button", { name: "Duplicar nó" })).toBeEnabled();
+  await canvasActions.getByRole("button", { name: "Duplicar nó" }).click();
+  await expect(page.locator(".react-flow__node.selected")).toContainText(/input_safety_check_copy/);
+  await expect(page.locator("footer[role='status']")).toContainText("duplicado como");
+  await page.getByLabel("Ações da seleção do canvas").getByRole("button", { name: "Remover seleção" }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("removido");
 
   await searchInput.fill("");
   await typeFilter.selectOption("llm_prompt");
   await expect(page.locator(".canvas-search-summary")).toHaveText("1/8");
-  await expect(page.locator(".canvas-node-chip")).toContainText("llm_step");
+  const llmStepChip = page.locator(".canvas-node-chip", { hasText: "llm_step" });
+  await expect(llmStepChip).toContainText("llm_step");
+  await llmStepChip.click();
+  await expect(page.getByLabel("Ações da seleção do canvas")).toContainText("llm_step");
+  await page.getByLabel("Ações da seleção do canvas").getByRole("button", { name: "Abrir prompt" }).click();
+  await expect(page.locator(".tabs button", { hasText: "Arquivos" })).toHaveClass(/active/);
+  await expect(page.getByLabel("Selecionar prompt")).toHaveValue("system");
 
   await page.getByRole("button", { name: "Limpar" }).click();
   await expect(searchInput).toHaveValue("");

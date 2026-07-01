@@ -559,6 +559,76 @@ button:disabled {
   background: var(--accent-soft);
 }
 
+.canvas-selection-actions {
+  position: absolute;
+  z-index: 7;
+  right: 50%;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  max-width: min(760px, calc(100% - 160px));
+  min-height: 42px;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-bg) 94%, transparent);
+  box-shadow: var(--shadow);
+  transform: translateX(50%);
+}
+
+.canvas-selection-label {
+  min-width: 90px;
+  max-width: 190px;
+  overflow: hidden;
+  padding: 0 8px;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.canvas-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 30px;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.canvas-action-button svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.canvas-action-button:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.canvas-action-button.danger {
+  color: var(--danger);
+}
+
+.canvas-action-button.danger svg {
+  color: var(--danger);
+}
+
+.canvas-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .react-flow__node.flow-node {
   min-width: 164px;
   border: 1px solid #bac7c1;
@@ -3120,6 +3190,24 @@ button:disabled {
   .canvas-node-empty {
     min-width: 116px;
     max-width: 150px;
+  }
+
+  .canvas-selection-actions {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    max-width: none;
+    overflow-x: auto;
+    transform: none;
+  }
+
+  .canvas-selection-label {
+    flex: 0 0 auto;
+    max-width: 138px;
+  }
+
+  .canvas-action-button {
+    flex: 0 0 auto;
   }
 
   .node-context-toolbar {

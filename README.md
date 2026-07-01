@@ -27,6 +27,7 @@ O fluxo principal foi desenhado para funcionar sem LangSmith Cloud, sem cobranç
 ### Builder Visual
 
 - Canvas com React Flow para editar agentes.
+- Finder e barra contextual no canvas para localizar/focar nós, duplicar/remover seleção e abrir prompt/schema vinculados sem sair do fluxo visual.
 - Criação, listagem, leitura, salvamento e validação de flows.
 - Edição visual de propriedades de nós, adapters LLM, modelos e variáveis de ambiente.
 - Criação e edição de prompts Markdown e schemas JSON referenciados pelo flow.
@@ -150,7 +151,7 @@ A interface visual deve acelerar o caso comum, mas sempre manter escape hatches 
 ### Próximo Ciclo
 
 - Ampliar auditoria visual automatizada para estados gerais de erro/loading em painéis específicos além do status global e do fluxo Docker.
-- Melhorar ergonomia do canvas com grupos, estado dirty/stale e controles contextuais.
+- Melhorar ergonomia avançada do canvas com comandos de organização, edição em lote e fluxos de debug guiados.
 - Evoluir edição visual de prompts, schemas e metadados para correção assistida avançada e governança/curadoria de padrões reutilizáveis.
 - Refinar replay por pins e restauração de estado com UX mais guiada.
 

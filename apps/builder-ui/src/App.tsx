@@ -30,6 +30,7 @@ import {
   CheckCircle2,
   CircleDot,
   Code2,
+  Copy,
   Download,
   FileText,
   FileJson,
@@ -1336,6 +1337,33 @@ export default function App() {
     return draftFlow.edges[selectedEdgeIndex] ?? null;
   }, [draftFlow, selectedEdgeIndex]);
 
+  const selectedEditableNode = selectedNode && !isVirtualNodeId(selectedNode.id) ? selectedNode : null;
+  const selectedCanvasNodeIds = useMemo(
+    () => uniqueTextList([...selectedBlockNodeIds, selectedEditableNode?.id ?? ""]).filter((id) => !isVirtualNodeId(id)),
+    [selectedBlockNodeIds, selectedEditableNode],
+  );
+  const selectedCanvasEdgeIndexes = useMemo(
+    () => uniqueNumberList([
+      ...selectedBlockEdgeIds.map(edgeIndexFromId),
+      selectedEdgeIndex,
+    ].filter((index) => index >= 0)),
+    [selectedBlockEdgeIds, selectedEdgeIndex],
+  );
+  const selectedCanvasActionCount = selectedCanvasNodeIds.length + selectedCanvasEdgeIndexes.length;
+  const selectedCanvasSummary = selectedCanvasNodeIds.length > 1
+    ? `${selectedCanvasNodeIds.length} nós selecionados`
+    : selectedCanvasNodeIds.length === 1
+      ? selectedCanvasNodeIds[0]
+      : selectedEdge
+        ? `${selectedEdge.from} -> ${selectedEdge.to}`
+        : selectedNode?.id ?? "";
+  const selectedNodePromptExists = Boolean(
+    selectedEditableNode?.promptId && draftFlow?.prompts.some((prompt) => prompt.id === selectedEditableNode.promptId),
+  );
+  const selectedNodeSchemaExists = Boolean(
+    selectedEditableNode?.outputSchema && draftFlow?.schemas.some((schema) => schema.id === selectedEditableNode.outputSchema),
+  );
+
   const toggleCanvasGroup = useCallback(
     (groupId: string) => {
       const group = canvasNodeGroups.find((item) => item.id === groupId);
@@ -1791,6 +1819,120 @@ export default function App() {
     }));
     setSelectedEdgeId("");
     setStatus({ kind: "ok", message: "Aresta removida." });
+  }
+
+  function focusCanvasSelection() {
+    if (!draftFlow) {
+      return;
+    }
+    const edgeNodeIds = selectedCanvasEdgeIndexes.flatMap((edgeIndex) => {
+      const edge = draftFlow.edges[edgeIndex];
+      return edge ? [edge.from, edge.to] : [];
+    });
+    const focusNodeIds = uniqueTextList([
+      ...selectedCanvasNodeIds,
+      ...(selectedNode?.id ? [selectedNode.id] : []),
+      ...edgeNodeIds,
+    ]);
+    if (!focusNodeIds.length) {
+      return;
+    }
+    const groupIds = uniqueTextList(focusNodeIds.map((nodeId) => canvasGroupByNodeId.get(nodeId) ?? ""));
+    if (groupIds.length) {
+      setCollapsedCanvasGroupIds((current) => {
+        const next = new Set(current);
+        groupIds.forEach((groupId) => next.delete(groupId));
+        return next;
+      });
+    }
+    window.requestAnimationFrame(() => {
+      void reactFlowRef.current?.fitView({
+        nodes: focusNodeIds.map((id) => ({ id })),
+        duration: 220,
+        padding: 0.35,
+        maxZoom: 1.08,
+      });
+    });
+  }
+
+  function handleDuplicateSelectedNode() {
+    if (!draftFlow || !selectedEditableNode) {
+      return;
+    }
+    const nextId = uniqueNodeId(draftFlow, `${selectedEditableNode.id}_copy`);
+    const nextNode: FlowNode = {
+      ...JSON.parse(JSON.stringify(selectedEditableNode)),
+      id: nextId,
+      description: selectedEditableNode.description ? `${selectedEditableNode.description} (cópia)` : selectedEditableNode.description,
+      position: {
+        x: (selectedEditableNode.position?.x ?? 0) + 56,
+        y: (selectedEditableNode.position?.y ?? 0) + 56,
+      },
+    };
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: [...flow.nodes, nextNode],
+    }));
+    setSelectedNodeId(nextId);
+    setSelectedEdgeId("");
+    setSelectedBlockNodeIds([nextId]);
+    setSelectedBlockEdgeIds([]);
+    setInspectorTab("properties");
+    setStatus({ kind: "ok", message: `Nó ${selectedEditableNode.id} duplicado como ${nextId}.` });
+    window.requestAnimationFrame(() => {
+      void reactFlowRef.current?.fitView({
+        nodes: [{ id: nextId }],
+        duration: 220,
+        padding: 0.45,
+        maxZoom: 1.08,
+      });
+    });
+  }
+
+  function handleOpenSelectedNodePrompt() {
+    if (!selectedEditableNode?.promptId) {
+      return;
+    }
+    setSelectedPromptId(selectedEditableNode.promptId);
+    setInspectorTab("files");
+    setStatus({ kind: "ok", message: `Prompt ${selectedEditableNode.promptId} aberto.` });
+  }
+
+  function handleOpenSelectedNodeSchema() {
+    if (!selectedEditableNode?.outputSchema) {
+      return;
+    }
+    setSelectedSchemaId(selectedEditableNode.outputSchema);
+    setInspectorTab("files");
+    setStatus({ kind: "ok", message: `Schema ${selectedEditableNode.outputSchema} aberto.` });
+  }
+
+  function handleDeleteCanvasSelection() {
+    if (!draftFlow) {
+      return;
+    }
+    const nodeIds = selectedCanvasNodeIds;
+    const edgeIndexes = new Set(selectedCanvasEdgeIndexes);
+    if (!nodeIds.length && !edgeIndexes.size) {
+      return;
+    }
+    updateDraft((flow) => ({
+      ...flow,
+      nodes: flow.nodes.filter((node) => !nodeIds.includes(node.id)),
+      edges: flow.edges.filter((edge, index) =>
+        !edgeIndexes.has(index) && !nodeIds.includes(edge.from) && !nodeIds.includes(edge.to),
+      ),
+    }));
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
+    setSelectedBlockNodeIds([]);
+    setSelectedBlockEdgeIds([]);
+    setStatus({
+      kind: "ok",
+      message: nodeIds.length
+        ? `${nodeIds.length === 1 ? "Nó" : "Nós"} ${nodeIds.join(", ")} removido${nodeIds.length === 1 ? "" : "s"}.`
+        : `${edgeIndexes.size === 1 ? "Aresta removida." : `${edgeIndexes.size} arestas removidas.`}`,
+    });
   }
 
   function updateEdgeField(edgeIndex: number, key: keyof FlowEdge, value: string) {
@@ -4241,6 +4383,56 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               )}
             </div>
           </div>
+          {selectedNode || selectedCanvasActionCount ? (
+            <div className="canvas-selection-actions" aria-label="Ações da seleção do canvas">
+              <span className="canvas-selection-label" title={selectedCanvasSummary}>
+                {selectedCanvasSummary}
+              </span>
+              <button type="button" className="canvas-action-button" onClick={focusCanvasSelection}>
+                <Search size={14} aria-hidden="true" />
+                <span>Focar seleção</span>
+              </button>
+              <button
+                type="button"
+                className="canvas-action-button"
+                onClick={handleDuplicateSelectedNode}
+                disabled={!selectedEditableNode}
+                title={selectedEditableNode ? "Duplicar nó selecionado" : "Selecione um nó editável"}
+              >
+                <Copy size={14} aria-hidden="true" />
+                <span>Duplicar nó</span>
+              </button>
+              <button
+                type="button"
+                className="canvas-action-button"
+                onClick={handleOpenSelectedNodePrompt}
+                disabled={!selectedNodePromptExists}
+                title={selectedEditableNode?.promptId ? `Abrir prompt ${selectedEditableNode.promptId}` : "Nó sem prompt vinculado"}
+              >
+                <FileText size={14} aria-hidden="true" />
+                <span>Abrir prompt</span>
+              </button>
+              <button
+                type="button"
+                className="canvas-action-button"
+                onClick={handleOpenSelectedNodeSchema}
+                disabled={!selectedNodeSchemaExists}
+                title={selectedEditableNode?.outputSchema ? `Abrir schema ${selectedEditableNode.outputSchema}` : "Nó sem schema vinculado"}
+              >
+                <FileJson size={14} aria-hidden="true" />
+                <span>Abrir schema</span>
+              </button>
+              <button
+                type="button"
+                className="canvas-action-button danger"
+                onClick={handleDeleteCanvasSelection}
+                disabled={!selectedCanvasActionCount}
+              >
+                <Trash2 size={14} aria-hidden="true" />
+                <span>Remover seleção</span>
+              </button>
+            </div>
+          ) : null}
           <ReactFlow
             nodes={graph.nodes}
             edges={graph.edges}
@@ -5402,7 +5594,12 @@ function AssetsPanel({
             <Trash2 size={16} aria-hidden="true" />
           </button>
         </div>
-        <select className="asset-select" value={selectedPromptId} onChange={(event) => onPromptSelect(event.target.value)}>
+        <select
+          className="asset-select"
+          value={selectedPromptId}
+          aria-label="Selecionar prompt"
+          onChange={(event) => onPromptSelect(event.target.value)}
+        >
           {flow.prompts.map((prompt) => (
             <option value={prompt.id} key={prompt.id}>
               {prompt.id}
@@ -5505,7 +5702,12 @@ function AssetsPanel({
             <Trash2 size={16} aria-hidden="true" />
           </button>
         </div>
-        <select className="asset-select" value={selectedSchemaId} onChange={(event) => onSchemaSelect(event.target.value)}>
+        <select
+          className="asset-select"
+          value={selectedSchemaId}
+          aria-label="Selecionar schema"
+          onChange={(event) => onSchemaSelect(event.target.value)}
+        >
           {flow.schemas.map((schema) => (
             <option value={schema.id} key={schema.id}>
               {schema.id}
@@ -14440,6 +14642,10 @@ function localCatalogId(flowId: string, assetId: string): string {
 
 function uniqueTextList(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right));
+}
+
+function uniqueNumberList(values: number[]): number[] {
+  return Array.from(new Set(values)).sort((left, right) => left - right);
 }
 
 function manifestValidationMessage(result: RuntimeManifestValidationResult): string {
