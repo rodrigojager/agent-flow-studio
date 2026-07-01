@@ -15,6 +15,7 @@ import {
   type OnEdgesDelete,
   type OnNodeDrag,
   type OnNodesDelete,
+  type OnSelectionChangeFunc,
   type OnReconnect,
   type ReactFlowInstance,
 } from "@xyflow/react";
@@ -582,6 +583,8 @@ export default function App() {
   const [isDirty, setIsDirty] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
+  const [selectedBlockNodeIds, setSelectedBlockNodeIds] = useState<string[]>([]);
+  const [selectedBlockEdgeIds, setSelectedBlockEdgeIds] = useState<string[]>([]);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [nodeSearchQuery, setNodeSearchQuery] = useState("");
   const [nodeTypeFilter, setNodeTypeFilter] = useState("");
@@ -1263,11 +1266,20 @@ export default function App() {
     });
   }, [canvasNodeGroups]);
 
+  const selectedBlockNodeIdSet = useMemo(() => new Set(selectedBlockNodeIds), [selectedBlockNodeIds]);
+  const selectedBlockEdgeIdSet = useMemo(() => new Set(selectedBlockEdgeIds), [selectedBlockEdgeIds]);
+  const selectedCatalogBlock = useMemo(
+    () => (draftFlow ? catalogBlockFromNodeIds(draftFlow, selectedBlockNodeIds, { includeAssetRefs: true }) : { nodes: [], edges: [] }),
+    [draftFlow, selectedBlockNodeIds],
+  );
+
   const graph = useMemo(
     () => toReactFlowGraph(
       draftFlow ?? undefined,
       selectedNodeId,
       selectedEdgeId,
+      selectedBlockNodeIdSet,
+      selectedBlockEdgeIdSet,
       runtimeEventsData,
       activeStudioNodeId,
       studioRunCausalContext,
@@ -1287,6 +1299,8 @@ export default function App() {
       staleTopology,
       runtimeEventsData,
       selectedEdgeId,
+      selectedBlockEdgeIdSet,
+      selectedBlockNodeIdSet,
       selectedNodeId,
       studioRunCausalContext,
     ],
@@ -1322,9 +1336,12 @@ export default function App() {
       if (willCollapse && group) {
         if (selectedNodeId && group.nodeIds.includes(selectedNodeId)) {
           setSelectedNodeId("");
+          setSelectedBlockNodeIds([]);
+          setSelectedBlockEdgeIds([]);
         }
         if (selectedEdge && (group.nodeIds.includes(selectedEdge.from) || group.nodeIds.includes(selectedEdge.to))) {
           setSelectedEdgeId("");
+          setSelectedBlockEdgeIds([]);
         }
       }
       setCollapsedCanvasGroupIds((current) => {
@@ -1352,6 +1369,8 @@ export default function App() {
       }
       setSelectedNodeId(nodeId);
       setSelectedEdgeId("");
+      setSelectedBlockNodeIds(isVirtualNodeId(nodeId) ? [] : [nodeId]);
+      setSelectedBlockEdgeIds([]);
       if (inspectorTab === "sandbox") {
         setStudioTimelineNodeFilter(nodeId);
         const latestNodeEvent = runtimeEventsData.filter((event) => event.node === nodeId).at(-1);
@@ -1363,15 +1382,32 @@ export default function App() {
       }
       if (focusViewport) {
         window.requestAnimationFrame(() => {
-          void reactFlowRef.current?.fitView({ nodes: [{ id: nodeId }], duration: 220, padding: 1.2, maxZoom: 1.05 });
+          const connectedNodeIds = draftFlow?.edges.flatMap((edge) => (
+            edge.from === nodeId ? [edge.to] : edge.to === nodeId ? [edge.from] : []
+          )) ?? [];
+          const focusNodeIds = uniqueTextList([nodeId, ...connectedNodeIds]);
+          void reactFlowRef.current?.fitView({
+            nodes: focusNodeIds.map((id) => ({ id })),
+            duration: 220,
+            padding: 0.35,
+            maxZoom: 1.05,
+          });
         });
       }
     },
-    [canvasGroupByNodeId, collapsedCanvasGroupIds, inspectorTab, runtimeEventsData],
+    [canvasGroupByNodeId, collapsedCanvasGroupIds, draftFlow, inspectorTab, runtimeEventsData],
   );
 
   const onNodeClick: NodeMouseHandler = useCallback(
-    (_event, node) => {
+    (event, node) => {
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        setSelectedNodeId(node.id);
+        setSelectedEdgeId("");
+        setSelectedBlockNodeIds((current) => uniqueTextList([...current, node.id]).filter((id) => !isVirtualNodeId(id)));
+        setSelectedBlockEdgeIds([]);
+        setInspectorTab("properties");
+        return;
+      }
       selectCanvasNode(node.id);
     },
     [selectCanvasNode],
@@ -1380,7 +1416,20 @@ export default function App() {
   const onEdgeClick: EdgeMouseHandler = useCallback((_event, edge) => {
     setSelectedNodeId("");
     setSelectedEdgeId(edge.id);
+    setSelectedBlockNodeIds([]);
+    setSelectedBlockEdgeIds([edge.id]);
     setInspectorTab("properties");
+  }, []);
+
+  const handleSelectionChange: OnSelectionChangeFunc = useCallback(({ nodes, edges }) => {
+    const nextNodeIds = nodes.map((node) => node.id).filter((id) => !isVirtualNodeId(id));
+    setSelectedBlockNodeIds((current) => {
+      if (nextNodeIds.length === 1 && current.length > 1 && current.includes(nextNodeIds[0])) {
+        return current;
+      }
+      return nextNodeIds;
+    });
+    setSelectedBlockEdgeIds(edges.map((edge) => edge.id));
   }, []);
 
   function updateDraft(mutator: (flow: AgentFlow) => AgentFlow) {
@@ -2338,6 +2387,41 @@ export default function App() {
     }
   }
 
+  async function handleSaveSelectedBlockAsToolToCatalog() {
+    if (!draftFlow || selectedCatalogBlock.nodes.length < 2) {
+      return;
+    }
+    const block = catalogBlockFromNodeIds(draftFlow, selectedBlockNodeIds, { includeAssetRefs: false });
+    if (block.nodes.length < 2) {
+      return;
+    }
+    const blockId = block.nodes.map((node) => node.id).join("-");
+    setStatus({ kind: "busy", message: `Salvando bloco de ${block.nodes.length} nós como tool composta.` });
+    try {
+      const result = await saveLocalCatalogItem({
+        id: localCatalogId(draftFlow.id, `${blockId}-tool-block`),
+        kind: "tool",
+        name: `${block.nodes[0].id} block`,
+        description: `Tool composta reutilizável com ${block.nodes.length} nós do flow ${draftFlow.name}.`,
+        tags: uniqueTextList(["tool", "bundle", "block", "flow", draftFlow.id, ...block.nodes.map((node) => node.type)]),
+        content: JSON.stringify(
+          {
+            format: "agent-flow-builder.tool-bundle.v1",
+            nodes: block.nodes,
+            edges: block.edges,
+          },
+          null,
+          2,
+        ),
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Bloco salvo como tool composta no catálogo local.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   async function handleSaveSelectedNodeAsSkillToCatalog() {
     if (!selectedFlowId || !draftFlow || !selectedNode || selectedNode.id === "start" || selectedNode.id === "end") {
       return;
@@ -2375,6 +2459,54 @@ export default function App() {
       setLocalCatalog(result.catalog);
       setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
       setStatus({ kind: "ok", message: `Skill do nó ${selectedNode.id} salva no catálogo local.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleSaveSelectedBlockAsSkillToCatalog() {
+    if (!selectedFlowId || !draftFlow || selectedCatalogBlock.nodes.length < 2) {
+      return;
+    }
+    setStatus({ kind: "busy", message: `Salvando bloco de ${selectedCatalogBlock.nodes.length} nós como skill composta.` });
+    try {
+      await saveCurrentWorkspaceIfNeeded();
+      const block = catalogBlockFromNodeIds(draftFlow, selectedBlockNodeIds, { includeAssetRefs: true });
+      const promptIds = uniqueTextList(block.nodes.map((node) => node.promptId ?? ""));
+      const schemaIds = uniqueTextList(block.nodes.map((node) => node.outputSchema ?? ""));
+      const prompts = await Promise.all(promptIds.map((promptId) => catalogPromptAssetForNode(selectedFlowId, draftFlow, promptId)));
+      const schemas = await Promise.all(schemaIds.map((schemaId) => catalogSchemaAssetForNode(selectedFlowId, draftFlow, schemaId)));
+      const blockId = block.nodes.map((node) => node.id).join("-");
+      const result = await saveLocalCatalogItem({
+        id: localCatalogId(draftFlow.id, `${blockId}-skill-block`),
+        kind: "skill",
+        name: `${block.nodes[0].id} skill block`,
+        description: `Skill composta reutilizável com ${block.nodes.length} nós do flow ${draftFlow.name}.`,
+        tags: uniqueTextList([
+          "skill",
+          "bundle",
+          "block",
+          "flow",
+          draftFlow.id,
+          ...block.nodes.map((node) => node.type),
+          ...promptIds,
+          ...schemaIds,
+        ]),
+        content: JSON.stringify(
+          {
+            format: "agent-flow-builder.skill.v1",
+            prompts,
+            schemas,
+            nodes: block.nodes,
+            edges: block.edges,
+          },
+          null,
+          2,
+        ),
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Bloco salvo como skill composta no catálogo local.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
@@ -4054,10 +4186,13 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
             onPaneClick={() => {
               setSelectedNodeId("");
               setSelectedEdgeId("");
+              setSelectedBlockNodeIds([]);
+              setSelectedBlockEdgeIds([]);
               if (inspectorTab === "sandbox") {
                 setStudioTimelineNodeFilter("");
               }
             }}
+            onSelectionChange={handleSelectionChange}
             onConnect={handleConnect}
             onReconnect={handleReconnect}
             onNodesDelete={handleNodesDelete}
@@ -4205,6 +4340,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
             <CatalogPanel
               flow={draftFlow}
               selectedNodeId={selectedNodeId}
+              selectedBlockNodeCount={selectedCatalogBlock.nodes.length}
+              selectedBlockEdgeCount={selectedCatalogBlock.edges.length}
               selectedPromptId={selectedPromptId}
               selectedSchemaId={selectedSchemaId}
               catalog={localCatalog}
@@ -4216,7 +4353,9 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onSavePrompt={handleSaveSelectedPromptToCatalog}
               onSaveSchema={handleSaveSelectedSchemaToCatalog}
               onSaveTool={handleSaveSelectedNodeAsToolToCatalog}
+              onSaveToolBlock={handleSaveSelectedBlockAsToolToCatalog}
               onSaveSkill={handleSaveSelectedNodeAsSkillToCatalog}
+              onSaveSkillBlock={handleSaveSelectedBlockAsSkillToCatalog}
             />
           ) : inspectorTab === "validation" ? (
             <ValidationPanel
@@ -5838,6 +5977,8 @@ function PanelNotice({ state }: { state: PanelLoadState }) {
 function CatalogPanel({
   flow,
   selectedNodeId,
+  selectedBlockNodeCount,
+  selectedBlockEdgeCount,
   selectedPromptId,
   selectedSchemaId,
   catalog,
@@ -5849,10 +5990,14 @@ function CatalogPanel({
   onSavePrompt,
   onSaveSchema,
   onSaveTool,
+  onSaveToolBlock,
   onSaveSkill,
+  onSaveSkillBlock,
 }: {
   flow: AgentFlow | null;
   selectedNodeId: string;
+  selectedBlockNodeCount: number;
+  selectedBlockEdgeCount: number;
   selectedPromptId: string;
   selectedSchemaId: string;
   catalog: LocalCatalog | null;
@@ -5864,7 +6009,9 @@ function CatalogPanel({
   onSavePrompt: () => void;
   onSaveSchema: () => void;
   onSaveTool: () => void;
+  onSaveToolBlock: () => void;
   onSaveSkill: () => void;
+  onSaveSkillBlock: () => void;
 }) {
   const [kindFilter, setKindFilter] = useState<LocalCatalogItemKind | "">("");
   const [sourceFilter, setSourceFilter] = useState<LocalCatalogItem["source"] | "">("");
@@ -6014,11 +6161,31 @@ function CatalogPanel({
           <button
             type="button"
             className="command-button"
+            onClick={onSaveToolBlock}
+            disabled={selectedBlockNodeCount < 2}
+            title={`${selectedBlockNodeCount} nó(s), ${selectedBlockEdgeCount} aresta(s) internas`}
+          >
+            <Save size={16} aria-hidden="true" />
+            Salvar bloco tool
+          </button>
+          <button
+            type="button"
+            className="command-button"
             onClick={onSaveSkill}
             disabled={!selectedNodeId || selectedNodeId === "start" || selectedNodeId === "end"}
           >
             <Save size={16} aria-hidden="true" />
             Salvar skill atual
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={onSaveSkillBlock}
+            disabled={selectedBlockNodeCount < 2}
+            title={`${selectedBlockNodeCount} nó(s), ${selectedBlockEdgeCount} aresta(s) internas`}
+          >
+            <Save size={16} aria-hidden="true" />
+            Salvar bloco skill
           </button>
         </div>
       </section>
@@ -10480,6 +10647,8 @@ function toReactFlowGraph(
   flow: AgentFlow | undefined,
   selectedNodeId: string,
   selectedEdgeId: string,
+  selectedBlockNodeIds: Set<string>,
+  selectedBlockEdgeIds: Set<string>,
   events: EventView[],
   activeStudioNodeId: string,
   causalAnalysis: StudioRunCausalAnalysis,
@@ -10526,7 +10695,7 @@ function toReactFlowGraph(
         label: isVirtual ? id.toUpperCase() : id,
         sublabel: flowNode?.type ?? "graph",
       },
-      selected: selectedNodeId === id,
+      selected: selectedNodeId === id || selectedBlockNodeIds.has(id),
       className: `flow-node ${isVirtual ? "virtual" : flowNode?.type ?? ""} ${
         nodeState?.status ? `status-${nodeState.status}` : ""
       } ${nodeCausalClass} ${isStudioActive ? "studio-active" : ""} ${nodeSearchClass} ${dirtyClass} ${staleClass}`.trim(),
@@ -10571,7 +10740,7 @@ function toReactFlowGraph(
       target: edge.to,
       hidden,
       label: edge.condition,
-      selected: selectedEdgeId === currentEdgeId,
+      selected: selectedEdgeId === currentEdgeId || selectedBlockEdgeIds.has(currentEdgeId),
       markerEnd: { type: MarkerType.ArrowClosed },
       className: `${edgeClass} ${edgeExecutionClass} ${causalClass} ${edgeSearchClass} ${dirtyEdgeClass} ${staleEdgeClass}`.trim(),
     };
@@ -11818,6 +11987,77 @@ function catalogNodePatchFromNode(
     patch[key] = value;
   }
   return patch;
+}
+
+function catalogBlockFromNodeIds(
+  flow: AgentFlow,
+  nodeIds: string[],
+  options: { includeAssetRefs: boolean },
+): { nodes: FlowNode[]; edges: FlowEdge[] } {
+  const selectedIds = new Set(nodeIds.filter((id) => flow.nodes.some((node) => node.id === id)));
+  const selectedNodes = flow.nodes.filter((node) => selectedIds.has(node.id));
+  if (!selectedNodes.length) {
+    return { nodes: [], edges: [] };
+  }
+  const internalEdges = flow.edges.filter((edge) => selectedIds.has(edge.from) && selectedIds.has(edge.to));
+  const sortedNodes = sortCatalogBlockNodes(selectedNodes, internalEdges);
+  const minX = Math.min(...sortedNodes.map((node) => node.position?.x ?? 0));
+  const minY = Math.min(...sortedNodes.map((node) => node.position?.y ?? 0));
+  const nodes = sortedNodes.map((node) => {
+    const patch = catalogNodePatchFromNode(node, options);
+    return {
+      id: node.id,
+      ...patch,
+      position: {
+        x: (node.position?.x ?? 0) - minX,
+        y: (node.position?.y ?? 0) - minY,
+      },
+    } as FlowNode;
+  });
+  return {
+    nodes,
+    edges: internalEdges.map((edge) => ({ ...edge })),
+  };
+}
+
+function sortCatalogBlockNodes(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const incoming = new Map(nodes.map((node) => [node.id, 0]));
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!byId.has(edge.from) || !byId.has(edge.to)) {
+      continue;
+    }
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
+  }
+  const positionCompare = (left: FlowNode, right: FlowNode) =>
+    (left.position?.x ?? 0) - (right.position?.x ?? 0) ||
+    (left.position?.y ?? 0) - (right.position?.y ?? 0) ||
+    left.id.localeCompare(right.id);
+  const queue = nodes.filter((node) => (incoming.get(node.id) ?? 0) === 0).sort(positionCompare);
+  const sorted: FlowNode[] = [];
+  const seen = new Set<string>();
+  while (queue.length) {
+    const node = queue.shift()!;
+    if (seen.has(node.id)) {
+      continue;
+    }
+    seen.add(node.id);
+    sorted.push(node);
+    for (const targetId of outgoing.get(node.id) ?? []) {
+      incoming.set(targetId, (incoming.get(targetId) ?? 0) - 1);
+      if ((incoming.get(targetId) ?? 0) === 0) {
+        const target = byId.get(targetId);
+        if (target) {
+          queue.push(target);
+          queue.sort(positionCompare);
+        }
+      }
+    }
+  }
+  const remaining = nodes.filter((node) => !seen.has(node.id)).sort(positionCompare);
+  return [...sorted, ...remaining];
 }
 
 function localCatalogId(flowId: string, assetId: string): string {

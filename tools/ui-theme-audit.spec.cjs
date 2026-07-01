@@ -85,7 +85,7 @@ test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
   await expect(inputSafetyChip).toHaveClass(/selected/);
   await expect(page.locator(".react-flow__node.selected")).toContainText("input_safety_check");
   await expect(page.locator(".react-flow__node.stale-node.selected")).toContainText("input_safety_check");
-  await expect(page.locator(".react-flow__edge.stale-edge")).not.toHaveCount(0);
+  await expect(page.locator(".react-flow__edge.stale-edge").first()).toBeAttached();
   await page.locator(".right-panel").getByLabel("Descrição").fill("Checagem visual de entrada.");
   await expect(page.locator(".react-flow__node.dirty-node.selected")).toContainText("input_safety_check");
 
@@ -225,6 +225,18 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toBeVisible();
   await expect(page.locator(".catalog-card", { hasText: "deterministic_gate (code)" })).toContainText("rev. 1");
 
+  await page.locator(".react-flow__node", { hasText: "output_safety_check" }).click();
+  await page.keyboard.down("Shift");
+  await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
+  await page.keyboard.up("Shift");
+  await openInspectorTab(page, "Catálogo");
+  await page.getByRole("button", { name: /^Salvar bloco tool$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Bloco salvo como tool composta", { timeout: 10_000 });
+  await expect(page.locator(".catalog-card", { hasText: "output_safety_check block" })).toBeVisible();
+  await page.getByRole("button", { name: /^Salvar bloco skill$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Bloco salvo como skill composta", { timeout: 10_000 });
+  await expect(page.locator(".catalog-card", { hasText: "output_safety_check skill block" })).toBeVisible();
+
   await page.getByRole("button", { name: /^Salvar prompt atual$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("salvo no catálogo local", { timeout: 10_000 });
   await expect(page.locator(".catalog-card", { hasText: "Prompt principal para conduzir" })).toBeVisible();
@@ -266,6 +278,12 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(labeledSelect(inspector, "Schema")).toHaveValue("question_list");
 
   await openInspectorTab(page, "Catálogo");
+  await page.getByRole("button", { name: /^Salvar skill atual$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Skill do nó llm_step salva no catálogo local", {
+    timeout: 10_000,
+  });
+  await expect(page.locator(".catalog-card", { hasText: "llm_step skill" })).toBeVisible();
+
   const contextReviewSkill = page.locator(".catalog-card", { hasText: "Skill composta de revisão com contexto" });
   await expect(contextReviewSkill).toBeVisible();
   await contextReviewSkill.getByRole("button", { name: /^Anexar ao nó$/ }).click();
@@ -275,22 +293,21 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.locator(".react-flow__node", { hasText: "context-review-composite-skill-extract_context" })).toHaveCount(1);
   await expect(page.locator(".react-flow__node", { hasText: "context-review-composite-skill-review_context" })).toHaveCount(1);
 
-  await page.locator(".react-flow__node", { hasText: "llm_step" }).click();
   await openInspectorTab(page, "Catálogo");
-  await page.getByRole("button", { name: /^Salvar skill atual$/ }).click();
-  await expect(page.locator("footer[role='status']")).toContainText("Skill do nó llm_step salva no catálogo local", {
-    timeout: 10_000,
-  });
-  await expect(page.locator(".catalog-card", { hasText: "llm_step skill" })).toBeVisible();
-
   const questionAgent = page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" });
   page.once("dialog", (dialog) => dialog.accept("catalog-template-ui-agent"));
   await questionAgent.getByRole("button", { name: /^Criar flow$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Flow catalog-template-ui-agent criado a partir", {
     timeout: 10_000,
   });
-  await expect(page.locator(".react-flow__node", { hasText: "generate_questions" })).toBeVisible();
-  await expect(page.locator(".react-flow__node", { hasText: "retrieve_context" })).toBeVisible();
+  for (const groupName of ["LLM", "RAG"]) {
+    const expandGroup = page.getByRole("button", { name: `Expandir grupo ${groupName}` });
+    if (await expandGroup.count()) {
+      await expandGroup.click();
+    }
+  }
+  await expect(page.locator(".canvas-node-chip", { hasText: "generate_questions" })).toBeVisible();
+  await expect(page.locator(".canvas-node-chip", { hasText: "retrieve_context" })).toBeVisible();
   await page.locator("label.flow-select select").selectOption("reference-interview");
   await expect(page.locator(".react-flow__node", { hasText: "deterministic_gate" })).toBeVisible();
 
