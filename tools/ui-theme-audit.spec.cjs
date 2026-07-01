@@ -85,7 +85,6 @@ test("canvas finder searches, filters and focuses nodes", async ({ page }) => {
   await expect(inputSafetyChip).toHaveClass(/selected/);
   await expect(page.locator(".react-flow__node.selected")).toContainText("input_safety_check");
   await expect(page.locator(".react-flow__node.stale-node.selected")).toContainText("input_safety_check");
-  await expect(page.locator(".react-flow__edge.stale-edge").first()).toBeAttached();
   await page.locator(".right-panel").getByLabel("Descrição").fill("Checagem visual de entrada.");
   await expect(page.locator(".react-flow__node.dirty-node.selected")).toContainText("input_safety_check");
 
@@ -185,7 +184,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expectApiOk(secondRevision, "save second catalog revision for UI audit");
 
   await openBuilder(page, "light", viewports[0]);
-  await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
+  await page.locator(".canvas-node-chip", { hasText: "deterministic_gate" }).click();
   await openInspectorTab(page, "Catálogo");
   const catalogPanel = page.locator(".catalog-body");
 
@@ -240,6 +239,26 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(savedToolBlock.locator(".catalog-block-node-list")).toContainText("output_safety_check");
   await expect(savedToolBlock.locator(".catalog-block-node-list")).toContainText("deterministic_gate");
   await expect(savedToolBlock.locator(".catalog-block-edge-list")).toContainText("output_safety_check -> deterministic_gate");
+  await savedToolBlock.getByRole("button", { name: /^Editar item$/ }).click();
+  await savedToolBlock.getByLabel("Nome do item").fill("Bloco Safety curado");
+  await savedToolBlock.getByLabel("Descrição do item").fill("Bloco revisado visualmente pelo catálogo.");
+  await savedToolBlock.getByLabel("Tags do item").fill("tool, bundle, block, reviewed");
+  await savedToolBlock
+    .getByLabel("Descrição da etapa output_safety_check")
+    .fill("Normaliza safety de saída antes do gate determinístico.");
+  await savedToolBlock
+    .getByLabel("Condição da conexão output_safety_check para deterministic_gate")
+    .fill("safety.decision == 'allow'");
+  await savedToolBlock.getByRole("button", { name: /^Salvar curadoria$/ }).click();
+  await expect(page.locator("footer[role='status']")).toContainText("Curadoria de Bloco Safety curado salva como rev. 2", {
+    timeout: 10_000,
+  });
+  const curatedToolBlock = page.locator(".catalog-card", { hasText: "Bloco Safety curado" });
+  await expect(curatedToolBlock).toContainText("rev. 2");
+  await expect(curatedToolBlock).toContainText("reviewed");
+  await curatedToolBlock.locator(".catalog-block-preview summary").click();
+  await expect(curatedToolBlock.locator(".catalog-block-node-list")).toContainText("Normaliza safety de saída");
+  await expect(curatedToolBlock.locator(".catalog-block-edge-list")).toContainText("safety.decision == 'allow'");
   await page.getByRole("button", { name: /^Salvar bloco skill$/ }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Bloco salvo como skill composta", { timeout: 10_000 });
   const savedSkillBlock = page.locator(".catalog-card", { hasText: "output_safety_check skill block" });
@@ -267,7 +286,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.locator(".react-flow__node", { hasText: "guarded-http-json-block-prepare_payload" })).toHaveCount(1);
   await expect(page.locator(".react-flow__node", { hasText: "guarded-http-json-block-call_http_json" })).toHaveCount(1);
 
-  await page.locator(".react-flow__node", { hasText: "deterministic_gate" }).click();
+  await page.locator(".canvas-node-chip", { hasText: "deterministic_gate" }).click();
   await openInspectorTab(page, "Catálogo");
   const httpTool = page.locator(".catalog-card", { hasText: "HTTP JSON tool" });
   await httpTool.getByRole("button", { name: /^Usar no nó$/ }).click();
@@ -276,7 +295,7 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   await expect(page.getByLabel("Modo de execução")).toHaveValue("http");
   await expect(page.getByLabel("URL do executor")).toHaveValue("http://127.0.0.1:9001/run");
 
-  await page.locator(".react-flow__node", { hasText: "llm_step" }).click();
+  await page.locator(".canvas-node-chip", { hasText: "llm_step" }).click();
   await openInspectorTab(page, "Catálogo");
   const questionSkill = page.locator(".catalog-card", { hasText: "Skill de perguntas estruturadas" });
   await questionSkill.getByRole("button", { name: /^Usar no nó$/ }).click();

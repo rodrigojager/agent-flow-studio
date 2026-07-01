@@ -34,6 +34,7 @@ import {
   Gauge,
   GitBranch,
   Library,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -51,6 +52,7 @@ import {
   Upload,
   UserCheck,
   GitCompare,
+  X,
 } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -2564,6 +2566,30 @@ export default function App() {
     }
   }
 
+  async function handleSaveCatalogEditDraft(draft: CatalogEditDraft): Promise<LocalCatalogItem | null> {
+    setStatus({ kind: "busy", message: `Salvando curadoria de ${draft.name || draft.id}.` });
+    try {
+      const nodePatch = draft.nodePatchText.trim() ? JSON.parse(draft.nodePatchText) as Record<string, unknown> : undefined;
+      const result = await saveLocalCatalogItem({
+        id: draft.id,
+        kind: draft.kind,
+        name: draft.name,
+        version: draft.version,
+        description: draft.description,
+        tags: splitTags(draft.tagsText),
+        content: draft.content,
+        nodePatch,
+      });
+      setLocalCatalog(result.catalog);
+      setCatalogLoadState({ kind: "ready", message: `${result.catalog.items.length} item(ns) no catálogo local.` });
+      setStatus({ kind: "ok", message: `Curadoria de ${result.item.name} salva como rev. ${result.item.revision}.` });
+      return result.item;
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+      return null;
+    }
+  }
+
   async function handleCreateFlowFromCatalogTemplate(item: LocalCatalogItem) {
     const rawId = window.prompt("ID do novo flow", `${item.id}-flow`);
     const flowId = rawId?.trim();
@@ -4356,6 +4382,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               onSaveToolBlock={handleSaveSelectedBlockAsToolToCatalog}
               onSaveSkill={handleSaveSelectedNodeAsSkillToCatalog}
               onSaveSkillBlock={handleSaveSelectedBlockAsSkillToCatalog}
+              onSaveCatalogEdit={handleSaveCatalogEditDraft}
             />
           ) : inspectorTab === "validation" ? (
             <ValidationPanel
@@ -5993,6 +6020,7 @@ function CatalogPanel({
   onSaveToolBlock,
   onSaveSkill,
   onSaveSkillBlock,
+  onSaveCatalogEdit,
 }: {
   flow: AgentFlow | null;
   selectedNodeId: string;
@@ -6012,12 +6040,15 @@ function CatalogPanel({
   onSaveToolBlock: () => void;
   onSaveSkill: () => void;
   onSaveSkillBlock: () => void;
+  onSaveCatalogEdit: (draft: CatalogEditDraft) => Promise<LocalCatalogItem | null>;
 }) {
   const [kindFilter, setKindFilter] = useState<LocalCatalogItemKind | "">("");
   const [sourceFilter, setSourceFilter] = useState<LocalCatalogItem["source"] | "">("");
   const [tagFilter, setTagFilter] = useState("");
   const [query, setQuery] = useState("");
   const [compareRevisionByItem, setCompareRevisionByItem] = useState<Record<string, number>>({});
+  const [editDraft, setEditDraft] = useState<CatalogEditDraft | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
   const availableTags = useMemo(() => {
     const tags = new Set<string>();
     for (const item of catalog?.items ?? []) {
@@ -6063,6 +6094,30 @@ function CatalogPanel({
     [catalog, kindFilter, query, sourceFilter, tagFilter],
   );
   const totalItems = catalog?.items.length ?? 0;
+
+  useEffect(() => {
+    if (!editDraft) {
+      return;
+    }
+    if (!catalog?.items.some((item) => localCatalogItemKey(item) === editDraft.itemKey)) {
+      setEditDraft(null);
+    }
+  }, [catalog, editDraft]);
+
+  async function handleSaveCatalogEdit() {
+    if (!editDraft) {
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const savedItem = await onSaveCatalogEdit(editDraft);
+      if (savedItem) {
+        setEditDraft(catalogEditDraftFromItem(savedItem));
+      }
+    } finally {
+      setEditSaving(false);
+    }
+  }
 
   if (!flow) {
     return (
@@ -6244,6 +6299,7 @@ function CatalogPanel({
                               <li key={`${itemKey}-node-${node.id}-${index}`}>
                                 <strong>{node.id}</strong>
                                 <small>{node.type}</small>
+                                {node.description ? <span>{node.description}</span> : null}
                                 {node.promptId ? <span>prompt: {node.promptId}</span> : null}
                                 {node.outputSchema ? <span>schema: {node.outputSchema}</span> : null}
                               </li>
@@ -6342,7 +6398,22 @@ function CatalogPanel({
                       <span key={`${item.id}-${tag}`}>{tag}</span>
                     ))}
                   </div>
+                  {editDraft?.itemKey === itemKey ? (
+                    <CatalogItemEditor
+                      draft={editDraft}
+                      onDraftChange={setEditDraft}
+                      onSave={handleSaveCatalogEdit}
+                      onCancel={() => setEditDraft(null)}
+                      saving={editSaving}
+                    />
+                  ) : null}
                   <div className="catalog-card-actions">
+                    {item.source === "local" ? (
+                      <button type="button" className="command-button" onClick={() => setEditDraft(catalogEditDraftFromItem(item))}>
+                        <Pencil size={16} aria-hidden="true" />
+                        Editar item
+                      </button>
+                    ) : null}
                     {item.kind === "agent_template" ? (
                       <button type="button" className="command-button" onClick={() => onCreateAgentTemplate(item)}>
                         <Plus size={16} aria-hidden="true" />
@@ -6382,6 +6453,285 @@ function CatalogPanel({
   );
 }
 
+interface CatalogEditDraft {
+  itemKey: string;
+  id: string;
+  kind: LocalCatalogItemKind;
+  name: string;
+  version: string;
+  description: string;
+  tagsText: string;
+  content: string;
+  nodePatchText: string;
+}
+
+interface CatalogEditableContent {
+  nodes: Array<{ id: string; type: string; description: string; promptId: string; outputSchema: string }>;
+  edges: Array<{ from: string; to: string; condition: string }>;
+  contentError: string;
+}
+
+function CatalogItemEditor({
+  draft,
+  onDraftChange,
+  onSave,
+  onCancel,
+  saving,
+}: {
+  draft: CatalogEditDraft;
+  onDraftChange: (draft: CatalogEditDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}) {
+  const editableContent = catalogEditableContent(draft);
+  const nodePatchError = catalogNodePatchDraftError(draft);
+  const saveDisabled = saving || !draft.name.trim() || Boolean(editableContent.contentError || nodePatchError);
+  const showNodePatchEditor = Boolean(draft.nodePatchText.trim()) || (!draft.content.trim() && draft.kind === "tool");
+
+  return (
+    <div className="catalog-item-editor">
+      <div className="asset-metadata-title">
+        <strong>Curadoria local</strong>
+        <span>{draft.kind}:{draft.id}</span>
+      </div>
+      <div className="catalog-edit-grid">
+        <label>
+          <span>Nome do item</span>
+          <input value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
+        </label>
+        <label>
+          <span>Versão do item</span>
+          <input value={draft.version} onChange={(event) => onDraftChange({ ...draft, version: event.target.value })} />
+        </label>
+        <label className="catalog-editor-wide">
+          <span>Descrição do item</span>
+          <textarea value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} />
+        </label>
+        <label className="catalog-editor-wide">
+          <span>Tags do item</span>
+          <input value={draft.tagsText} onChange={(event) => onDraftChange({ ...draft, tagsText: event.target.value })} />
+        </label>
+      </div>
+
+      {editableContent.contentError ? <div className="catalog-editor-error">{editableContent.contentError}</div> : null}
+
+      {editableContent.nodes.length ? (
+        <div className="catalog-edit-subsection">
+          <strong>Etapas</strong>
+          <div className="catalog-edit-node-grid">
+            {editableContent.nodes.map((node, index) => (
+              <fieldset key={`${draft.itemKey}-edit-node-${node.id}-${index}`}>
+                <legend>{node.id}</legend>
+                <label>
+                  <span>Tipo da etapa {node.id}</span>
+                  <input
+                    value={node.type}
+                    onChange={(event) => onDraftChange(updateCatalogDraftNodeField(draft, index, "type", event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Descrição da etapa {node.id}</span>
+                  <textarea
+                    value={node.description}
+                    onChange={(event) => onDraftChange(updateCatalogDraftNodeField(draft, index, "description", event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Prompt da etapa {node.id}</span>
+                  <input
+                    value={node.promptId}
+                    onChange={(event) => onDraftChange(updateCatalogDraftNodeField(draft, index, "promptId", event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Schema da etapa {node.id}</span>
+                  <input
+                    value={node.outputSchema}
+                    onChange={(event) => onDraftChange(updateCatalogDraftNodeField(draft, index, "outputSchema", event.target.value))}
+                  />
+                </label>
+              </fieldset>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {editableContent.edges.length ? (
+        <div className="catalog-edit-subsection">
+          <strong>Conexões internas</strong>
+          <div className="catalog-edit-edge-grid">
+            {editableContent.edges.map((edge, index) => (
+              <label key={`${draft.itemKey}-edit-edge-${edge.from}-${edge.to}-${index}`}>
+                <span>Condição da conexão {edge.from} para {edge.to}</span>
+                <input
+                  value={edge.condition}
+                  placeholder="Sem condição"
+                  onChange={(event) => onDraftChange(updateCatalogDraftEdgeCondition(draft, index, event.target.value))}
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {showNodePatchEditor ? (
+        <label className="catalog-editor-wide">
+          <span>Patch JSON do nó</span>
+          <textarea
+            className="catalog-editor-code"
+            value={draft.nodePatchText}
+            onChange={(event) => onDraftChange({ ...draft, nodePatchText: event.target.value })}
+          />
+        </label>
+      ) : null}
+      {nodePatchError ? <div className="catalog-editor-error">{nodePatchError}</div> : null}
+
+      <div className="catalog-editor-actions">
+        <button type="button" className="command-button primary" onClick={onSave} disabled={saveDisabled}>
+          <Save size={16} aria-hidden="true" />
+          {saving ? "Salvando" : "Salvar curadoria"}
+        </button>
+        <button type="button" className="command-button" onClick={onCancel} disabled={saving}>
+          <X size={16} aria-hidden="true" />
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function catalogEditDraftFromItem(item: LocalCatalogItem): CatalogEditDraft {
+  return {
+    itemKey: localCatalogItemKey(item),
+    id: item.id,
+    kind: item.kind,
+    name: item.name,
+    version: item.version,
+    description: item.description,
+    tagsText: item.tags.join(", "),
+    content: item.content ?? "",
+    nodePatchText: item.nodePatch ? `${JSON.stringify(item.nodePatch, null, 2)}\n` : "",
+  };
+}
+
+function catalogEditableContent(draft: CatalogEditDraft): CatalogEditableContent {
+  if (!draft.content.trim() || (draft.kind !== "tool" && draft.kind !== "skill" && draft.kind !== "agent_template")) {
+    return { nodes: [], edges: [], contentError: "" };
+  }
+  const parsed = catalogDraftParsedContent(draft);
+  if (!parsed) {
+    return { nodes: [], edges: [], contentError: "Conteúdo estruturado inválido; cancele ou restaure uma revisão antes de editar." };
+  }
+  const root = catalogDraftContentRoot(parsed);
+  const nodes = Array.isArray(root.nodes)
+    ? root.nodes.flatMap((rawNode) => {
+        if (!isRecord(rawNode) || typeof rawNode.id !== "string") {
+          return [];
+        }
+        return [{
+          id: rawNode.id,
+          type: typeof rawNode.type === "string" ? rawNode.type : "",
+          description: typeof rawNode.description === "string" ? rawNode.description : "",
+          promptId: typeof rawNode.promptId === "string" ? rawNode.promptId : "",
+          outputSchema: typeof rawNode.outputSchema === "string" ? rawNode.outputSchema : "",
+        }];
+      })
+    : [];
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = Array.isArray(root.edges)
+    ? root.edges.flatMap((rawEdge) => {
+        if (!isRecord(rawEdge) || typeof rawEdge.from !== "string" || typeof rawEdge.to !== "string") {
+          return [];
+        }
+        if (!nodeIds.has(rawEdge.from) || !nodeIds.has(rawEdge.to)) {
+          return [];
+        }
+        return [{
+          from: rawEdge.from,
+          to: rawEdge.to,
+          condition: typeof rawEdge.condition === "string" ? rawEdge.condition : "",
+        }];
+      })
+    : [];
+  return { nodes, edges, contentError: "" };
+}
+
+function catalogNodePatchDraftError(draft: CatalogEditDraft): string {
+  if (!draft.nodePatchText.trim()) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(draft.nodePatchText);
+    return isRecord(parsed) ? "" : "Patch JSON do nó precisa ser objeto.";
+  } catch {
+    return "Patch JSON do nó é inválido.";
+  }
+}
+
+function updateCatalogDraftNodeField(
+  draft: CatalogEditDraft,
+  index: number,
+  field: "type" | "description" | "promptId" | "outputSchema",
+  value: string,
+): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    if (!Array.isArray(root.nodes) || !isRecord(root.nodes[index])) {
+      return;
+    }
+    setDraftRecordStringField(root.nodes[index], field, value, field === "type");
+  });
+}
+
+function updateCatalogDraftEdgeCondition(draft: CatalogEditDraft, index: number, value: string): CatalogEditDraft {
+  return updateCatalogDraftContent(draft, (root) => {
+    if (!Array.isArray(root.edges) || !isRecord(root.edges[index])) {
+      return;
+    }
+    setDraftRecordStringField(root.edges[index], "condition", value, false);
+  });
+}
+
+function updateCatalogDraftContent(draft: CatalogEditDraft, updater: (root: Record<string, unknown>) => void): CatalogEditDraft {
+  const parsed = catalogDraftParsedContent(draft);
+  if (!parsed) {
+    return draft;
+  }
+  const root = catalogDraftContentRoot(parsed);
+  updater(root);
+  return {
+    ...draft,
+    content: `${JSON.stringify(parsed, null, 2)}\n`,
+  };
+}
+
+function catalogDraftParsedContent(draft: CatalogEditDraft): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(draft.content);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function catalogDraftContentRoot(parsed: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(parsed.flow) ? parsed.flow : parsed;
+}
+
+function setDraftRecordStringField(
+  record: Record<string, unknown>,
+  field: string,
+  value: string,
+  required: boolean,
+): void {
+  const normalized = value.trim();
+  if (normalized || required) {
+    record[field] = normalized;
+  } else {
+    delete record[field];
+  }
+}
+
 function catalogRevisionTimeline(item: LocalCatalogItem): LocalCatalogRevision[] {
   return [...(item.history ?? [])].sort((left, right) => right.revision - left.revision);
 }
@@ -6407,7 +6757,7 @@ function catalogItemCreatesBlock(item: LocalCatalogItem): boolean {
 
 interface CatalogVisualSummary {
   label: string;
-  nodes: Array<{ id: string; type: string; promptId?: string; outputSchema?: string }>;
+  nodes: Array<{ id: string; type: string; description?: string; promptId?: string; outputSchema?: string }>;
   edges: Array<{ from: string; to: string; condition?: string }>;
   promptCount: number;
   schemaCount: number;
@@ -6482,6 +6832,7 @@ function catalogVisualNodes(value: unknown): CatalogVisualSummary["nodes"] {
     return [{
       id: rawNode.id,
       type: typeof rawNode.type === "string" ? rawNode.type : "node",
+      description: typeof rawNode.description === "string" ? rawNode.description : undefined,
       promptId: typeof rawNode.promptId === "string" ? rawNode.promptId : undefined,
       outputSchema: typeof rawNode.outputSchema === "string" ? rawNode.outputSchema : undefined,
     }];

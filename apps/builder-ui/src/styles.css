@@ -1210,6 +1210,120 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.catalog-item-editor {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--surface-bg));
+}
+
+.catalog-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.catalog-edit-grid label,
+.catalog-edit-subsection label,
+.catalog-editor-wide {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.catalog-edit-grid span,
+.catalog-edit-subsection span,
+.catalog-editor-wide span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.catalog-edit-grid input,
+.catalog-edit-grid textarea,
+.catalog-edit-subsection input,
+.catalog-edit-subsection textarea,
+.catalog-editor-wide input,
+.catalog-editor-wide textarea {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface-bg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.catalog-edit-grid textarea,
+.catalog-editor-wide textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.catalog-editor-wide {
+  grid-column: 1 / -1;
+}
+
+.catalog-edit-subsection {
+  display: grid;
+  gap: 8px;
+}
+
+.catalog-edit-subsection > strong {
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.catalog-edit-node-grid,
+.catalog-edit-edge-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.catalog-edit-node-grid fieldset {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px;
+  background: var(--surface-bg);
+}
+
+.catalog-edit-node-grid legend {
+  padding: 0 4px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.catalog-editor-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.catalog-editor-error {
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  padding: 7px 8px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 12px;
+}
+
+.catalog-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .panel-notice {
   display: flex;
   align-items: center;
