@@ -20,6 +20,12 @@ SELECTED_SCHEMAS = [
     "EmptyIdempotentRequest",
     "EventView",
     "FinishResponse",
+    "JobBatchResponse",
+    "JobCleanupRequest",
+    "JobCleanupResponse",
+    "JobMetricsResponse",
+    "JobRunResponse",
+    "JobView",
     "MessageView",
     "MetadataResponse",
     "SafetyView",
@@ -97,6 +103,111 @@ def event_signature(event: dict) -> dict:
     }
 
 
+def job_signature(job: dict, session_id: str) -> dict:
+    payload = job.get("payload") or {}
+    result = job.get("result") or {}
+    return {
+        "agent_id": job["agent_id"],
+        "session_id_matches": job["session_id"] == session_id,
+        "kind": job["kind"],
+        "status": job["status"],
+        "attempts": job["attempts"],
+        "max_attempts": job["max_attempts"],
+        "payload_keys": sorted(payload.keys()),
+        "result_shape": response_shape(result),
+        "last_error_shape": response_shape(job.get("last_error") or {}),
+        "next_run_at_present": bool(job.get("next_run_at")),
+    }
+
+
+def job_metrics_signature(metrics: dict) -> dict:
+    required_keys = {
+        "total",
+        "by_status",
+        "by_kind",
+        "attempts_total",
+        "pending_due",
+        "failed",
+        "exhausted",
+        "succeeded",
+        "terminal",
+        "success_rate",
+        "duration_ms_avg",
+        "duration_ms_min",
+        "duration_ms_max",
+        "duration_ms_p95",
+        "window_hours",
+        "finished_in_window",
+        "succeeded_in_window",
+        "failed_in_window",
+        "success_rate_in_window",
+        "window_duration_ms_avg",
+        "window_duration_ms_p95",
+        "throughput_per_hour",
+        "oldest_pending_at",
+        "next_due_at",
+        "finished_last_hour",
+        "last_finished_at",
+    }
+    missing = sorted(required_keys - set(metrics))
+    if missing:
+        raise AssertionError(f"JobMetricsResponse sem campos esperados: {missing}")
+    return {
+        "total": metrics["total"],
+        "by_status": metrics["by_status"],
+        "by_kind": metrics["by_kind"],
+        "attempts_total": metrics["attempts_total"],
+        "pending_due": metrics["pending_due"],
+        "failed": metrics["failed"],
+        "exhausted": metrics["exhausted"],
+        "succeeded": metrics["succeeded"],
+        "terminal": metrics["terminal"],
+        "success_rate": metrics["success_rate"],
+        "duration_ms_avg_present": metrics["duration_ms_avg"] is not None,
+        "duration_ms_min_present": metrics["duration_ms_min"] is not None,
+        "duration_ms_max_present": metrics["duration_ms_max"] is not None,
+        "duration_ms_p95_present": metrics["duration_ms_p95"] is not None,
+        "window_hours": metrics["window_hours"],
+        "finished_in_window": metrics["finished_in_window"],
+        "succeeded_in_window": metrics["succeeded_in_window"],
+        "failed_in_window": metrics["failed_in_window"],
+        "success_rate_in_window": metrics["success_rate_in_window"],
+        "window_duration_ms_avg_present": metrics["window_duration_ms_avg"] is not None,
+        "window_duration_ms_p95_present": metrics["window_duration_ms_p95"] is not None,
+        "throughput_per_hour_present": metrics["throughput_per_hour"] is not None,
+        "oldest_pending_at_present": metrics["oldest_pending_at"] is not None,
+        "next_due_at_present": metrics["next_due_at"] is not None,
+        "finished_last_hour": metrics["finished_last_hour"],
+        "last_finished_at_present": metrics["last_finished_at"] is not None,
+    }
+
+
+def job_cleanup_signature(cleanup: dict) -> dict:
+    required_keys = {
+        "dry_run",
+        "matched",
+        "deleted",
+        "statuses",
+        "older_than_hours",
+        "cutoff",
+        "job_ids",
+        "by_status",
+    }
+    missing = sorted(required_keys - set(cleanup))
+    if missing:
+        raise AssertionError(f"JobCleanupResponse sem campos esperados: {missing}")
+    return {
+        "dry_run": cleanup["dry_run"],
+        "matched": cleanup["matched"],
+        "deleted": cleanup["deleted"],
+        "statuses": cleanup["statuses"],
+        "older_than_hours": cleanup["older_than_hours"],
+        "job_id_count": len(cleanup["job_ids"]),
+        "by_status": cleanup["by_status"],
+        "cutoff_present": bool(cleanup["cutoff"]),
+    }
+
+
 def response_shape(value):
     if isinstance(value, dict):
         return {key: response_shape(value[key]) for key in sorted(value)}
@@ -171,6 +282,20 @@ finish = assert_status(
     client.post(f"/sessions/{session_id}/finish", headers={"Idempotency-Key": "parity-finish"}, json={}),
     200,
 )
+jobs = assert_status(client.get(f"/jobs?session_id={session_id}"), 200)
+if len(jobs) != 1:
+    raise AssertionError(f"Esperado 1 job pos-finalizacao, recebido {len(jobs)}")
+job_id = jobs[0]["job_id"]
+job = assert_status(client.get(f"/jobs/{job_id}"), 200)
+run_job = assert_status(client.post(f"/jobs/{job_id}/run"), 200)["job"]
+run_pending_empty = assert_status(client.post(f"/jobs/run-pending?session_id={session_id}"), 200)
+retry_failed_empty = assert_status(client.post(f"/jobs/retry-failed?session_id={session_id}"), 200)
+job_metrics = assert_status(client.get("/jobs/metrics"), 200)
+job_cleanup_preview = assert_status(
+    client.post("/jobs/cleanup", json={"session_id": session_id, "older_than_hours": 0, "dry_run": True}),
+    200,
+)
+completed_events = assert_status(client.get(f"/sessions/{session_id}/events"), 200)
 
 conflict_first = assert_status(
     client.post(
@@ -221,6 +346,14 @@ payload = {
         "events": [event_signature(item) for item in events],
         "finish_session": session_signature(finish["session"]),
         "finish_message": message_signature(finish["message"]) if finish.get("message") else None,
+        "jobs": [job_signature(item, session_id) for item in jobs],
+        "job": job_signature(job, session_id),
+        "run_job": job_signature(run_job, session_id),
+        "run_pending_empty": run_pending_empty,
+        "retry_failed_empty": retry_failed_empty,
+        "job_metrics": job_metrics_signature(job_metrics),
+        "job_cleanup_preview": job_cleanup_signature(job_cleanup_preview),
+        "events_after_job": [event_signature(item) for item in completed_events],
     },
     "conflict": {
         "first_status": 200 if conflict_first else None,
@@ -303,14 +436,32 @@ def expected_contract_paths(resource_name: str) -> dict[str, list[str]]:
     base = f"/{resource_name}"
     return {
         "/health": ["get"],
+        "/jobs": ["get"],
+        "/jobs/cleanup": ["post"],
+        "/jobs/metrics": ["get"],
+        "/jobs/retry-failed": ["post"],
+        "/jobs/run-pending": ["post"],
+        "/jobs/{job_id}": ["get"],
+        "/jobs/{job_id}/recurrence": ["post"],
+        "/jobs/{job_id}/retry": ["post"],
+        "/jobs/{job_id}/run": ["post"],
+        "/jobs/{job_id}/schedule": ["post"],
+        "/job-schedules": ["get"],
+        "/job-schedules/run-due": ["post"],
+        "/job-schedules/trigger-event": ["post"],
+        "/job-schedules/{schedule_id}/disable": ["post"],
+        "/auth/audit": ["get"],
+        "/auth/keys": ["get"],
         "/metadata": ["get"],
         base: ["post"],
         f"{base}/{{session_id}}": ["get"],
         f"{base}/{{session_id}}/events": ["get"],
+        f"{base}/{{session_id}}/events/stream": ["get"],
         f"{base}/{{session_id}}/finish": ["post"],
         f"{base}/{{session_id}}/start": ["post"],
         f"{base}/{{session_id}}/transcript": ["get"],
         f"{base}/{{session_id}}/turn": ["post"],
+        f"{base}/{{session_id}}/turn/stream": ["post"],
     }
 
 
@@ -324,6 +475,33 @@ def assert_metadata_matches_flow(label: str, metadata: dict[str, Any], flow: dic
         "flow_version": flow["version"],
         "llm_adapter": flow["llm"]["adapter"],
         "supports_multi_agent_bundle": False,
+        "operations": {
+            "jobs": {
+                "enabled": True,
+                "manual_cleanup_endpoint": "POST /jobs/cleanup",
+                "worker": {
+                    "command": "python -m app.worker",
+                    "interval_seconds": 5.0,
+                    "limit": 20,
+                    "retry_delay_seconds": 5.0,
+                    "lease_seconds": 60.0,
+                    "multiworker_claims": True,
+                },
+                "retention": {
+                    "automatic_cleanup_enabled": False,
+                    "older_than_hours": 168.0,
+                    "limit": 100,
+                    "statuses": ["succeeded", "failed"],
+                    "dry_run_default": True,
+                    "terminal_statuses": ["failed", "succeeded"],
+                },
+                "schedules": {
+                    "interval": True,
+                    "cron": "basic",
+                    "event": True,
+                },
+            }
+        },
     }
     assert_equal(f"metadata {label}", metadata, expected)
 

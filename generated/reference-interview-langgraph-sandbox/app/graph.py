@@ -1,13 +1,19 @@
 import atexit
 import inspect
 import json
+import os
+import shlex
+import shutil
 import subprocess
+import sys
+import tempfile
 import time
 import traceback
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from uuid import uuid4
@@ -33,6 +39,8 @@ NODE_ROUTE_MAP_RAW = json.loads("{\n  \"input_safety_check\": {\n    \"route_0\"
 NODE_ROUTE_CONDITIONS = json.loads("{\n  \"input_safety_check\": [\n    {\n      \"key\": \"route_0\",\n      \"kind\": \"safety_decision\",\n      \"value\": \"allow\"\n    },\n    {\n      \"key\": \"route_1\",\n      \"kind\": \"safety_blocked\",\n      \"value\": true\n    }\n  ]\n}")
 START_MESSAGE = "Olá! Este é o Agente de Referência. Envie uma mensagem para eu ecoar o fluxo com segurança, LLM e estado."
 CURRENT_DB_SESSION = ContextVar("CURRENT_DB_SESSION", default=None)
+CURRENT_EVENT_SINK = ContextVar("CURRENT_EVENT_SINK", default=None)
+CURRENT_TOKEN_STREAM = ContextVar("CURRENT_TOKEN_STREAM", default=None)
 FILES_ROOT = Path(__file__).resolve().parent / "files"
 CODE_ROOT = Path(__file__).resolve().parent / "code"
 
@@ -164,6 +172,91 @@ def build_graph(
         executed.append(node_id)
         return {**updates, "executed_nodes": executed}
 
+    def emit_graph_event(event_type: str, node_id: str, payload: dict[str, Any]) -> None:
+        sink = CURRENT_EVENT_SINK.get()
+        if not callable(sink):
+            return
+        try:
+            sink(event_type, node_id, jsonable(payload))
+        except Exception:
+            return
+
+    def trace_node(config: dict[str, Any], handler):
+        node_id = str(config["id"])
+        node_type = str(config.get("type") or "node")
+
+        def run(state: ReferenceState) -> ReferenceState:
+            span_id = str(uuid4())
+            started_perf = time.perf_counter()
+            started_at = datetime.now(timezone.utc)
+            base_payload = {
+                "span_id": span_id,
+                "node_id": node_id,
+                "node_type": node_type,
+                "action": state.get("action"),
+                "phase": state.get("phase"),
+                "turn": state.get("turn"),
+                "source": "runtime_native_span",
+            }
+            emit_graph_event("span_started", node_id, {**base_payload, "status": "running", "started_at": started_at.isoformat()})
+            try:
+                result = handler(state)
+            except Exception as exc:
+                finished_at = datetime.now(timezone.utc)
+                duration_ms = round((time.perf_counter() - started_perf) * 1000, 3)
+                emit_graph_event(
+                    "span_completed",
+                    node_id,
+                    {
+                        **base_payload,
+                        "status": "error",
+                        "started_at": started_at.isoformat(),
+                        "finished_at": finished_at.isoformat(),
+                        "duration_ms": duration_ms,
+                        "error": str(exc),
+                        "span": {
+                            "id": span_id,
+                            "name": f"node.{node_type}",
+                            "operation": "graph_node",
+                            "node_id": node_id,
+                            "node_type": node_type,
+                            "status": "error",
+                            "started_at": started_at.isoformat(),
+                            "finished_at": finished_at.isoformat(),
+                            "duration_ms": duration_ms,
+                        },
+                    },
+                )
+                raise
+            finished_at = datetime.now(timezone.utc)
+            duration_ms = round((time.perf_counter() - started_perf) * 1000, 3)
+            status = "error" if isinstance(result, dict) and result.get("status") == "error" else "ok"
+            emit_graph_event(
+                "span_completed",
+                node_id,
+                {
+                    **base_payload,
+                    "status": status,
+                    "started_at": started_at.isoformat(),
+                    "finished_at": finished_at.isoformat(),
+                    "duration_ms": duration_ms,
+                    "span": {
+                        "id": span_id,
+                        "name": f"node.{node_type}",
+                        "operation": "graph_node",
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "status": status,
+                        "started_at": started_at.isoformat(),
+                        "finished_at": finished_at.isoformat(),
+                        "duration_ms": duration_ms,
+                    },
+                },
+            )
+            return result
+
+        return run
+
     def state_path_value(state: ReferenceState, path: str):
         if not path or str(path).strip() in {"state", "."}:
             return state
@@ -210,6 +303,178 @@ def build_graph(
         if isinstance(value, dict):
             return {str(key): jsonable(item) for key, item in value.items()}
         return str(value)
+
+    REDACTED_VALUE = "***REDACTED***"
+
+    def config_string_list(config: dict[str, Any], key: str) -> list[str]:
+        value = config.get(key)
+        if isinstance(value, str):
+            return [item.strip() for item in value.splitlines() if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+    def config_int(config: dict[str, Any], key: str, default: int, min_value: int, max_value: int) -> int:
+        try:
+            value = int(config.get(key) if config.get(key) is not None else default)
+        except (TypeError, ValueError):
+            value = default
+        return max(min_value, min(max_value, value))
+
+    def code_retry_attempts(config: dict[str, Any]) -> int:
+        return config_int(config, "retryAttempts", 0, 0, 5)
+
+    def code_max_payload_bytes(config: dict[str, Any]) -> int:
+        return config_int(config, "maxPayloadBytes", 0, 0, 10_000_000)
+
+    def normalized_state_path(path: str) -> str:
+        return str(path or "").strip().removeprefix("state.").strip(".")
+
+    def assign_payload_path(payload: dict[str, Any], path: str, value: Any) -> None:
+        parts = [part for part in normalized_state_path(path).split(".") if part]
+        if not parts:
+            return
+        current = payload
+        for part in parts[:-1]:
+            child = current.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                current[part] = child
+            current = child
+        current[parts[-1]] = value
+
+    def redact_payload_path(payload: dict[str, Any], path: str) -> None:
+        parts = [part for part in str(path or "").strip().split(".") if part]
+        if not parts:
+            return
+        current: Any = payload
+        for part in parts[:-1]:
+            if not isinstance(current, dict):
+                return
+            current = current.get(part)
+        if isinstance(current, dict) and parts[-1] in current:
+            current[parts[-1]] = REDACTED_VALUE
+
+    def selected_external_state_payload(state: ReferenceState, allow_paths: list[str]) -> dict[str, Any]:
+        if not allow_paths:
+            return jsonable(state)
+        selected: dict[str, Any] = {}
+        for raw_path in allow_paths:
+            path = normalized_state_path(raw_path)
+            if not path or path == "state":
+                return jsonable(state)
+            value = state_path_value(state, path)
+            if value is not None:
+                assign_payload_path(selected, path, jsonable(value))
+        return selected
+
+    def external_payload_policy(config: dict[str, Any]) -> dict[str, Any]:
+        policy: dict[str, Any] = {}
+        allow_paths = config_string_list(config, "payloadAllowPaths")
+        redact_paths = config_string_list(config, "redactPaths")
+        retry_attempts = code_retry_attempts(config)
+        max_payload_bytes = code_max_payload_bytes(config)
+        if allow_paths:
+            policy["payload_allow_paths"] = allow_paths
+        if redact_paths:
+            policy["redact_paths"] = redact_paths
+        if retry_attempts:
+            policy["retry_attempts"] = retry_attempts
+        if max_payload_bytes:
+            policy["max_payload_bytes"] = max_payload_bytes
+        return policy
+
+    def apply_external_redactions(payload: dict[str, Any], redact_paths: list[str], input_path: str) -> None:
+        normalized_input_path = normalized_state_path(input_path)
+        for raw_path in redact_paths:
+            path = str(raw_path or "").strip()
+            if not path:
+                continue
+            if path == "input" or path.startswith("input."):
+                redact_payload_path(payload, path)
+                continue
+            if path.startswith("context."):
+                redact_payload_path(payload, path)
+                continue
+            normalized = normalized_state_path(path)
+            redact_payload_path(payload, f"context.state.{normalized}")
+            if normalized and normalized == normalized_input_path:
+                payload["input"] = REDACTED_VALUE
+
+    def external_request_payload(
+        config: dict[str, Any],
+        state: ReferenceState,
+        contract: dict[str, Any],
+        *,
+        adapter_payload: bool = False,
+    ) -> tuple[dict[str, Any], int, dict[str, Any]]:
+        node_id = config["id"]
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        allow_paths = config_string_list(config, "payloadAllowPaths")
+        redact_paths = config_string_list(config, "redactPaths")
+        request_payload: dict[str, Any] = {
+            "input": jsonable(input_value),
+            "context": {
+                "node_id": node_id,
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "input_path": input_path,
+                "state": selected_external_state_payload(state, allow_paths),
+            },
+            "contract": contract,
+        }
+        if adapter_payload:
+            request_payload["adapter"] = {
+                "id": str(config.get("codeEntry") or config.get("handler") or node_id),
+                "execution": "runtime_adapter",
+                "language": config.get("codeLanguage"),
+                "node_id": node_id,
+                "timeout_seconds": int(config.get("timeoutSeconds") or 30),
+            }
+        policy = external_payload_policy(config)
+        if policy:
+            request_payload["security"] = policy
+        apply_external_redactions(request_payload, redact_paths, input_path)
+        payload_bytes = len(json.dumps(request_payload, ensure_ascii=False).encode("utf-8"))
+        return request_payload, payload_bytes, policy
+
+    def payload_too_large_result(
+        config: dict[str, Any],
+        contract: dict[str, Any],
+        payload_bytes: int,
+        payload_policy: dict[str, Any],
+        started_at: float,
+    ) -> dict[str, Any]:
+        max_payload_bytes = code_max_payload_bytes(config)
+        return {
+            "ok": False,
+            "status": "custom_code_failed",
+            "node_id": config["id"],
+            "contract": contract,
+            "reason": "payload_too_large",
+            "error": f"custom_code_payload_{payload_bytes}_bytes_exceeds_{max_payload_bytes}",
+            "payload_bytes": payload_bytes,
+            "payload_policy": payload_policy,
+            "attempts": 0,
+            "retry_attempts": code_retry_attempts(config),
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def attach_external_execution_metadata(
+        result: dict[str, Any],
+        *,
+        attempts: int,
+        retry_attempts: int,
+        payload_bytes: int,
+        payload_policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        result["attempts"] = attempts
+        result["retry_attempts"] = retry_attempts
+        result["payload_bytes"] = payload_bytes
+        if payload_policy:
+            result["payload_policy"] = payload_policy
+        return result
 
     def pinned_node_output(state: ReferenceState, node_id: str) -> tuple[bool, Any]:
         metadata = state.get("session_metadata") or {}
@@ -392,17 +657,105 @@ def build_graph(
         return resolved
 
     def safe_code_path(relative_path: str) -> Path:
+        return safe_code_path_in_root(relative_path, CODE_ROOT)
+
+    def safe_code_path_in_root(relative_path: str, root_path: Path) -> Path:
         raw_path = str(relative_path or "").replace("\\", "/")
         candidate = Path(raw_path)
         if candidate.parts and candidate.parts[0] == "code":
             candidate = Path(*candidate.parts[1:]) if len(candidate.parts) > 1 else Path("")
         if not candidate.parts or candidate.is_absolute() or ".." in candidate.parts:
             raise ValueError("codePath deve ser relativo a app/code e não pode usar '..'.")
-        resolved = (CODE_ROOT / candidate).resolve()
-        root = CODE_ROOT.resolve()
+        resolved = (root_path / candidate).resolve()
+        root = root_path.resolve()
         if root not in [resolved, *resolved.parents]:
             raise ValueError("codePath sai de app/code.")
         return resolved
+
+    def process_backed_custom_code(config: dict[str, Any]) -> bool:
+        execution = str(config.get("codeExecution") or "native").lower()
+        language = str(config.get("codeLanguage") or "python").lower()
+        runtime_execution = execution in {"native", "inline", "file"}
+        return execution in {"mcp", "sidecar"} or (
+            runtime_execution and language in {"javascript", "js", "typescript", "ts", "bash", "shell", "sh"}
+        )
+
+    def requested_ephemeral_workspace(config: dict[str, Any]) -> bool:
+        return str(config.get("sandboxIsolation") or "shared").lower() == "ephemeral_workspace"
+
+    def requested_dedicated_process(config: dict[str, Any]) -> bool:
+        return str(config.get("sandboxIsolation") or "shared").lower() == "dedicated_process"
+
+    def requested_container(config: dict[str, Any]) -> bool:
+        return str(config.get("sandboxIsolation") or "shared").lower() == "container"
+
+    def requested_vm(config: dict[str, Any]) -> bool:
+        return str(config.get("sandboxIsolation") or "shared").lower() == "vm"
+
+    def runtime_adapter_vm_custom_code(config: dict[str, Any]) -> bool:
+        execution = str(config.get("codeExecution") or "native").lower()
+        return execution == "runtime_adapter" and requested_vm(config)
+
+    def python_runtime_custom_code(config: dict[str, Any]) -> bool:
+        execution = str(config.get("codeExecution") or "native").lower()
+        language = str(config.get("codeLanguage") or "python").lower()
+        return language in {"python", "py"} and execution in {"native", "inline", "file"}
+
+    def node_runtime_custom_code(config: dict[str, Any]) -> bool:
+        language = str(config.get("codeLanguage") or "").lower()
+        return language in {"javascript", "js", "typescript", "ts"}
+
+    def shell_runtime_custom_code(config: dict[str, Any]) -> bool:
+        execution = str(config.get("codeExecution") or "native").lower()
+        language = str(config.get("codeLanguage") or "").lower()
+        return language in {"bash", "shell", "sh"} and execution in {"native", "inline", "file"}
+
+    @contextmanager
+    def custom_code_workspace(config: dict[str, Any]):
+        workspace_isolation = "shared"
+        if requested_dedicated_process(config) and (python_runtime_custom_code(config) or shell_runtime_custom_code(config)):
+            workspace_isolation = "dedicated_process"
+        elif requested_container(config) and (python_runtime_custom_code(config) or node_runtime_custom_code(config) or shell_runtime_custom_code(config)):
+            workspace_isolation = "container"
+        elif requested_vm(config) and (
+            python_runtime_custom_code(config)
+            or node_runtime_custom_code(config)
+            or shell_runtime_custom_code(config)
+            or runtime_adapter_vm_custom_code(config)
+        ):
+            workspace_isolation = "vm"
+        elif requested_ephemeral_workspace(config) and process_backed_custom_code(config):
+            workspace_isolation = "ephemeral_workspace"
+        if workspace_isolation == "shared":
+            yield CODE_ROOT, "shared"
+            return
+        with tempfile.TemporaryDirectory(prefix=f"agent-flow-code-{config.get('id', 'node')}-") as temp_dir:
+            workspace = Path(temp_dir) / "code"
+            if CODE_ROOT.exists():
+                shutil.copytree(CODE_ROOT, workspace, dirs_exist_ok=True)
+            else:
+                workspace.mkdir(parents=True, exist_ok=True)
+            yield workspace, workspace_isolation
+
+    def custom_subprocess_env(config: dict[str, Any], workspace_isolation: str) -> dict[str, str] | None:
+        allowlist = config_string_list(config, "sandboxEnvAllowlist")
+        if not allowlist:
+            if workspace_isolation != "shared":
+                env = dict(os.environ)
+                env["AGENT_FLOW_SANDBOX_ISOLATION"] = workspace_isolation
+                return env
+            return None
+        env: dict[str, str] = {}
+        for key in ["PATH", "Path", "SYSTEMROOT", "SystemRoot", "COMSPEC", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE"]:
+            value = os.environ.get(key)
+            if value is not None:
+                env[key] = value
+        for key in allowlist:
+            value = os.environ.get(key)
+            if value is not None:
+                env[key] = value
+        env["AGENT_FLOW_SANDBOX_ISOLATION"] = workspace_isolation
+        return env
 
     def call_custom_entry(entry: Any, input_value: Any, context: dict[str, Any]) -> Any:
         signature = inspect.signature(entry)
@@ -479,6 +832,675 @@ def build_graph(
             "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
         }
 
+    def execute_custom_python_dedicated_process(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        entry_name = str(config.get("codeEntry") or "run")
+        source_path = config.get("codePath")
+        inline_source = config.get("codeInline")
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        request: dict[str, Any] = {
+            "entry": entry_name,
+            "input": jsonable(input_value),
+            "context": {
+                "node_id": node_id,
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "input_path": input_path,
+                "state": jsonable(state),
+            },
+            "contract": contract,
+        }
+        worker_source = r'''
+import contextlib
+import inspect
+import io
+import json
+import pathlib
+import sys
+import traceback
+
+
+def _json_default(value):
+    if isinstance(value, pathlib.Path):
+        return str(value)
+    if isinstance(value, set):
+        return list(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    as_dict = getattr(value, "dict", None)
+    if callable(as_dict):
+        return as_dict()
+    return str(value)
+
+
+def _call_entry(entry, input_value, context, contract):
+    signature = inspect.signature(entry)
+    positional = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+    ]
+    has_varargs = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in signature.parameters.values())
+    if has_varargs or len(positional) >= 3:
+        return entry(input_value, context, contract)
+    if len(positional) == 2:
+        return entry(input_value, context)
+    if len(positional) == 1:
+        return entry(input_value)
+    return entry()
+
+
+try:
+    request = json.load(sys.stdin)
+    entry_name = str(request.get("entry") or "run")
+    inline_source = request.get("inlineSource")
+    source_path = request.get("sourcePath")
+    if inline_source:
+        source = str(inline_source)
+        filename = "<agent-flow-dedicated-python>"
+    elif source_path:
+        path = pathlib.Path(str(source_path))
+        source = path.read_text(encoding="utf-8")
+        filename = str(path)
+    else:
+        raise RuntimeError("missing_code_source")
+    namespace = {
+        "__builtins__": __builtins__,
+        "json": json,
+        "Path": pathlib.Path,
+    }
+    exec(compile(source, filename, "exec"), namespace)
+    entry = namespace.get(entry_name)
+    if not callable(entry):
+        raise RuntimeError(f"Entry point não encontrado ou não chamável: {entry_name}")
+    captured_stdout = io.StringIO()
+    with contextlib.redirect_stdout(captured_stdout):
+        output = _call_entry(entry, request.get("input"), request.get("context") or {}, request.get("contract") or {})
+    response = {
+        "ok": True,
+        "output": output,
+        "stdout": captured_stdout.getvalue(),
+    }
+except Exception as exc:
+    response = {
+        "ok": False,
+        "error": str(exc),
+        "traceback": traceback.format_exc(limit=5),
+    }
+
+print(json.dumps(response, ensure_ascii=False, default=_json_default))
+'''
+        with custom_code_workspace(config) as (workspace, workspace_isolation):
+            if inline_source:
+                request["inlineSource"] = str(inline_source)
+            elif source_path:
+                safe_source_path = safe_code_path_in_root(str(source_path), workspace)
+                if workspace_isolation == "container":
+                    request["sourcePath"] = f"/workspace/code/{safe_source_path.relative_to(workspace).as_posix()}"
+                else:
+                    request["sourcePath"] = str(safe_source_path)
+            else:
+                return {
+                    "ok": False,
+                    "status": "custom_code_not_executed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "reason": "missing_code_source",
+                    "sandbox_workspace_isolation": workspace_isolation,
+                }
+            timeout_seconds = int(config.get("timeoutSeconds") or 30)
+            try:
+                completed = subprocess.run(
+                    [sys.executable, "-c", worker_source],
+                    input=json.dumps(request),
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout_seconds,
+                    cwd=str(workspace),
+                    env=custom_subprocess_env(config, workspace_isolation),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                return {
+                    "ok": False,
+                    "status": "custom_code_failed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "error": f"python_dedicated_process_timeout_after_{timeout_seconds}s",
+                    "stdout": str(exc.stdout or ""),
+                    "stderr": str(exc.stderr or ""),
+                    "sandbox_workspace_isolation": workspace_isolation,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                }
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        try:
+            worker_result = json.loads(stdout) if stdout else {}
+        except json.JSONDecodeError:
+            worker_result = {"ok": False, "error": stdout or "empty_python_worker_output"}
+        if completed.returncode != 0 or not worker_result.get("ok"):
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": worker_result.get("error") or "python_worker_failed",
+                "traceback": worker_result.get("traceback"),
+                "exit_code": completed.returncode,
+                "stderr": stderr,
+                "sandbox_workspace_isolation": workspace_isolation,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        return {
+            "ok": True,
+            "status": "custom_code_executed",
+            "node_id": node_id,
+            "contract": contract,
+            "output": jsonable(worker_result.get("output")),
+            "stdout": worker_result.get("stdout"),
+            "exit_code": completed.returncode,
+            "stderr": stderr,
+            "sandbox_workspace_isolation": workspace_isolation,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def container_runtime_policy(config: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+        profile = str(config.get("sandboxContainerProfile") or "baseline").strip().lower()
+        if profile not in {"baseline", "hardened"}:
+            profile = "baseline"
+        memory = str(config.get("sandboxContainerMemory") or ("512m" if profile == "hardened" else "")).strip()
+        cpus = str(config.get("sandboxContainerCpus") or ("1" if profile == "hardened" else "")).strip()
+        raw_pids = config.get("sandboxContainerPidsLimit")
+        if raw_pids is None and profile == "hardened":
+            raw_pids = 128
+        pids_limit = int(raw_pids) if isinstance(raw_pids, (int, float)) and int(raw_pids) > 0 else None
+        read_only_rootfs = bool(config.get("sandboxContainerReadOnlyRootfs") or profile == "hardened")
+        drop_capabilities = bool(config.get("sandboxContainerDropCapabilities") or profile == "hardened")
+        no_new_privileges = bool(config.get("sandboxContainerNoNewPrivileges") or profile == "hardened")
+        args: list[str] = []
+        metadata: dict[str, Any] = {
+            "profile": profile,
+            "network": "none",
+            "read_only_rootfs": read_only_rootfs,
+            "drop_capabilities": drop_capabilities,
+            "no_new_privileges": no_new_privileges,
+        }
+        if memory:
+            args.extend(["--memory", memory])
+            metadata["memory"] = memory
+        if cpus:
+            args.extend(["--cpus", cpus])
+            metadata["cpus"] = cpus
+        if pids_limit:
+            args.extend(["--pids-limit", str(pids_limit)])
+            metadata["pids_limit"] = pids_limit
+        if read_only_rootfs:
+            args.append("--read-only")
+            args.extend(["--tmpfs", "/tmp:rw,nosuid,nodev,size=64m"])
+        if drop_capabilities:
+            args.extend(["--cap-drop", "ALL"])
+        if no_new_privileges:
+            args.extend(["--security-opt", "no-new-privileges"])
+        return args, metadata
+
+    def vm_runtime_policy(config: dict[str, Any]) -> dict[str, Any]:
+        profile = str(config.get("sandboxVmProfile") or "baseline").strip().lower()
+        if profile not in {"baseline", "hardened"}:
+            profile = "baseline"
+        image = str(config.get("sandboxVmImage") or os.environ.get("AGENT_FLOW_CODE_VM_IMAGE") or "").strip()
+        engine = str(config.get("sandboxVmEngine") or os.environ.get("AGENT_FLOW_CODE_VM_ENGINE") or "").strip().lower()
+        runner_manifest = str(
+            config.get("sandboxVmRunnerManifest") or os.environ.get("AGENT_FLOW_CODE_VM_RUNNER_MANIFEST") or ""
+        ).strip()
+        image_manifest = str(
+            config.get("sandboxVmImageManifest") or os.environ.get("AGENT_FLOW_CODE_VM_IMAGE_MANIFEST") or ""
+        ).strip()
+        memory = str(config.get("sandboxVmMemory") or ("1024m" if profile == "hardened" else "")).strip()
+        cpus = str(config.get("sandboxVmCpus") or ("1" if profile == "hardened" else "")).strip()
+        metadata: dict[str, Any] = {
+            "profile": profile,
+            "runner_protocol": "agent-flow-vm-runner.v1",
+            "ephemeral": True,
+        }
+        image_id = str(config.get("sandboxVmImageId") or "").strip()
+        if image_id:
+            metadata["image_id"] = image_id
+        if engine:
+            metadata["engine"] = engine
+        if image:
+            metadata["image"] = image
+        if runner_manifest:
+            metadata["runner_manifest"] = runner_manifest
+        if image_manifest:
+            metadata["image_manifest"] = image_manifest
+        if memory:
+            metadata["memory"] = memory
+        if cpus:
+            metadata["cpus"] = cpus
+        return metadata
+
+    def vm_runner_command(config: dict[str, Any]) -> tuple[str, list[str]]:
+        runner = str(config.get("sandboxVmRunner") or os.environ.get("AGENT_FLOW_CODE_VM_RUNNER") or "").strip()
+        args = config_string_list(config, "sandboxVmArgs")
+        if not args:
+            env_args = os.environ.get("AGENT_FLOW_CODE_VM_ARGS")
+            if env_args:
+                args = shlex.split(env_args)
+        return runner, args
+
+    def execute_custom_vm_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        runner, runner_args = vm_runner_command(config)
+        vm_policy = vm_runtime_policy(config)
+        if not runner:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "vm_runner_not_configured",
+                "error": "sandboxVmRunner ou AGENT_FLOW_CODE_VM_RUNNER precisa ser configurado para sandboxIsolation=vm.",
+                "sandbox_workspace_isolation": "vm",
+                "vm_policy": vm_policy,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        runner_path = shutil.which(runner)
+        if not runner_path:
+            candidate = Path(runner)
+            if candidate.exists():
+                runner_path = str(candidate)
+        if not runner_path:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": f"vm_runner_not_available:{runner}",
+                "sandbox_workspace_isolation": "vm",
+                "vm_runner": runner,
+                "vm_policy": vm_policy,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        entry_name = str(config.get("codeEntry") or "run")
+        source_path = config.get("codePath")
+        inline_source = config.get("codeInline")
+        language = str(config.get("codeLanguage") or "python").lower()
+        execution = str(config.get("codeExecution") or "native").lower()
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        adapter_metadata = {
+            "id": str(config.get("codeEntry") or config.get("handler") or node_id),
+            "execution": "runtime_adapter",
+            "language": config.get("codeLanguage"),
+            "node_id": node_id,
+            "timeout_seconds": int(config.get("timeoutSeconds") or 30),
+            "sandbox_isolation": str(config.get("sandboxIsolation") or ""),
+            "vm_image_id": config.get("sandboxVmImageId"),
+        } if execution == "runtime_adapter" else None
+        request: dict[str, Any] = {
+            "protocol": "agent-flow-vm-runner.v1",
+            "entry": entry_name,
+            "language": language,
+            "input": jsonable(input_value),
+            "context": {
+                "node_id": node_id,
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "input_path": input_path,
+                "state": jsonable(state),
+            },
+            "contract": contract,
+            "vm": vm_policy,
+        }
+        if adapter_metadata:
+            request["adapter"] = {key: value for key, value in adapter_metadata.items() if value not in (None, "")}
+            request["context"]["adapter"] = request["adapter"]
+        with custom_code_workspace(config) as (workspace, workspace_isolation):
+            workspace_isolation = "vm"
+            if inline_source:
+                request["inlineSource"] = str(inline_source)
+            elif source_path:
+                safe_source_path = safe_code_path_in_root(str(source_path), workspace)
+                request["sourcePath"] = str(safe_source_path)
+                request["sourcePathRelative"] = safe_source_path.relative_to(workspace).as_posix()
+            else:
+                return {
+                    "ok": False,
+                    "status": "custom_code_not_executed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "reason": "runtime_adapter_vm_source_not_configured" if execution == "runtime_adapter" else "missing_code_source",
+                    "sandbox_workspace_isolation": workspace_isolation,
+                    "vm_runner": runner,
+                    "vm_policy": vm_policy,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                }
+            request["workspace"] = str(workspace)
+            request["workspaceIsolation"] = workspace_isolation
+            timeout_seconds = int(config.get("timeoutSeconds") or 30)
+            try:
+                completed = subprocess.run(
+                    [runner_path, *runner_args],
+                    input=json.dumps(request),
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout_seconds,
+                    cwd=str(workspace),
+                    env=custom_subprocess_env(config, workspace_isolation),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                return {
+                    "ok": False,
+                    "status": "custom_code_failed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "error": f"vm_runner_timeout_after_{timeout_seconds}s",
+                    "stdout": str(exc.stdout or ""),
+                    "stderr": str(exc.stderr or ""),
+                    "sandbox_workspace_isolation": workspace_isolation,
+                    "vm_runner": runner,
+                    "vm_policy": vm_policy,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                }
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        try:
+            runner_result = json.loads(stdout) if stdout else {}
+        except json.JSONDecodeError:
+            runner_result = {"ok": False, "error": stdout or "empty_vm_runner_output"}
+        if completed.returncode != 0 or not runner_result.get("ok"):
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": runner_result.get("error") or "vm_runner_failed",
+                "traceback": runner_result.get("traceback"),
+                "exit_code": completed.returncode,
+                "stderr": stderr,
+                "sandbox_workspace_isolation": "vm",
+                "vm_runner": runner,
+                "vm_policy": vm_policy,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        allow_unverified_isolation = str(os.environ.get("AGENT_FLOW_CODE_VM_ALLOW_UNVERIFIED_ISOLATION") or "").lower() in {"1", "true", "yes"}
+        if runner_result.get("providesVmIsolation") is not True and not allow_unverified_isolation:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": "vm_runner_unverified_isolation",
+                "vm_runner_provides_isolation": runner_result.get("providesVmIsolation"),
+                "vm_runner_allow_unverified_isolation": False,
+                "exit_code": completed.returncode,
+                "stderr": stderr,
+                "sandbox_workspace_isolation": "vm",
+                "vm_runner": runner,
+                "vm_policy": vm_policy,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        return {
+            "ok": True,
+            "status": "custom_code_executed",
+            "node_id": node_id,
+            "contract": contract,
+            "output": jsonable(runner_result.get("output")),
+            "stdout": runner_result.get("stdout"),
+            "vm_runner_provides_isolation": runner_result.get("providesVmIsolation"),
+            "exit_code": completed.returncode,
+            "stderr": stderr,
+            "sandbox_workspace_isolation": "vm",
+            "vm_runner": runner,
+            "vm_policy": vm_policy,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def execute_custom_python_container(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        image = str(config.get("sandboxContainerImage") or os.environ.get("AGENT_FLOW_CODE_CONTAINER_IMAGE") or "").strip()
+        engine = str(config.get("sandboxContainerEngine") or os.environ.get("AGENT_FLOW_CODE_CONTAINER_ENGINE") or "docker").strip()
+        container_policy_args, container_policy = container_runtime_policy(config)
+        if not image:
+            return {
+                "ok": False,
+                "status": "custom_code_not_executed",
+                "node_id": node_id,
+                "contract": contract,
+                "reason": "container_image_not_configured",
+                "error": "sandboxContainerImage ou AGENT_FLOW_CODE_CONTAINER_IMAGE precisa ser configurado para sandboxIsolation=container.",
+                "sandbox_workspace_isolation": "container",
+                "container_engine": engine,
+                "container_policy": container_policy,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        engine_path = shutil.which(engine)
+        if not engine_path:
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": f"container_engine_not_available:{engine}",
+                "sandbox_workspace_isolation": "container",
+                "container_image": image,
+                "container_engine": engine,
+                "container_policy": container_policy,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        entry_name = str(config.get("codeEntry") or "run")
+        source_path = config.get("codePath")
+        inline_source = config.get("codeInline")
+        input_path = str(config.get("inputPath") or "state")
+        input_value = state_path_value(state, input_path)
+        request: dict[str, Any] = {
+            "entry": entry_name,
+            "input": jsonable(input_value),
+            "context": {
+                "node_id": node_id,
+                "session_id": state.get("session_id"),
+                "turn": state.get("turn"),
+                "input_path": input_path,
+                "state": jsonable(state),
+            },
+            "contract": contract,
+        }
+        worker_source = r'''
+import contextlib
+import inspect
+import io
+import json
+import pathlib
+import sys
+import traceback
+
+
+def _json_default(value):
+    if isinstance(value, pathlib.Path):
+        return str(value)
+    if isinstance(value, set):
+        return list(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    as_dict = getattr(value, "dict", None)
+    if callable(as_dict):
+        return as_dict()
+    return str(value)
+
+
+def _call_entry(entry, input_value, context, contract):
+    signature = inspect.signature(entry)
+    positional = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+    ]
+    has_varargs = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in signature.parameters.values())
+    if has_varargs or len(positional) >= 3:
+        return entry(input_value, context, contract)
+    if len(positional) == 2:
+        return entry(input_value, context)
+    if len(positional) == 1:
+        return entry(input_value)
+    return entry()
+
+
+try:
+    request = json.load(sys.stdin)
+    entry_name = str(request.get("entry") or "run")
+    inline_source = request.get("inlineSource")
+    source_path = request.get("sourcePath")
+    if inline_source:
+        source = str(inline_source)
+        filename = "<agent-flow-container-python>"
+    elif source_path:
+        path = pathlib.Path(str(source_path))
+        source = path.read_text(encoding="utf-8")
+        filename = str(path)
+    else:
+        raise RuntimeError("missing_code_source")
+    namespace = {
+        "__builtins__": __builtins__,
+        "json": json,
+        "Path": pathlib.Path,
+    }
+    exec(compile(source, filename, "exec"), namespace)
+    entry = namespace.get(entry_name)
+    if not callable(entry):
+        raise RuntimeError(f"Entry point não encontrado ou não chamável: {entry_name}")
+    captured_stdout = io.StringIO()
+    with contextlib.redirect_stdout(captured_stdout):
+        output = _call_entry(entry, request.get("input"), request.get("context") or {}, request.get("contract") or {})
+    response = {
+        "ok": True,
+        "output": output,
+        "stdout": captured_stdout.getvalue(),
+    }
+except Exception as exc:
+    response = {
+        "ok": False,
+        "error": str(exc),
+        "traceback": traceback.format_exc(limit=5),
+    }
+
+print(json.dumps(response, ensure_ascii=False, default=_json_default))
+'''
+        with custom_code_workspace(config) as (workspace, workspace_isolation):
+            workspace_isolation = "container"
+            if inline_source:
+                request["inlineSource"] = str(inline_source)
+            elif source_path:
+                safe_source_path = safe_code_path_in_root(str(source_path), workspace)
+                relative_source_path = safe_source_path.relative_to(workspace).as_posix()
+                request["sourcePath"] = f"/workspace/code/{relative_source_path}"
+            else:
+                return {
+                    "ok": False,
+                    "status": "custom_code_not_executed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "reason": "missing_code_source",
+                    "sandbox_workspace_isolation": workspace_isolation,
+                    "container_image": image,
+                    "container_engine": engine,
+                }
+            worker_path = workspace.parent / "worker.py"
+            worker_path.write_text(worker_source, encoding="utf-8")
+            timeout_seconds = int(config.get("timeoutSeconds") or 30)
+            env_args: list[str] = ["-e", "AGENT_FLOW_SANDBOX_ISOLATION=container"]
+            for key in config_string_list(config, "sandboxEnvAllowlist"):
+                value = os.environ.get(key)
+                if value is not None:
+                    env_args.extend(["-e", f"{key}={value}"])
+            container_command = [
+                engine_path,
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                *container_policy_args,
+                "-i",
+                "-v",
+                f"{workspace.parent.resolve()}:/workspace:rw",
+                "-w",
+                "/workspace/code",
+                *env_args,
+                image,
+                "python",
+                "/workspace/worker.py",
+            ]
+            try:
+                completed = subprocess.run(
+                    container_command,
+                    input=json.dumps(request),
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                return {
+                    "ok": False,
+                    "status": "custom_code_failed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "error": f"python_container_timeout_after_{timeout_seconds}s",
+                    "stdout": str(exc.stdout or ""),
+                    "stderr": str(exc.stderr or ""),
+                    "sandbox_workspace_isolation": workspace_isolation,
+                    "container_image": image,
+                    "container_engine": engine,
+                    "container_network": "none",
+                    "container_policy": container_policy,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                }
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        try:
+            worker_result = json.loads(stdout) if stdout else {}
+        except json.JSONDecodeError:
+            worker_result = {"ok": False, "error": stdout or "empty_python_container_output"}
+        if completed.returncode != 0 or not worker_result.get("ok"):
+            return {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": worker_result.get("error") or "python_container_failed",
+                "traceback": worker_result.get("traceback"),
+                "exit_code": completed.returncode,
+                "stderr": stderr,
+                "sandbox_workspace_isolation": "container",
+                "container_image": image,
+                "container_engine": engine,
+                "container_network": "none",
+                "container_policy": container_policy,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+        return {
+            "ok": True,
+            "status": "custom_code_executed",
+            "node_id": node_id,
+            "contract": contract,
+            "output": jsonable(worker_result.get("output")),
+            "stdout": worker_result.get("stdout"),
+            "exit_code": completed.returncode,
+            "stderr": stderr,
+            "sandbox_workspace_isolation": "container",
+            "container_image": image,
+            "container_engine": engine,
+            "container_network": "none",
+            "container_policy": container_policy,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
     def execute_custom_node_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         node_id = config["id"]
         started_at = time.perf_counter()
@@ -490,19 +1512,6 @@ def build_graph(
             "entry": entry_name,
             "language": language,
         }
-        if inline_source:
-            request["inlineSource"] = str(inline_source)
-        elif source_path:
-            request["sourcePath"] = str(safe_code_path(str(source_path)))
-        else:
-            return {
-                "ok": False,
-                "status": "custom_code_not_executed",
-                "node_id": node_id,
-                "contract": contract,
-                "reason": "missing_code_source",
-            }
-
         input_path = str(config.get("inputPath") or "state")
         input_value = state_path_value(state, input_path)
         request["input"] = jsonable(input_value)
@@ -514,16 +1523,114 @@ def build_graph(
             "state": jsonable(state),
         }
 
-        runner_path = Path(__file__).resolve().parent / "code_runner.mjs"
-        timeout_seconds = int(config.get("timeoutSeconds") or 30)
-        completed = subprocess.run(
-            ["node", str(runner_path)],
-            input=json.dumps(request),
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        with custom_code_workspace(config) as (workspace, workspace_isolation):
+            if inline_source:
+                request["inlineSource"] = str(inline_source)
+            elif source_path:
+                request["sourcePath"] = str(safe_code_path_in_root(str(source_path), workspace))
+            else:
+                return {
+                    "ok": False,
+                    "status": "custom_code_not_executed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "reason": "missing_code_source",
+                    "sandbox_workspace_isolation": workspace_isolation,
+                }
+
+            runner_path = Path(__file__).resolve().parent / "code_runner.mjs"
+            timeout_seconds = int(config.get("timeoutSeconds") or 30)
+            if workspace_isolation == "container":
+                image = str(config.get("sandboxContainerImage") or os.environ.get("AGENT_FLOW_CODE_CONTAINER_IMAGE") or "").strip()
+                engine = str(config.get("sandboxContainerEngine") or os.environ.get("AGENT_FLOW_CODE_CONTAINER_ENGINE") or "docker").strip()
+                container_policy_args, container_policy = container_runtime_policy(config)
+                if not image:
+                    return {
+                        "ok": False,
+                        "status": "custom_code_not_executed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "reason": "container_image_not_configured",
+                        "error": "sandboxContainerImage ou AGENT_FLOW_CODE_CONTAINER_IMAGE precisa ser configurado para sandboxIsolation=container.",
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_engine": engine,
+                        "container_policy": container_policy,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }
+                engine_path = shutil.which(engine)
+                if not engine_path:
+                    return {
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": f"container_engine_not_available:{engine}",
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_image": image,
+                        "container_engine": engine,
+                        "container_policy": container_policy,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }
+                runner_copy = workspace.parent / "code_runner.mjs"
+                runner_copy.write_text(runner_path.read_text(encoding="utf-8"), encoding="utf-8")
+                env_args: list[str] = ["-e", "AGENT_FLOW_SANDBOX_ISOLATION=container"]
+                for key in config_string_list(config, "sandboxEnvAllowlist"):
+                    value = os.environ.get(key)
+                    if value is not None:
+                        env_args.extend(["-e", f"{key}={value}"])
+                container_command = [
+                    engine_path,
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    *container_policy_args,
+                    "-i",
+                    "-v",
+                    f"{workspace.parent.resolve()}:/workspace:rw",
+                    "-w",
+                    "/workspace/code",
+                    *env_args,
+                    image,
+                    "node",
+                    "/workspace/code_runner.mjs",
+                ]
+                try:
+                    completed = subprocess.run(
+                        container_command,
+                        input=json.dumps(request),
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout_seconds,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    return {
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": f"node_container_timeout_after_{timeout_seconds}s",
+                        "stdout": str(exc.stdout or ""),
+                        "stderr": str(exc.stderr or ""),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_image": image,
+                        "container_engine": engine,
+                        "container_network": "none",
+                        "container_policy": container_policy,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }
+            else:
+                completed = subprocess.run(
+                    ["node", str(runner_path)],
+                    input=json.dumps(request),
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout_seconds,
+                    cwd=str(workspace),
+                    env=custom_subprocess_env(config, workspace_isolation),
+                    check=False,
+                )
         stdout = (completed.stdout or "").strip()
         stderr = (completed.stderr or "").strip()
         try:
@@ -539,45 +1646,244 @@ def build_graph(
                 "contract": contract,
                 "error": error.get("message") if isinstance(error, dict) else str(error or "node_runner_failed"),
                 "stderr": stderr,
+                "sandbox_workspace_isolation": workspace_isolation,
+                "container_image": image if workspace_isolation == "container" else None,
+                "container_engine": engine if workspace_isolation == "container" else None,
+                "container_network": "none" if workspace_isolation == "container" else None,
+                "container_policy": container_policy if workspace_isolation == "container" else None,
             }
-        return {
+        result = {
             "ok": True,
             "status": "custom_code_executed",
             "node_id": node_id,
             "contract": contract,
             "output": jsonable(runner_result.get("output")),
+            "sandbox_workspace_isolation": workspace_isolation,
             "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
         }
+        if workspace_isolation == "container":
+            result["stderr"] = stderr
+            result["container_image"] = image
+            result["container_engine"] = engine
+            result["container_network"] = "none"
+            result["container_policy"] = container_policy
+        return result
 
-    def execute_custom_http_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+    def shell_command_for_language(language: str) -> str:
+        return "sh" if language in {"shell", "sh"} else "bash"
+
+    def execute_custom_shell_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        node_id = config["id"]
+        started_at = time.perf_counter()
+        language = str(config.get("codeLanguage") or "bash").lower()
+        command_name = shell_command_for_language(language)
+        source_path = config.get("codePath")
+        inline_source = config.get("codeInline")
+        request_payload, payload_bytes, payload_policy = external_request_payload(config, state, contract)
+        max_payload_bytes = code_max_payload_bytes(config)
+        if max_payload_bytes and payload_bytes > max_payload_bytes:
+            return payload_too_large_result(config, contract, payload_bytes, payload_policy, started_at)
+        retry_attempts = code_retry_attempts(config)
+        max_attempts = retry_attempts + 1
+        timeout_seconds = int(config.get("timeoutSeconds") or 30)
+        image = None
+        engine = None
+        container_policy = None
+        last_result: dict[str, Any] | None = None
+        with custom_code_workspace(config) as (workspace, workspace_isolation):
+            if inline_source:
+                script_path = workspace / f"agent_flow_inline_{node_id}.sh"
+                script_path.write_text(str(inline_source), encoding="utf-8")
+            elif source_path:
+                script_path = safe_code_path_in_root(str(source_path), workspace)
+            else:
+                return {
+                    "ok": False,
+                    "status": "custom_code_not_executed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "reason": "missing_code_source",
+                    "sandbox_workspace_isolation": workspace_isolation,
+                }
+            relative_script_path = script_path.relative_to(workspace).as_posix()
+            run_command = [command_name, relative_script_path]
+            subprocess_env = custom_subprocess_env(config, workspace_isolation)
+            if workspace_isolation == "container":
+                image = str(config.get("sandboxContainerImage") or os.environ.get("AGENT_FLOW_CODE_CONTAINER_IMAGE") or "").strip()
+                engine = str(config.get("sandboxContainerEngine") or os.environ.get("AGENT_FLOW_CODE_CONTAINER_ENGINE") or "docker").strip()
+                container_policy_args, container_policy = container_runtime_policy(config)
+                if not image:
+                    return {
+                        "ok": False,
+                        "status": "custom_code_not_executed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "reason": "container_image_not_configured",
+                        "error": "sandboxContainerImage ou AGENT_FLOW_CODE_CONTAINER_IMAGE precisa ser configurado para sandboxIsolation=container.",
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_engine": engine,
+                        "container_policy": container_policy,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }
+                engine_path = shutil.which(engine)
+                if not engine_path:
+                    return {
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": f"container_engine_not_available:{engine}",
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_image": image,
+                        "container_engine": engine,
+                        "container_policy": container_policy,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }
+                env_args: list[str] = ["-e", "AGENT_FLOW_SANDBOX_ISOLATION=container"]
+                for key in config_string_list(config, "sandboxEnvAllowlist"):
+                    value = os.environ.get(key)
+                    if value is not None:
+                        env_args.extend(["-e", f"{key}={value}"])
+                run_command = [
+                    engine_path,
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    *container_policy_args,
+                    "-i",
+                    "-v",
+                    f"{workspace.parent.resolve()}:/workspace:rw",
+                    "-w",
+                    "/workspace/code",
+                    *env_args,
+                    image,
+                    command_name,
+                    relative_script_path,
+                ]
+                subprocess_env = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    completed = subprocess.run(
+                        run_command,
+                        input=json.dumps(request_payload),
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout_seconds,
+                        cwd=str(workspace) if workspace_isolation != "container" else None,
+                        env=subprocess_env,
+                        check=False,
+                    )
+                    stdout = (completed.stdout or "").strip()
+                    stderr = (completed.stderr or "").strip()
+                    try:
+                        content: Any = json.loads(stdout) if stdout else None
+                    except json.JSONDecodeError:
+                        content = stdout
+                    if isinstance(content, dict):
+                        external_ok = bool(content.get("ok", True))
+                        output = content.get("output") if "output" in content else content
+                        error = content.get("error")
+                    else:
+                        external_ok = True
+                        output = content
+                        error = None
+                    ok = completed.returncode == 0 and external_ok
+                    last_result = attach_external_execution_metadata({
+                        "ok": ok,
+                        "status": "custom_code_executed" if ok else "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "output": jsonable(output),
+                        "exit_code": completed.returncode,
+                        "stderr": stderr,
+                        "error": error,
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_image": image if workspace_isolation == "container" else None,
+                        "container_engine": engine if workspace_isolation == "container" else None,
+                        "container_network": "none" if workspace_isolation == "container" else None,
+                        "container_policy": container_policy if workspace_isolation == "container" else None,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if ok or attempt >= max_attempts:
+                        return last_result
+                except subprocess.TimeoutExpired as exc:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": f"shell_timeout_after_{timeout_seconds}s",
+                        "stdout": str(exc.stdout or ""),
+                        "stderr": str(exc.stderr or ""),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_image": image if workspace_isolation == "container" else None,
+                        "container_engine": engine if workspace_isolation == "container" else None,
+                        "container_network": "none" if workspace_isolation == "container" else None,
+                        "container_policy": container_policy if workspace_isolation == "container" else None,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if attempt >= max_attempts:
+                        return last_result
+                except Exception as exc:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": str(exc),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "container_image": image if workspace_isolation == "container" else None,
+                        "container_engine": engine if workspace_isolation == "container" else None,
+                        "container_network": "none" if workspace_isolation == "container" else None,
+                        "container_policy": container_policy if workspace_isolation == "container" else None,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if attempt >= max_attempts:
+                        return last_result
+                time.sleep(min(0.25 * attempt, 1.0))
+            return last_result or {
+                "ok": False,
+                "status": "custom_code_failed",
+                "node_id": node_id,
+                "contract": contract,
+                "error": "shell_attempts_exhausted",
+                "sandbox_workspace_isolation": workspace_isolation,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            }
+
+    def execute_custom_http_adapter(
+        config: dict[str, Any],
+        state: ReferenceState,
+        contract: dict[str, Any],
+        missing_url_reason: str = "url_not_configured",
+        adapter_payload: bool = False,
+    ) -> dict[str, Any]:
         node_id = config["id"]
         started_at = time.perf_counter()
         method = str(config.get("method") or "POST").upper()
-        url = str(config.get("url") or "")
-        input_path = str(config.get("inputPath") or "state")
-        input_value = state_path_value(state, input_path)
+        url = str(config.get("url") or "").strip()
         if not url:
             return {
                 "ok": False,
                 "status": "custom_code_not_executed",
                 "node_id": node_id,
                 "contract": contract,
-                "reason": "url_not_configured",
+                "reason": missing_url_reason,
             }
 
-        request_payload = {
-            "input": jsonable(input_value),
-            "context": {
-                "node_id": node_id,
-                "session_id": state.get("session_id"),
-                "turn": state.get("turn"),
-                "input_path": input_path,
-                "state": jsonable(state),
-            },
-            "contract": contract,
-        }
+        request_payload, payload_bytes, payload_policy = external_request_payload(
+            config,
+            state,
+            contract,
+            adapter_payload=adapter_payload,
+        )
+        max_payload_bytes = code_max_payload_bytes(config)
+        if max_payload_bytes and payload_bytes > max_payload_bytes:
+            return payload_too_large_result(config, contract, payload_bytes, payload_policy, started_at)
+        retry_attempts = code_retry_attempts(config)
         if url.startswith("mock://"):
-            return {
+            return attach_external_execution_metadata({
                 "ok": True,
                 "status": "custom_code_executed",
                 "node_id": node_id,
@@ -589,9 +1895,11 @@ def build_graph(
                     "request": request_payload,
                 },
                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
+            }, attempts=1, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
 
-        try:
+        max_attempts = retry_attempts + 1
+        last_result: dict[str, Any] | None = None
+        for attempt in range(1, max_attempts + 1):
             data = None
             headers = {"Accept": "application/json"}
             if method not in {"GET", "DELETE"}:
@@ -599,50 +1907,78 @@ def build_graph(
                 headers["Content-Type"] = "application/json"
             request = urllib.request.Request(url, data=data, headers=headers, method=method)
             timeout = int(config.get("timeoutSeconds") or 30)
-            with urllib.request.urlopen(request, timeout=timeout) as result:
-                raw = result.read().decode("utf-8", errors="replace")
-                try:
-                    content: Any = json.loads(raw) if raw else None
-                except json.JSONDecodeError:
-                    content = raw
-                if isinstance(content, dict):
-                    external_ok = bool(content.get("ok", True))
-                    output = content.get("output") if "output" in content else content
-                    error = content.get("error")
-                else:
-                    external_ok = True
-                    output = content
-                    error = None
-                return {
-                    "ok": external_ok and 200 <= result.status < 400,
-                    "status": "custom_code_executed" if external_ok and 200 <= result.status < 400 else "custom_code_failed",
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as result:
+                    raw = result.read().decode("utf-8", errors="replace")
+                    try:
+                        content: Any = json.loads(raw) if raw else None
+                    except json.JSONDecodeError:
+                        content = raw
+                    if isinstance(content, dict):
+                        external_ok = bool(content.get("ok", True))
+                        output = content.get("output") if "output" in content else content
+                        error = content.get("error")
+                    else:
+                        external_ok = True
+                        output = content
+                        error = None
+                    last_result = attach_external_execution_metadata({
+                        "ok": external_ok and 200 <= result.status < 400,
+                        "status": "custom_code_executed" if external_ok and 200 <= result.status < 400 else "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "output": jsonable(output),
+                        "status_code": result.status,
+                        "error": error,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if last_result.get("ok") or attempt >= max_attempts:
+                        return last_result
+            except urllib.error.HTTPError as exc:
+                raw = exc.read().decode("utf-8", errors="replace")
+                last_result = attach_external_execution_metadata({
+                    "ok": False,
+                    "status": "custom_code_failed",
                     "node_id": node_id,
                     "contract": contract,
-                    "output": jsonable(output),
-                    "status_code": result.status,
-                    "error": error,
+                    "status_code": exc.code,
+                    "error": raw,
                     "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-                }
-        except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "status_code": exc.code,
-                "error": raw,
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": str(exc),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
+                }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                if attempt >= max_attempts:
+                    return last_result
+            except Exception as exc:
+                last_result = attach_external_execution_metadata({
+                    "ok": False,
+                    "status": "custom_code_failed",
+                    "node_id": node_id,
+                    "contract": contract,
+                    "error": str(exc),
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                if attempt >= max_attempts:
+                    return last_result
+            time.sleep(min(0.25 * attempt, 1.0))
+        return last_result or {
+            "ok": False,
+            "status": "custom_code_failed",
+            "node_id": node_id,
+            "contract": contract,
+            "error": "external_executor_attempts_exhausted",
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def execute_custom_http_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        return execute_custom_http_adapter(config, state, contract)
+
+    def execute_custom_runtime_adapter_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+        return execute_custom_http_adapter(
+            config,
+            state,
+            contract,
+            missing_url_reason="runtime_adapter_url_not_configured",
+            adapter_payload=True,
+        )
 
     def execute_custom_sidecar_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         node_id = config["id"]
@@ -655,8 +1991,6 @@ def build_graph(
             sidecar_args = [str(item).strip() for item in raw_args if str(item).strip()]
         else:
             sidecar_args = []
-        input_path = str(config.get("inputPath") or "state")
-        input_value = state_path_value(state, input_path)
         if not command:
             return {
                 "ok": False,
@@ -666,72 +2000,91 @@ def build_graph(
                 "reason": "sidecar_command_not_configured",
             }
 
-        request_payload = {
-            "input": jsonable(input_value),
-            "context": {
-                "node_id": node_id,
-                "session_id": state.get("session_id"),
-                "turn": state.get("turn"),
-                "input_path": input_path,
-                "state": jsonable(state),
-            },
-            "contract": contract,
-        }
+        request_payload, payload_bytes, payload_policy = external_request_payload(config, state, contract)
+        max_payload_bytes = code_max_payload_bytes(config)
+        if max_payload_bytes and payload_bytes > max_payload_bytes:
+            return payload_too_large_result(config, contract, payload_bytes, payload_policy, started_at)
+        retry_attempts = code_retry_attempts(config)
+        max_attempts = retry_attempts + 1
         timeout_seconds = int(config.get("timeoutSeconds") or 30)
-        try:
-            completed = subprocess.run(
-                [command, *sidecar_args],
-                input=json.dumps(request_payload),
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-                cwd=str(CODE_ROOT),
-                check=False,
-            )
-            stdout = (completed.stdout or "").strip()
-            stderr = (completed.stderr or "").strip()
-            try:
-                content: Any = json.loads(stdout) if stdout else None
-            except json.JSONDecodeError:
-                content = stdout
-            if isinstance(content, dict):
-                external_ok = bool(content.get("ok", True))
-                output = content.get("output") if "output" in content else content
-                error = content.get("error")
-            else:
-                external_ok = True
-                output = content
-                error = None
-            ok = completed.returncode == 0 and external_ok
-            return {
-                "ok": ok,
-                "status": "custom_code_executed" if ok else "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "output": jsonable(output),
-                "exit_code": completed.returncode,
-                "stderr": stderr,
-                "error": error,
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except subprocess.TimeoutExpired as exc:
-            return {
+        last_result: dict[str, Any] | None = None
+        with custom_code_workspace(config) as (workspace, workspace_isolation):
+            subprocess_env = custom_subprocess_env(config, workspace_isolation)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    completed = subprocess.run(
+                        [command, *sidecar_args],
+                        input=json.dumps(request_payload),
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout_seconds,
+                        cwd=str(workspace),
+                        env=subprocess_env,
+                        check=False,
+                    )
+                    stdout = (completed.stdout or "").strip()
+                    stderr = (completed.stderr or "").strip()
+                    try:
+                        content: Any = json.loads(stdout) if stdout else None
+                    except json.JSONDecodeError:
+                        content = stdout
+                    if isinstance(content, dict):
+                        external_ok = bool(content.get("ok", True))
+                        output = content.get("output") if "output" in content else content
+                        error = content.get("error")
+                    else:
+                        external_ok = True
+                        output = content
+                        error = None
+                    ok = completed.returncode == 0 and external_ok
+                    last_result = attach_external_execution_metadata({
+                        "ok": ok,
+                        "status": "custom_code_executed" if ok else "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "output": jsonable(output),
+                        "exit_code": completed.returncode,
+                        "stderr": stderr,
+                        "error": error,
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if ok or attempt >= max_attempts:
+                        return last_result
+                except subprocess.TimeoutExpired as exc:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": f"sidecar_timeout_after_{timeout_seconds}s",
+                        "stdout": str(exc.stdout or ""),
+                        "stderr": str(exc.stderr or ""),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if attempt >= max_attempts:
+                        return last_result
+                except Exception as exc:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": str(exc),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if attempt >= max_attempts:
+                        return last_result
+                time.sleep(min(0.25 * attempt, 1.0))
+            return last_result or {
                 "ok": False,
                 "status": "custom_code_failed",
                 "node_id": node_id,
                 "contract": contract,
-                "error": f"sidecar_timeout_after_{timeout_seconds}s",
-                "stdout": str(exc.stdout or ""),
-                "stderr": str(exc.stderr or ""),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": str(exc),
+                "error": "sidecar_attempts_exhausted",
+                "sandbox_workspace_isolation": workspace_isolation,
                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
             }
 
@@ -747,8 +2100,6 @@ def build_graph(
             mcp_args = [str(item).strip() for item in raw_args if str(item).strip()]
         else:
             mcp_args = []
-        input_path = str(config.get("inputPath") or "state")
-        input_value = state_path_value(state, input_path)
         if not command:
             return {
                 "ok": False,
@@ -766,7 +2117,13 @@ def build_graph(
                 "reason": "mcp_tool_not_configured",
             }
 
-        tool_arguments = input_value if isinstance(input_value, dict) else {"input": jsonable(input_value)}
+        request_payload, payload_bytes, payload_policy = external_request_payload(config, state, contract)
+        max_payload_bytes = code_max_payload_bytes(config)
+        if max_payload_bytes and payload_bytes > max_payload_bytes:
+            return payload_too_large_result(config, contract, payload_bytes, payload_policy, started_at)
+        retry_attempts = code_retry_attempts(config)
+        tool_input = request_payload.get("input")
+        tool_arguments = tool_input if isinstance(tool_input, dict) else {"input": jsonable(tool_input)}
         protocol_version = str(config.get("mcpProtocolVersion") or "2025-11-25")
         messages = [
             {
@@ -796,116 +2153,164 @@ def build_graph(
         ]
         stdin_payload = "\n".join(json.dumps(message) for message in messages) + "\n"
         timeout_seconds = int(config.get("timeoutSeconds") or 30)
-        try:
-            completed = subprocess.run(
-                [command, *mcp_args],
-                input=stdin_payload,
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-                cwd=str(CODE_ROOT),
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": f"mcp_timeout_after_{timeout_seconds}s",
-                "stdout": str(exc.stdout or ""),
-                "stderr": str(exc.stderr or ""),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": str(exc),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
+        max_attempts = retry_attempts + 1
+        last_result: dict[str, Any] | None = None
+        with custom_code_workspace(config) as (workspace, workspace_isolation):
+            subprocess_env = custom_subprocess_env(config, workspace_isolation)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    completed = subprocess.run(
+                        [command, *mcp_args],
+                        input=stdin_payload,
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout_seconds,
+                        cwd=str(workspace),
+                        env=subprocess_env,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": f"mcp_timeout_after_{timeout_seconds}s",
+                        "stdout": str(exc.stdout or ""),
+                        "stderr": str(exc.stderr or ""),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if attempt >= max_attempts:
+                        return last_result
+                    time.sleep(min(0.25 * attempt, 1.0))
+                    continue
+                except Exception as exc:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "error": str(exc),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                    if attempt >= max_attempts:
+                        return last_result
+                    time.sleep(min(0.25 * attempt, 1.0))
+                    continue
 
-        stdout = (completed.stdout or "").strip()
-        stderr = (completed.stderr or "").strip()
-        responses: list[dict[str, Any]] = []
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(message, dict):
-                responses.append(message)
-        initialize_response = next((message for message in responses if message.get("id") == 1), None)
-        tool_response = next((message for message in responses if message.get("id") == 2), None)
-        if completed.returncode != 0:
-            return {
+                stdout = (completed.stdout or "").strip()
+                stderr = (completed.stderr or "").strip()
+                responses: list[dict[str, Any]] = []
+                for line in stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        message = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(message, dict):
+                        responses.append(message)
+                initialize_response = next((message for message in responses if message.get("id") == 1), None)
+                tool_response = next((message for message in responses if message.get("id") == 2), None)
+                if completed.returncode != 0:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "exit_code": completed.returncode,
+                        "stderr": stderr,
+                        "error": "mcp_process_failed",
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                elif not tool_response:
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "stderr": stderr,
+                        "error": "mcp_tools_call_response_missing",
+                        "mcp_initialize": jsonable(initialize_response),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                elif tool_response.get("error"):
+                    last_result = attach_external_execution_metadata({
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "stderr": stderr,
+                        "error": jsonable(tool_response.get("error")),
+                        "mcp_initialize": jsonable(initialize_response),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                else:
+                    result = tool_response.get("result") if isinstance(tool_response.get("result"), dict) else {}
+                    output: Any = result
+                    content = result.get("content") if isinstance(result, dict) else None
+                    if isinstance(result, dict) and "structuredContent" in result:
+                        output = result.get("structuredContent")
+                    elif isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict) and content[0].get("type") == "text":
+                        text = str(content[0].get("text") or "")
+                        try:
+                            output = json.loads(text)
+                        except json.JSONDecodeError:
+                            output = text
+                    return attach_external_execution_metadata({
+                        "ok": True,
+                        "status": "custom_code_executed",
+                        "node_id": node_id,
+                        "contract": contract,
+                        "output": jsonable(output),
+                        "mcp_initialize": jsonable(initialize_response),
+                        "sandbox_workspace_isolation": workspace_isolation,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                    }, attempts=attempt, retry_attempts=retry_attempts, payload_bytes=payload_bytes, payload_policy=payload_policy)
+                if attempt >= max_attempts:
+                    return last_result
+                time.sleep(min(0.25 * attempt, 1.0))
+            return last_result or {
                 "ok": False,
                 "status": "custom_code_failed",
                 "node_id": node_id,
                 "contract": contract,
-                "exit_code": completed.returncode,
-                "stderr": stderr,
-                "error": "mcp_process_failed",
+                "error": "mcp_attempts_exhausted",
+                "sandbox_workspace_isolation": workspace_isolation,
                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
             }
-        if not tool_response:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "stderr": stderr,
-                "error": "mcp_tools_call_response_missing",
-                "mcp_initialize": jsonable(initialize_response),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        if tool_response.get("error"):
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "stderr": stderr,
-                "error": jsonable(tool_response.get("error")),
-                "mcp_initialize": jsonable(initialize_response),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        result = tool_response.get("result") if isinstance(tool_response.get("result"), dict) else {}
-        output: Any = result
-        content = result.get("content") if isinstance(result, dict) else None
-        if isinstance(result, dict) and "structuredContent" in result:
-            output = result.get("structuredContent")
-        elif isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict) and content[0].get("type") == "text":
-            text = str(content[0].get("text") or "")
-            try:
-                output = json.loads(text)
-            except json.JSONDecodeError:
-                output = text
-        return {
-            "ok": True,
-            "status": "custom_code_executed",
-            "node_id": node_id,
-            "contract": contract,
-            "output": jsonable(output),
-            "mcp_initialize": jsonable(initialize_response),
-            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-        }
 
     def execute_custom_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         language = str(config.get("codeLanguage") or "python").lower()
         execution = str(config.get("codeExecution") or "native").lower()
         if execution == "http":
             return execute_custom_http_code(config, state, contract)
+        if execution == "runtime_adapter":
+            if requested_vm(config):
+                try:
+                    return execute_custom_vm_code(config, state, contract)
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": config["id"],
+                        "contract": contract,
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(limit=5),
+                        "sandbox_workspace_isolation": "vm",
+                    }
+            return execute_custom_runtime_adapter_code(config, state, contract)
         if execution == "mcp":
             return execute_custom_mcp_code(config, state, contract)
         if execution == "sidecar":
             return execute_custom_sidecar_code(config, state, contract)
-        if language == "external" or execution in {"runtime_adapter"}:
+        if language == "external":
             return {
                 "ok": False,
                 "status": "custom_code_not_executed",
@@ -913,6 +2318,44 @@ def build_graph(
                 "contract": contract,
                 "reason": "external_executor_not_configured",
             }
+        if shell_runtime_custom_code(config):
+            if requested_vm(config):
+                try:
+                    return execute_custom_vm_code(config, state, contract)
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "status": "custom_code_failed",
+                        "node_id": config["id"],
+                        "contract": contract,
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(limit=5),
+                        "sandbox_workspace_isolation": "vm",
+                    }
+            try:
+                return execute_custom_shell_code(config, state, contract)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "status": "custom_code_failed",
+                    "node_id": config["id"],
+                    "contract": contract,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(limit=5),
+                }
+        if requested_vm(config) and (python_runtime_custom_code(config) or node_runtime_custom_code(config)):
+            try:
+                return execute_custom_vm_code(config, state, contract)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "status": "custom_code_failed",
+                    "node_id": config["id"],
+                    "contract": contract,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(limit=5),
+                    "sandbox_workspace_isolation": "vm",
+                }
         if language in {"javascript", "js", "typescript", "ts"}:
             try:
                 return execute_custom_node_code(config, state, contract)
@@ -934,6 +2377,10 @@ def build_graph(
                 "reason": "unsupported_language",
             }
         try:
+            if requested_container(config) and python_runtime_custom_code(config):
+                return execute_custom_python_container(config, state, contract)
+            if requested_dedicated_process(config) and python_runtime_custom_code(config):
+                return execute_custom_python_dedicated_process(config, state, contract)
             return execute_custom_python_code(config, state, contract)
         except Exception as exc:
             return {
@@ -968,25 +2415,193 @@ def build_graph(
                 return redact_log_text(value)
         return "inline"
 
+    def custom_sandbox_metadata(contract: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        execution = str(contract.get("execution") or "").lower()
+        language = str(contract.get("language") or "").lower()
+        requested_isolation = str(contract.get("sandbox_isolation") or "").lower()
+        workspace_isolation = str(result.get("sandbox_workspace_isolation") or "").lower()
+        if execution in {"http", "runtime_adapter"}:
+            sandbox = {
+                "isolation": "external_endpoint",
+                "boundary": "network",
+                "executor": execution,
+                "transport": "http_json",
+            }
+        elif execution == "mcp":
+            sandbox = {
+                "isolation": "subprocess_stdio",
+                "boundary": "process",
+                "executor": redact_log_text(contract.get("mcp_command") or "mcp"),
+                "transport": "jsonrpc_stdio",
+                "cwd": "app/code",
+            }
+        elif execution == "sidecar":
+            sandbox = {
+                "isolation": "subprocess_stdio",
+                "boundary": "process",
+                "executor": redact_log_text(contract.get("sidecar_command") or "sidecar"),
+                "transport": "stdin_stdout_json",
+                "cwd": "app/code",
+            }
+        elif language in {"javascript", "js", "typescript", "ts"}:
+            sandbox = {
+                "isolation": "node_runner_process",
+                "boundary": "process",
+                "executor": "node",
+                "transport": "stdin_stdout_json",
+                "cwd": "app/code",
+            }
+        elif language in {"bash", "shell", "sh"}:
+            sandbox = {
+                "isolation": "shell_process",
+                "boundary": "process",
+                "executor": shell_command_for_language(language),
+                "transport": "stdin_stdout_json",
+                "cwd": "app/code",
+            }
+        elif language == "external":
+            sandbox = {
+                "isolation": "declared_external",
+                "boundary": "external",
+                "executor": "unconfigured",
+                "transport": "declared",
+            }
+        else:
+            sandbox = {
+                "isolation": "runtime_process",
+                "boundary": "in_process",
+                "executor": "python",
+                "transport": "function_call",
+            }
+        if requested_isolation:
+            sandbox["requested_isolation"] = requested_isolation
+        env_allowlist = contract.get("sandbox_env_allowlist")
+        if isinstance(env_allowlist, list) and env_allowlist:
+            sandbox["env_allowlist"] = env_allowlist
+        if workspace_isolation == "dedicated_process":
+            base_isolation = sandbox.get("isolation")
+            sandbox["base_isolation"] = base_isolation
+            sandbox["isolation"] = "dedicated_process"
+            sandbox["boundary"] = "process_workspace"
+            sandbox["executor"] = shell_command_for_language(language) if language in {"bash", "shell", "sh"} else "python"
+            sandbox["transport"] = "stdin_stdout_json"
+            sandbox["workspace"] = "temporary_copy"
+            sandbox["cleanup"] = "after_execution"
+        elif workspace_isolation == "container":
+            base_isolation = sandbox.get("isolation")
+            sandbox["base_isolation"] = base_isolation
+            sandbox["isolation"] = "container"
+            sandbox["boundary"] = "container"
+            if language in {"javascript", "js", "typescript", "ts"}:
+                sandbox["executor"] = "node"
+            elif language in {"bash", "shell", "sh"}:
+                sandbox["executor"] = shell_command_for_language(language)
+            else:
+                sandbox["executor"] = "python"
+            sandbox["transport"] = "stdin_stdout_json"
+            sandbox["workspace"] = "temporary_copy"
+            sandbox["cleanup"] = "after_execution"
+            sandbox["image"] = result.get("container_image") or contract.get("sandbox_container_image")
+            sandbox["engine"] = result.get("container_engine") or contract.get("sandbox_container_engine") or "docker"
+            sandbox["network"] = result.get("container_network") or "none"
+            container_policy = result.get("container_policy")
+            if isinstance(container_policy, dict) and container_policy:
+                sandbox["policy"] = container_policy
+                sandbox["profile"] = container_policy.get("profile")
+                sandbox["memory"] = container_policy.get("memory")
+                sandbox["cpus"] = container_policy.get("cpus")
+                sandbox["pids_limit"] = container_policy.get("pids_limit")
+                sandbox["read_only_rootfs"] = container_policy.get("read_only_rootfs")
+                sandbox["drop_capabilities"] = container_policy.get("drop_capabilities")
+                sandbox["no_new_privileges"] = container_policy.get("no_new_privileges")
+        elif workspace_isolation == "vm":
+            base_isolation = sandbox.get("isolation")
+            sandbox["base_isolation"] = base_isolation
+            sandbox["isolation"] = "vm"
+            sandbox["boundary"] = "microvm"
+            if language in {"javascript", "js", "typescript", "ts"}:
+                sandbox["executor"] = "node"
+            elif language in {"bash", "shell", "sh"}:
+                sandbox["executor"] = shell_command_for_language(language)
+            else:
+                sandbox["executor"] = "python"
+            sandbox["transport"] = "stdin_stdout_json"
+            sandbox["workspace"] = "temporary_copy"
+            sandbox["cleanup"] = "after_execution"
+            sandbox["engine"] = result.get("vm_runner") or contract.get("sandbox_vm_runner") or "vm_runner"
+            vm_policy = result.get("vm_policy")
+            if isinstance(vm_policy, dict) and vm_policy:
+                sandbox["policy"] = vm_policy
+                sandbox["profile"] = vm_policy.get("profile")
+                sandbox["image"] = vm_policy.get("image") or contract.get("sandbox_vm_image")
+                sandbox["memory"] = vm_policy.get("memory")
+                sandbox["cpus"] = vm_policy.get("cpus")
+        elif workspace_isolation == "ephemeral_workspace":
+            base_isolation = sandbox.get("isolation")
+            sandbox["base_isolation"] = base_isolation
+            sandbox["isolation"] = "ephemeral_workspace"
+            sandbox["boundary"] = "process_workspace"
+            sandbox["workspace"] = "temporary_copy"
+            sandbox["cleanup"] = "after_execution"
+        elif requested_isolation == "ephemeral_workspace":
+            sandbox["isolation_status"] = "not_applicable"
+        elif requested_isolation == "dedicated_process":
+            sandbox["isolation_status"] = "not_applicable"
+        elif requested_isolation == "container":
+            sandbox["isolation_status"] = "not_applicable"
+        elif requested_isolation == "vm":
+            sandbox["isolation_status"] = "not_applicable"
+        for source_key, target_key in [
+            ("timeout_seconds", "timeout_seconds"),
+            ("attempts", "attempts"),
+            ("retry_attempts", "retry_attempts"),
+            ("payload_bytes", "payload_bytes"),
+        ]:
+            value = result.get(source_key) if source_key in result else contract.get(source_key)
+            if value not in (None, ""):
+                sandbox[target_key] = value
+        payload_policy = result.get("payload_policy")
+        if isinstance(payload_policy, dict) and payload_policy:
+            sandbox["payload_policy"] = payload_policy
+        return {key: value for key, value in sandbox.items() if value not in (None, "")}
+
     def with_custom_observability(node_id: str, result: dict[str, Any]) -> dict[str, Any]:
         enriched = dict(result)
         contract = enriched.get("contract") if isinstance(enriched.get("contract"), dict) else {}
         mode = str(contract.get("execution") or contract.get("language") or "native")
         status = str(enriched.get("status") or ("custom_code_executed" if enriched.get("ok") else "custom_code_failed"))
+        sandbox = custom_sandbox_metadata(contract, enriched)
         execution_log = {
             "mode": mode,
             "status": status,
             "node_id": node_id,
             "target": custom_execution_target(contract),
+            "sandbox_isolation": sandbox.get("isolation"),
+            "sandbox_boundary": sandbox.get("boundary"),
+            "sandbox_executor": sandbox.get("executor"),
+            "sandbox_transport": sandbox.get("transport"),
+            "sandbox_requested_isolation": sandbox.get("requested_isolation"),
+            "sandbox_base_isolation": sandbox.get("base_isolation"),
+            "sandbox_workspace": sandbox.get("workspace"),
+            "sandbox_cleanup": sandbox.get("cleanup"),
+            "sandbox_image": sandbox.get("image"),
+            "sandbox_engine": sandbox.get("engine"),
+            "sandbox_network": sandbox.get("network"),
+            "sandbox_profile": sandbox.get("profile"),
             "input_path": contract.get("input_path"),
             "duration_ms": enriched.get("duration_ms"),
             "status_code": enriched.get("status_code"),
             "exit_code": enriched.get("exit_code"),
+            "attempts": enriched.get("attempts"),
+            "retry_attempts": enriched.get("retry_attempts"),
+            "payload_bytes": enriched.get("payload_bytes"),
+            "payload_policy": enriched.get("payload_policy"),
             "reason": enriched.get("reason"),
             "error": redact_log_text(enriched.get("error")) if enriched.get("error") is not None else None,
             "stderr": redact_log_text(enriched.get("stderr")) if enriched.get("stderr") else None,
         }
         enriched["execution_log"] = {key: value for key, value in execution_log.items() if value not in (None, "")}
+        enriched["sandbox"] = sandbox
         enriched["span"] = {
             "name": f"custom_code.{mode}",
             "status": "ok" if enriched.get("ok") else "error",
@@ -1131,6 +2746,35 @@ def build_graph(
 
         return run
 
+    def safety_decision_payload(decision: Any, node_id: str, stage: str | None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "blocked": decision.blocked,
+            "decision": decision.decision,
+        }
+        for attr in ["category", "reason"]:
+            value = getattr(decision, attr, None)
+            if value is not None:
+                payload[attr] = value
+        extra_values = {
+            "severity": getattr(decision, "severity", None),
+            "action": getattr(decision, "action", None),
+            "rule_id": getattr(decision, "rule_id", None),
+            "rule_label": getattr(decision, "rule_label", None),
+            "match_type": getattr(decision, "match_type", None),
+            "matched_text": getattr(decision, "matched_text", None),
+            "source": getattr(decision, "source", None),
+            "provider_score": getattr(decision, "provider_score", None),
+            "provider_error": getattr(decision, "provider_error", None),
+        }
+        if any(value not in (None, "") for value in extra_values.values()):
+            payload["node_id"] = node_id
+            if stage:
+                payload["stage"] = stage
+            for key, value in extra_values.items():
+                if value not in (None, ""):
+                    payload[key] = value
+        return payload
+
     def make_safety_node(config: dict[str, Any]):
         node_id = config["id"]
         stage = config.get("stage")
@@ -1140,37 +2784,33 @@ def build_graph(
             if pinned is not None:
                 return pinned
             if stage == "input":
-                decision = safety_gate.check_input(state.get("user_message", ""))
+                decision = safety_gate.check_input(state.get("user_message", ""), config)
                 if decision.blocked:
                     return mark_node(state, node_id, {
-                        "safety": {
-                            "blocked": True,
-                            "decision": decision.decision,
-                            "category": decision.category,
-                            "reason": decision.reason,
-                        },
+                        "safety": safety_decision_payload(decision, node_id, stage),
                         "assistant_message": {"code": "SEG", "text": decision.safe_response or "Mensagem bloqueada."},
                         "phase": "safety",
                         "is_complete": decision.decision == "block",
                         "status": "completed" if decision.decision == "block" else "active",
                     })
+                payload = safety_decision_payload(decision, node_id, stage)
+                if payload.get("category"):
+                    return mark_node(state, node_id, {"safety": payload})
                 return mark_node(state, node_id, {
                     "safety": {"blocked": False, "decision": "allow"},
                 })
 
             if stage == "output":
                 current_message = state.get("assistant_message") or {}
-                decision = safety_gate.check_output(str(current_message.get("text") or ""))
+                decision = safety_gate.check_output(str(current_message.get("text") or ""), config)
                 if decision.blocked:
                     return mark_node(state, node_id, {
-                        "safety": {
-                            "blocked": True,
-                            "decision": decision.decision,
-                            "category": decision.category,
-                            "reason": decision.reason,
-                        },
+                        "safety": safety_decision_payload(decision, node_id, stage),
                         "assistant_message": {"code": "SEG", "text": decision.safe_response or "Saída ajustada por segurança."},
                     })
+                payload = safety_decision_payload(decision, node_id, stage)
+                if payload.get("category"):
+                    return mark_node(state, node_id, {"safety": payload})
                 return mark_node(state, node_id, {})
 
             return mark_node(state, node_id, {})
@@ -1184,6 +2824,7 @@ def build_graph(
             pinned = pinned_node_update(state, node_id, "llm")
             if pinned is not None:
                 return pinned
+            token_callback = CURRENT_TOKEN_STREAM.get()
             result = llm_client.generate(
                 system_prompt=prompt_for_node(config),
                 user_message=state.get("user_message", ""),
@@ -1197,15 +2838,22 @@ def build_graph(
                 recent_messages=state.get("recent_messages", []),
                 adapter=config.get("llmAdapter"),
                 model=config.get("llmModel"),
+                token_callback=token_callback,
             )
+            llm_payload = {
+                "provider": result.provider,
+                "model": result.model,
+                "attempts": result.attempts,
+                "node_id": node_id,
+            }
+            if result.fallback_reason:
+                llm_payload["fallback_reason"] = result.fallback_reason
+                llm_payload["setup_command"] = result.setup_command
+                llm_payload["docker_setup_command"] = result.docker_setup_command
+                llm_payload["provider_error"] = result.provider_error
             return mark_node(state, node_id, {
                 "assistant_message": {"code": "ECHO", "text": result.text},
-                "llm": {
-                    "provider": result.provider,
-                    "model": result.model,
-                    "attempts": result.attempts,
-                    "node_id": node_id,
-                },
+                "llm": llm_payload,
             })
 
         return run
@@ -1231,6 +2879,28 @@ def build_graph(
             "sidecar_command": config.get("sidecarCommand"),
             "sidecar_args": config.get("sidecarArgs"),
             "timeout_seconds": config.get("timeoutSeconds"),
+            "retry_attempts": config.get("retryAttempts"),
+            "payload_allow_paths": config.get("payloadAllowPaths"),
+            "redact_paths": config.get("redactPaths"),
+            "max_payload_bytes": config.get("maxPayloadBytes"),
+            "sandbox_isolation": config.get("sandboxIsolation"),
+            "sandbox_env_allowlist": config.get("sandboxEnvAllowlist"),
+            "sandbox_container_image": config.get("sandboxContainerImage"),
+            "sandbox_container_engine": config.get("sandboxContainerEngine"),
+            "sandbox_container_profile": config.get("sandboxContainerProfile"),
+            "sandbox_container_memory": config.get("sandboxContainerMemory"),
+            "sandbox_container_cpus": config.get("sandboxContainerCpus"),
+            "sandbox_container_pids_limit": config.get("sandboxContainerPidsLimit"),
+            "sandbox_container_read_only_rootfs": config.get("sandboxContainerReadOnlyRootfs"),
+            "sandbox_container_drop_capabilities": config.get("sandboxContainerDropCapabilities"),
+            "sandbox_container_no_new_privileges": config.get("sandboxContainerNoNewPrivileges"),
+            "sandbox_vm_image_id": config.get("sandboxVmImageId"),
+            "sandbox_vm_runner": config.get("sandboxVmRunner"),
+            "sandbox_vm_args": config.get("sandboxVmArgs"),
+            "sandbox_vm_image": config.get("sandboxVmImage"),
+            "sandbox_vm_profile": config.get("sandboxVmProfile"),
+            "sandbox_vm_memory": config.get("sandboxVmMemory"),
+            "sandbox_vm_cpus": config.get("sandboxVmCpus"),
         }
 
         def deterministic_gate(state: ReferenceState) -> ReferenceState:
@@ -1846,7 +3516,7 @@ def build_graph(
 
     builder = StateGraph(ReferenceState)
     for config in NODE_CONFIGS:
-        builder.add_node(config["id"], handler_for_node(config))
+        builder.add_node(config["id"], trace_node(config, handler_for_node(config)))
 
     builder.add_conditional_edges(START, route_action, action_route_map)
     for node_id, target in direct_node_edges.items():

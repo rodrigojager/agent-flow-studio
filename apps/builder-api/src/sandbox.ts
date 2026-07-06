@@ -6,6 +6,7 @@ import { safeResolve, WorkspaceError } from "./workspace.ts";
 export interface SandboxStartOptions {
   runtimeDir?: string;
   port?: number;
+  env?: Record<string, string>;
 }
 
 export interface SandboxStatus {
@@ -66,10 +67,11 @@ export class SandboxManager {
         cwd: runtimeDir,
         env: {
           ...process.env,
+          ...options.env,
           DATABASE_URL: "sqlite:///./sandbox_runtime.db",
           REDIS_ENABLED: "false",
           USE_POSTGRES_CHECKPOINTER: "false",
-          MOCK_LLM: "true",
+          MOCK_LLM: options.env?.MOCK_LLM ?? "true",
           AUTH_ENABLED: "false",
           AUTO_CREATE_TABLES: "true",
         },

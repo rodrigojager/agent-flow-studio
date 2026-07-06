@@ -151,6 +151,13 @@ export interface StudioRunRegressionThresholds {
   tokenGrowthPct: number;
   costGrowthPct: number;
   durationGrowthPct: number;
+  nodeTypeThresholds: Record<string, StudioRunNodeTypeRegressionThresholds>;
+}
+
+export interface StudioRunNodeTypeRegressionThresholds {
+  maxChangedNodes: number | null;
+  maxStateDiffs: number | null;
+  maxOutputDiffs: number | null;
 }
 
 export interface StudioNodeComparison {
@@ -212,12 +219,123 @@ export interface StudioRunList {
   runs: StudioRunSummary[];
 }
 
+export interface StudioProviderTelemetryItem {
+  provider: string;
+  model: string;
+  runCount: number;
+  eventCount: number;
+  errorCount: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  tokenBudgetPct: number | null;
+  costBudgetPct: number | null;
+  alertSeverity: "ok" | "warning";
+  lastRunId: string;
+  lastSessionId: string;
+  lastEventSeq: number;
+  updatedAt: string;
+}
+
+export interface StudioProviderTelemetryAlert {
+  scope: "provider_model";
+  severity: "warning";
+  provider: string;
+  model: string;
+  metric: "tokens" | "cost";
+  observed: number;
+  limit: number;
+  message: string;
+}
+
+export interface StudioProviderTelemetryReport {
+  format: "agent-flow-builder.studio-provider-telemetry.v1";
+  flowId: string;
+  generatedAt: string;
+  windowHours: number | null;
+  windowStartedAt: string | null;
+  providerTokenBudget: number | null;
+  providerCostBudgetUsd: number | null;
+  runCount: number;
+  telemetryRunCount: number;
+  eventCount: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  alertCount: number;
+  alerts: StudioProviderTelemetryAlert[];
+  items: StudioProviderTelemetryItem[];
+}
+
+export interface StudioProviderTelemetryOptions {
+  windowHours?: number;
+  providerTokenBudget?: number;
+  providerCostBudgetUsd?: number;
+}
+
+export interface StudioSandboxTelemetryItem {
+  nodeId: string;
+  mode: string;
+  status: string;
+  sandboxIsolation: string;
+  sandboxOrchestration: string;
+  sandboxBoundary: string | null;
+  sandboxExecutor: string | null;
+  sandboxTransport: string | null;
+  sandboxImage: string | null;
+  sandboxEngine: string | null;
+  sandboxNetwork: string | null;
+  sandboxProfile: string | null;
+  sandboxHardening: "hardened" | "baseline" | "weak" | "unknown";
+  sandboxVmProvidesIsolation: boolean | null;
+  sandboxVmAssurance: string | null;
+  sandboxPolicySummary: string | null;
+  runCount: number;
+  eventCount: number;
+  failureCount: number;
+  severity: "ok" | "error";
+  lastRunId: string;
+  lastSessionId: string;
+  lastEventSeq: number;
+  updatedAt: string;
+  lastError: string | null;
+  lastDetail: string | null;
+}
+
+export interface StudioSandboxTelemetryReport {
+  format: "agent-flow-builder.studio-sandbox-telemetry.v1";
+  flowId: string;
+  generatedAt: string;
+  windowHours: number | null;
+  windowStartedAt: string | null;
+  onlyFailures: boolean;
+  runCount: number;
+  telemetryRunCount: number;
+  eventCount: number;
+  failureCount: number;
+  containerEventCount: number;
+  containerFailureCount: number;
+  vmEventCount: number;
+  vmFailureCount: number;
+  microvmEventCount: number;
+  microvmFailureCount: number;
+  hardenedEventCount: number;
+  verifiedVmIsolationEventCount: number;
+  isolatedEventCount: number;
+  latestEventAt: string | null;
+  items: StudioSandboxTelemetryItem[];
+}
+
+export interface StudioSandboxTelemetryOptions {
+  windowHours?: number;
+  onlyFailures?: boolean;
+}
+
 const STUDIO_RUN_DIR = ".agent-flow/studio-runs";
 const LOG_LIMIT = 120;
 const DEFAULT_REGRESSION_THRESHOLDS: StudioRunRegressionThresholds = {
   tokenGrowthPct: 20,
   costGrowthPct: 20,
   durationGrowthPct: 30,
+  nodeTypeThresholds: {},
 };
 
 export async function listStudioRuns(
@@ -251,6 +369,349 @@ export async function listStudioRuns(
   }
   runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return { flowId: loaded.flow.id, runs };
+}
+
+export async function buildStudioProviderTelemetry(
+  workspaceRoot: string,
+  flowId: string,
+  options: StudioProviderTelemetryOptions = {},
+): Promise<StudioProviderTelemetryReport> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const dir = path.join(loaded.flowRoot, STUDIO_RUN_DIR);
+  const windowHours = normalizePositiveNumber(options.windowHours);
+  const windowStartedAt = windowHours === null
+    ? null
+    : new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+  const providerTokenBudget = normalizePositiveNumber(options.providerTokenBudget);
+  const providerCostBudgetUsd = normalizePositiveNumber(options.providerCostBudgetUsd);
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return {
+      format: "agent-flow-builder.studio-provider-telemetry.v1",
+      flowId: loaded.flow.id,
+      generatedAt: new Date().toISOString(),
+      windowHours,
+      windowStartedAt,
+      providerTokenBudget,
+      providerCostBudgetUsd,
+      runCount: 0,
+      telemetryRunCount: 0,
+      eventCount: 0,
+      totalTokens: 0,
+      totalCostUsd: 0,
+      alertCount: 0,
+      alerts: [],
+      items: [],
+    };
+  }
+
+  const aggregates = new Map<
+    string,
+    StudioProviderTelemetryItem & { runIds: Set<string> }
+  >();
+  let runCount = 0;
+  let telemetryEventCount = 0;
+  let totalTokens = 0;
+  let totalCostUsd = 0;
+  const telemetryRunIds = new Set<string>();
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      continue;
+    }
+    let record: StudioRunRecord;
+    try {
+      record = await readStudioRunFile(path.join(dir, entry.name), loaded.flow);
+    } catch {
+      // Ignore corrupted local trace files so one bad snapshot does not break telemetry.
+      continue;
+    }
+    if (windowStartedAt && record.updatedAt.localeCompare(windowStartedAt) < 0) {
+      continue;
+    }
+    runCount += 1;
+    for (const event of record.events ?? []) {
+      const signal = collectStudioProviderTelemetrySignal(event);
+      if (!signal) {
+        continue;
+      }
+      const key = `${signal.provider}\u0000${signal.model}`;
+      const current = aggregates.get(key) ?? {
+        provider: signal.provider,
+        model: signal.model,
+        runCount: 0,
+        eventCount: 0,
+        errorCount: 0,
+        totalTokens: 0,
+        totalCostUsd: 0,
+        tokenBudgetPct: null,
+        costBudgetPct: null,
+        alertSeverity: "ok",
+        lastRunId: record.id,
+        lastSessionId: record.sessionId,
+        lastEventSeq: event.seq,
+        updatedAt: record.updatedAt,
+        runIds: new Set<string>(),
+      };
+      current.runIds.add(record.id);
+      current.runCount = current.runIds.size;
+      current.eventCount += 1;
+      current.errorCount += isErrorEvent(event) ? 1 : 0;
+      current.totalTokens += signal.tokens;
+      current.totalCostUsd = Number((current.totalCostUsd + signal.costUsd).toFixed(8));
+      if (record.updatedAt.localeCompare(current.updatedAt) >= 0) {
+        current.lastRunId = record.id;
+        current.lastSessionId = record.sessionId;
+        current.lastEventSeq = event.seq;
+        current.updatedAt = record.updatedAt;
+      }
+      aggregates.set(key, current);
+      telemetryEventCount += 1;
+      telemetryRunIds.add(record.id);
+      totalTokens += signal.tokens;
+      totalCostUsd += signal.costUsd;
+    }
+  }
+
+  const items: StudioProviderTelemetryItem[] = Array.from(aggregates.values())
+    .map(({ runIds: _runIds, ...item }) => {
+      const alertSeverity: StudioProviderTelemetryItem["alertSeverity"] =
+        (providerTokenBudget !== null && item.totalTokens > providerTokenBudget) ||
+        (providerCostBudgetUsd !== null && item.totalCostUsd > providerCostBudgetUsd)
+          ? "warning"
+          : "ok";
+      return {
+        ...item,
+        totalTokens: Math.round(item.totalTokens),
+        totalCostUsd: Number(item.totalCostUsd.toFixed(8)),
+        tokenBudgetPct: providerTokenBudget === null ? null : percentageOf(item.totalTokens, providerTokenBudget),
+        costBudgetPct: providerCostBudgetUsd === null ? null : percentageOf(item.totalCostUsd, providerCostBudgetUsd),
+        alertSeverity,
+      };
+    })
+    .sort(
+      (left, right) =>
+        right.totalCostUsd - left.totalCostUsd ||
+        right.totalTokens - left.totalTokens ||
+        left.provider.localeCompare(right.provider) ||
+        left.model.localeCompare(right.model),
+    );
+  const alerts = buildStudioProviderTelemetryAlerts(items, providerTokenBudget, providerCostBudgetUsd);
+
+  return {
+    format: "agent-flow-builder.studio-provider-telemetry.v1",
+    flowId: loaded.flow.id,
+    generatedAt: new Date().toISOString(),
+    windowHours,
+    windowStartedAt,
+    providerTokenBudget,
+    providerCostBudgetUsd,
+    runCount,
+    telemetryRunCount: telemetryRunIds.size,
+    eventCount: telemetryEventCount,
+    totalTokens: Math.round(totalTokens),
+    totalCostUsd: Number(totalCostUsd.toFixed(8)),
+    alertCount: alerts.length,
+    alerts,
+    items,
+  };
+}
+
+export async function buildStudioSandboxTelemetry(
+  workspaceRoot: string,
+  flowId: string,
+  options: StudioSandboxTelemetryOptions = {},
+): Promise<StudioSandboxTelemetryReport> {
+  const loaded = await loadFlowById(workspaceRoot, flowId);
+  const dir = path.join(loaded.flowRoot, STUDIO_RUN_DIR);
+  const windowHours = normalizePositiveNumber(options.windowHours);
+  const windowStartedAt = windowHours === null
+    ? null
+    : new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+  const onlyFailures = options.onlyFailures === true;
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return {
+      format: "agent-flow-builder.studio-sandbox-telemetry.v1",
+      flowId: loaded.flow.id,
+      generatedAt: new Date().toISOString(),
+      windowHours,
+      windowStartedAt,
+      onlyFailures,
+      runCount: 0,
+      telemetryRunCount: 0,
+      eventCount: 0,
+      failureCount: 0,
+      containerEventCount: 0,
+      containerFailureCount: 0,
+      vmEventCount: 0,
+      vmFailureCount: 0,
+      microvmEventCount: 0,
+      microvmFailureCount: 0,
+      hardenedEventCount: 0,
+      verifiedVmIsolationEventCount: 0,
+      isolatedEventCount: 0,
+      latestEventAt: null,
+      items: [],
+    };
+  }
+
+  const aggregates = new Map<
+    string,
+    StudioSandboxTelemetryItem & { runIds: Set<string> }
+  >();
+  const telemetryRunIds = new Set<string>();
+  let runCount = 0;
+  let eventCount = 0;
+  let failureCount = 0;
+  let containerEventCount = 0;
+  let containerFailureCount = 0;
+  let vmEventCount = 0;
+  let vmFailureCount = 0;
+  let microvmEventCount = 0;
+  let microvmFailureCount = 0;
+  let hardenedEventCount = 0;
+  let verifiedVmIsolationEventCount = 0;
+  let isolatedEventCount = 0;
+  let latestEventAt: string | null = null;
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      continue;
+    }
+    let record: StudioRunRecord;
+    try {
+      record = await readStudioRunFile(path.join(dir, entry.name), loaded.flow);
+    } catch {
+      // Ignore corrupted local trace files so one bad snapshot does not break telemetry.
+      continue;
+    }
+    if (windowStartedAt && record.updatedAt.localeCompare(windowStartedAt) < 0) {
+      continue;
+    }
+    runCount += 1;
+    for (const event of record.events ?? []) {
+      const signal = collectStudioSandboxTelemetrySignal(event);
+      if (!signal || (onlyFailures && !signal.failed)) {
+        continue;
+      }
+      const key = [
+        signal.nodeId,
+        signal.mode,
+        signal.status,
+        signal.sandboxIsolation,
+        signal.sandboxOrchestration,
+        signal.sandboxBoundary ?? "",
+        signal.sandboxExecutor ?? "",
+        signal.sandboxTransport ?? "",
+        signal.sandboxHardening,
+        signal.sandboxVmAssurance ?? "",
+        String(signal.sandboxVmProvidesIsolation ?? ""),
+      ].join("\u0000");
+      const current = aggregates.get(key) ?? {
+        nodeId: signal.nodeId,
+        mode: signal.mode,
+        status: signal.status,
+        sandboxIsolation: signal.sandboxIsolation,
+        sandboxOrchestration: signal.sandboxOrchestration,
+        sandboxBoundary: signal.sandboxBoundary,
+        sandboxExecutor: signal.sandboxExecutor,
+        sandboxTransport: signal.sandboxTransport,
+        sandboxImage: signal.sandboxImage,
+        sandboxEngine: signal.sandboxEngine,
+        sandboxNetwork: signal.sandboxNetwork,
+        sandboxProfile: signal.sandboxProfile,
+        sandboxHardening: signal.sandboxHardening,
+        sandboxVmProvidesIsolation: signal.sandboxVmProvidesIsolation,
+        sandboxVmAssurance: signal.sandboxVmAssurance,
+        sandboxPolicySummary: signal.sandboxPolicySummary,
+        runCount: 0,
+        eventCount: 0,
+        failureCount: 0,
+        severity: "ok",
+        lastRunId: record.id,
+        lastSessionId: record.sessionId,
+        lastEventSeq: event.seq,
+        updatedAt: record.updatedAt,
+        lastError: signal.error,
+        lastDetail: signal.detail,
+        runIds: new Set<string>(),
+      };
+      current.runIds.add(record.id);
+      current.runCount = current.runIds.size;
+      current.eventCount += 1;
+      current.failureCount += signal.failed ? 1 : 0;
+      current.severity = current.failureCount > 0 ? "error" : "ok";
+      current.sandboxImage = current.sandboxImage ?? signal.sandboxImage;
+      current.sandboxEngine = current.sandboxEngine ?? signal.sandboxEngine;
+      current.sandboxNetwork = current.sandboxNetwork ?? signal.sandboxNetwork;
+      current.sandboxProfile = current.sandboxProfile ?? signal.sandboxProfile;
+      current.sandboxPolicySummary = current.sandboxPolicySummary ?? signal.sandboxPolicySummary;
+      if (record.updatedAt.localeCompare(current.updatedAt) >= 0) {
+        current.lastRunId = record.id;
+        current.lastSessionId = record.sessionId;
+        current.lastEventSeq = event.seq;
+        current.updatedAt = record.updatedAt;
+        current.lastError = signal.error;
+        current.lastDetail = signal.detail;
+      }
+      aggregates.set(key, current);
+      telemetryRunIds.add(record.id);
+      eventCount += 1;
+      failureCount += signal.failed ? 1 : 0;
+      containerEventCount += signal.sandboxIsolation === "container" ? 1 : 0;
+      containerFailureCount += signal.sandboxIsolation === "container" && signal.failed ? 1 : 0;
+      vmEventCount += signal.sandboxIsolation === "vm" ? 1 : 0;
+      vmFailureCount += signal.sandboxIsolation === "vm" && signal.failed ? 1 : 0;
+      microvmEventCount += signal.sandboxOrchestration === "microvm" ? 1 : 0;
+      microvmFailureCount += signal.sandboxOrchestration === "microvm" && signal.failed ? 1 : 0;
+      hardenedEventCount += signal.sandboxHardening === "hardened" ? 1 : 0;
+      verifiedVmIsolationEventCount += signal.sandboxVmProvidesIsolation === true ? 1 : 0;
+      isolatedEventCount += isIsolatedSandboxSignal(signal.sandboxIsolation) ? 1 : 0;
+      latestEventAt = latestEventAt === null || record.updatedAt.localeCompare(latestEventAt) >= 0
+        ? record.updatedAt
+        : latestEventAt;
+    }
+  }
+
+  const items: StudioSandboxTelemetryItem[] = Array.from(aggregates.values())
+    .map(({ runIds: _runIds, ...item }) => item)
+    .sort(
+      (left, right) =>
+        right.failureCount - left.failureCount ||
+        right.eventCount - left.eventCount ||
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        left.nodeId.localeCompare(right.nodeId) ||
+        left.sandboxIsolation.localeCompare(right.sandboxIsolation),
+    );
+
+  return {
+    format: "agent-flow-builder.studio-sandbox-telemetry.v1",
+    flowId: loaded.flow.id,
+    generatedAt: new Date().toISOString(),
+    windowHours,
+    windowStartedAt,
+    onlyFailures,
+    runCount,
+    telemetryRunCount: telemetryRunIds.size,
+    eventCount,
+    failureCount,
+    containerEventCount,
+    containerFailureCount,
+    vmEventCount,
+    vmFailureCount,
+    microvmEventCount,
+    microvmFailureCount,
+    hardenedEventCount,
+    verifiedVmIsolationEventCount,
+    isolatedEventCount,
+    latestEventAt,
+    items,
+  };
 }
 
 export async function exportStudioRun(
@@ -292,7 +753,7 @@ export async function compareStudioRuns(
   const leftOnlyNodes = leftNodes.filter((node) => !rightNodes.includes(node));
   const rightOnlyNodes = rightNodes.filter((node) => !leftNodes.includes(node));
   const nodeComparisons = buildNodeComparisons(left, right);
-  const regression = buildRegressionSummary(left, right, leftMetrics, rightMetrics, nodeComparisons);
+  const regression = buildRegressionSummary(left, right, leftMetrics, rightMetrics, nodeComparisons, loaded.flow);
 
   return {
     format: "agent-flow-builder.studio-run-comparison.v1",
@@ -837,12 +1298,561 @@ function collectRunSignalMetrics(run: StudioRunRecord): StudioRunSignalMetrics {
   };
 }
 
+interface StudioProviderTelemetrySignal {
+  provider: string;
+  model: string;
+  tokens: number;
+  costUsd: number;
+}
+
+interface StudioSandboxTelemetrySignal {
+  nodeId: string;
+  mode: string;
+  status: string;
+  failed: boolean;
+  sandboxIsolation: string;
+  sandboxOrchestration: string;
+  sandboxBoundary: string | null;
+  sandboxExecutor: string | null;
+  sandboxTransport: string | null;
+  sandboxImage: string | null;
+  sandboxEngine: string | null;
+  sandboxNetwork: string | null;
+  sandboxProfile: string | null;
+  sandboxHardening: "hardened" | "baseline" | "weak" | "unknown";
+  sandboxVmProvidesIsolation: boolean | null;
+  sandboxVmAssurance: string | null;
+  sandboxPolicySummary: string | null;
+  error: string | null;
+  detail: string | null;
+}
+
+function collectStudioProviderTelemetrySignal(event: StudioEventSnapshot): StudioProviderTelemetrySignal | null {
+  const payload = event.payload ?? {};
+  const provider = readTelemetryProvider(payload);
+  const model = readTelemetryModel(payload);
+  const tokens = readTelemetryEventTokens(payload);
+  const costUsd = readTelemetryEventCost(payload);
+  if (!provider && !model && tokens === 0 && costUsd === 0) {
+    return null;
+  }
+  return {
+    provider: provider ?? "runtime",
+    model: model ?? "sem modelo",
+    tokens,
+    costUsd,
+  };
+}
+
+function collectStudioSandboxTelemetrySignal(event: StudioEventSnapshot): StudioSandboxTelemetrySignal | null {
+  const payload = event.payload ?? {};
+  const custom = isRecord(payload.custom) ? payload.custom : null;
+  const sandbox =
+    (custom && isRecord(custom.sandbox) ? custom.sandbox : null) ??
+    (isRecord(payload.sandbox) ? payload.sandbox : null);
+  const sandboxPolicy = sandbox && isRecord(sandbox.policy) ? sandbox.policy : null;
+  const vmPolicy =
+    (custom && isRecord(custom.vm_policy) ? custom.vm_policy : null) ??
+    (isRecord(payload.vm_policy) ? payload.vm_policy : null);
+  const containerPolicy =
+    (custom && isRecord(custom.container_policy) ? custom.container_policy : null) ??
+    (isRecord(payload.container_policy) ? payload.container_policy : null);
+  const policy = sandboxPolicy ?? vmPolicy ?? containerPolicy;
+  const executionLog =
+    (custom && isRecord(custom.execution_log) ? custom.execution_log : null) ??
+    (custom && isRecord(custom.executionLog) ? custom.executionLog : null) ??
+    (isRecord(payload.execution_log) ? payload.execution_log : null) ??
+    (isRecord(payload.executionLog) ? payload.executionLog : null);
+  const customStatus = custom ? readFirstString(custom, ["status"]) : null;
+  const status = customStatus ?? readFirstString(payload, ["status"]) ?? event.event_type;
+  const eventTypeLower = event.event_type.toLowerCase();
+  const statusLower = status.toLowerCase();
+  const hasSandboxData = Boolean(sandbox || executionLog);
+  const hasCustomCodeMarker =
+    eventTypeLower.includes("custom_code") ||
+    statusLower.includes("custom_code") ||
+    statusLower.includes("code_not_executed");
+  if (!hasSandboxData && !hasCustomCodeMarker) {
+    return null;
+  }
+  const error =
+    (custom ? readFirstString(custom, ["error", "exception", "message"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["error", "exception", "message"]) : null) ??
+    readFirstString(payload, ["error", "exception", "message"]);
+  const detail =
+    (custom ? readFirstString(custom, ["detail", "details", "reason"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["detail", "details", "reason"]) : null) ??
+    readFirstString(payload, ["detail", "details", "reason"]);
+  const failed =
+    eventTypeLower.includes("error") ||
+    eventTypeLower.includes("failed") ||
+    statusLower.includes("error") ||
+    statusLower.includes("failed") ||
+    statusLower.includes("not_executed") ||
+    statusLower.includes("blocked") ||
+    readBoolean(custom?.ok) === false ||
+    readBoolean(payload.ok) === false ||
+    Boolean(error);
+  const nodeId =
+    event.node ??
+    (custom ? readFirstString(custom, ["node_id", "nodeId", "node"]) : null) ??
+    readFirstString(payload, ["node_id", "nodeId", "node"]) ??
+    "flow";
+  const mode =
+    (executionLog ? readFirstString(executionLog, ["mode", "execution", "codeExecution"]) : null) ??
+    (custom ? readFirstString(custom, ["mode", "execution", "codeExecution"]) : null) ??
+    readFirstString(payload, ["mode", "execution", "codeExecution"]) ??
+    event.event_type;
+  const sandboxIsolation =
+    (sandbox ? readFirstString(sandbox, ["isolation", "sandboxIsolation"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_isolation", "sandboxIsolation", "workspace_isolation"]) : null) ??
+    (custom ? readFirstString(custom, ["sandboxIsolation", "workspaceIsolation"]) : null) ??
+    "sem isolamento";
+  const sandboxBoundary =
+    (sandbox ? readFirstString(sandbox, ["boundary", "sandboxBoundary"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_boundary", "sandboxBoundary", "boundary"]) : null);
+  const sandboxExecutor =
+    (sandbox ? readFirstString(sandbox, ["executor", "sandboxExecutor"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_executor", "sandboxExecutor", "executor"]) : null);
+  const sandboxTransport =
+    (sandbox ? readFirstString(sandbox, ["transport", "sandboxTransport"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_transport", "sandboxTransport", "transport"]) : null);
+  const sandboxImage =
+    (sandbox ? readFirstString(sandbox, ["image", "sandboxImage", "sandbox_container_image", "sandbox_vm_image"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_image", "sandboxImage", "container_image", "vm_image"]) : null);
+  const sandboxEngine =
+    (sandbox ? readFirstString(sandbox, ["engine", "sandboxEngine", "sandbox_container_engine", "sandbox_vm_runner"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_engine", "sandboxEngine", "container_engine", "vm_runner"]) : null);
+  const sandboxNetwork =
+    (sandbox ? readFirstString(sandbox, ["network", "sandboxNetwork"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_network", "sandboxNetwork", "container_network"]) : null);
+  const sandboxProfile =
+    (sandbox ? readFirstString(sandbox, ["profile", "sandboxProfile", "sandbox_container_profile", "sandbox_vm_profile"]) : null) ??
+    (executionLog ? readFirstString(executionLog, ["sandbox_profile", "sandboxProfile", "container_profile", "vm_profile"]) : null) ??
+    (custom ? readFirstString(custom, ["container_profile", "sandboxContainerProfile", "vm_profile", "sandboxVmProfile"]) : null);
+  const sandboxVmProvidesIsolation =
+    (custom ? readFirstBoolean(custom, ["vm_runner_provides_isolation", "providesVmIsolation", "provides_vm_isolation"]) : null) ??
+    (executionLog ? readFirstBoolean(executionLog, ["vm_runner_provides_isolation", "providesVmIsolation", "provides_vm_isolation"]) : null) ??
+    (sandbox ? readFirstBoolean(sandbox, ["vmRunnerProvidesIsolation", "providesVmIsolation", "provides_vm_isolation"]) : null) ??
+    (policy ? readFirstBoolean(policy, ["providesVmIsolation", "provides_vm_isolation"]) : null);
+  const sandboxVmAssurance =
+    readSandboxAssurance(sandbox) ??
+    readSandboxAssurance(executionLog) ??
+    readSandboxAssurance(custom) ??
+    readSandboxAssurance(policy) ??
+    (sandboxVmProvidesIsolation === true ? "verified_vm_isolation" : null);
+  const sandboxOrchestration = deriveSandboxOrchestration({
+    sandboxIsolation,
+    sandboxBoundary,
+    sandboxExecutor,
+    sandboxTransport,
+    sandboxImage,
+    sandboxEngine,
+  });
+  const sandboxHardening = deriveSandboxHardening(sandboxIsolation, sandboxProfile, sandboxNetwork, policy, sandbox);
+  const sandboxPolicySummary = buildSandboxPolicySummary(
+    sandboxHardening,
+    sandboxProfile,
+    sandboxNetwork,
+    policy,
+    sandboxVmProvidesIsolation,
+    sandboxVmAssurance,
+  );
+
+  return {
+    nodeId,
+    mode,
+    status,
+    failed,
+    sandboxIsolation,
+    sandboxOrchestration,
+    sandboxBoundary,
+    sandboxExecutor,
+    sandboxTransport,
+    sandboxImage,
+    sandboxEngine,
+    sandboxNetwork,
+    sandboxProfile,
+    sandboxHardening,
+    sandboxVmProvidesIsolation,
+    sandboxVmAssurance,
+    sandboxPolicySummary,
+    error,
+    detail,
+  };
+}
+
+function isIsolatedSandboxSignal(sandboxIsolation: string): boolean {
+  return !["", "runtime_process", "declared_external", "sem isolamento"].includes(sandboxIsolation);
+}
+
+function deriveSandboxOrchestration(signal: {
+  sandboxIsolation: string;
+  sandboxBoundary: string | null;
+  sandboxExecutor: string | null;
+  sandboxTransport: string | null;
+  sandboxImage: string | null;
+  sandboxEngine: string | null;
+}): string {
+  const haystack = [
+    signal.sandboxIsolation,
+    signal.sandboxBoundary,
+    signal.sandboxExecutor,
+    signal.sandboxTransport,
+    signal.sandboxImage,
+    signal.sandboxEngine,
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join(" ")
+    .toLowerCase();
+  if (!haystack.trim() || signal.sandboxIsolation === "sem isolamento") {
+    return "none";
+  }
+  if (haystack.includes("firecracker") || haystack.includes("cloud-hypervisor") || haystack.includes("microvm") || haystack.includes("direct-kernel")) {
+    return "microvm";
+  }
+  if (signal.sandboxIsolation === "vm") {
+    return "vm";
+  }
+  if (signal.sandboxIsolation === "container") {
+    return "container";
+  }
+  if (haystack.includes("http_json") || signal.sandboxIsolation === "external_endpoint") {
+    return "external";
+  }
+  if (haystack.includes("process") || haystack.includes("stdio") || haystack.includes("workspace")) {
+    return "process";
+  }
+  return "unknown";
+}
+
+function deriveSandboxHardening(
+  sandboxIsolation: string,
+  sandboxProfile: string | null,
+  sandboxNetwork: string | null,
+  policy: Record<string, unknown> | null,
+  sandbox: Record<string, unknown> | null,
+): "hardened" | "baseline" | "weak" | "unknown" {
+  const profile = (sandboxProfile ?? readFirstStringOptional(policy, ["profile"]) ?? "").trim().toLowerCase();
+  if (profile === "hardened") {
+    return "hardened";
+  }
+  if (profile === "baseline") {
+    return "baseline";
+  }
+  const network =
+    sandboxNetwork ??
+    readFirstStringOptional(policy, ["network", "networkMode", "network_mode"]) ??
+    readFirstStringOptional(sandbox, ["network", "networkMode", "network_mode"]);
+  const readOnlyRootfs =
+    readFirstBoolean(policy, ["readOnlyRootfs", "read_only_rootfs", "rootfsReadOnly", "rootfs_read_only"]) ??
+    readFirstBoolean(sandbox, ["readOnlyRootfs", "read_only_rootfs", "rootfsReadOnly", "rootfs_read_only"]);
+  const workspaceMount =
+    readFirstBoolean(policy, ["workspaceMount", "workspace_mount", "mountWorkspace", "mount_workspace"]) ??
+    readFirstBoolean(sandbox, ["workspaceMount", "workspace_mount", "mountWorkspace", "mount_workspace"]);
+  const hostDevicePassthrough =
+    readFirstBoolean(policy, ["hostDevicePassthrough", "host_device_passthrough"]) ??
+    readFirstBoolean(sandbox, ["hostDevicePassthrough", "host_device_passthrough"]);
+  if (network && !["none", "disabled", "off"].includes(network.trim().toLowerCase())) {
+    return "weak";
+  }
+  if (workspaceMount === true || hostDevicePassthrough === true || readOnlyRootfs === false) {
+    return "weak";
+  }
+  if (
+    ["vm", "container"].includes(sandboxIsolation) &&
+    (["none", "disabled", "off"].includes((network ?? "").trim().toLowerCase()) || network === null)
+  ) {
+    return readOnlyRootfs === true || workspaceMount === false || hostDevicePassthrough === false ? "hardened" : "unknown";
+  }
+  return "unknown";
+}
+
+function buildSandboxPolicySummary(
+  hardening: "hardened" | "baseline" | "weak" | "unknown",
+  sandboxProfile: string | null,
+  sandboxNetwork: string | null,
+  policy: Record<string, unknown> | null,
+  providesIsolation: boolean | null,
+  assurance: string | null,
+): string | null {
+  const readOnlyRootfs = readFirstBoolean(policy, ["readOnlyRootfs", "read_only_rootfs", "rootfsReadOnly", "rootfs_read_only"]);
+  const workspaceMount = readFirstBoolean(policy, ["workspaceMount", "workspace_mount", "mountWorkspace", "mount_workspace"]);
+  const hostDevicePassthrough = readFirstBoolean(policy, ["hostDevicePassthrough", "host_device_passthrough"]);
+  const parts = [
+    hardening !== "unknown" ? hardening : null,
+    sandboxProfile ? `perfil=${sandboxProfile}` : null,
+    sandboxNetwork ? `rede=${sandboxNetwork}` : null,
+    readOnlyRootfs !== null ? `rootfs=${readOnlyRootfs ? "read-only" : "writable"}` : null,
+    workspaceMount !== null ? `workspace_mount=${workspaceMount ? "on" : "off"}` : null,
+    hostDevicePassthrough !== null ? `host_devices=${hostDevicePassthrough ? "on" : "off"}` : null,
+    providesIsolation !== null ? `vm_isolation=${providesIsolation ? "verified" : "unverified"}` : null,
+    assurance ? `assurance=${assurance}` : null,
+  ].filter((item): item is string => item !== null);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+function readSandboxAssurance(record: Record<string, unknown> | null): string | null {
+  if (!record) {
+    return null;
+  }
+  const direct = readFirstString(record, [
+    "assurance",
+    "transportAssurance",
+    "transport_assurance",
+    "guestTransportAssurance",
+    "guest_transport_assurance",
+    "sandboxVmAssurance",
+    "sandbox_vm_assurance",
+    "vm_assurance",
+  ]);
+  if (direct) {
+    return direct;
+  }
+  for (const key of ["transport", "guestTransport", "vmTransport"]) {
+    const nested = record[key];
+    if (isRecord(nested)) {
+      const value = readFirstString(nested, ["assurance", "type", "level"]);
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+function readBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  return null;
+}
+
+function readFirstBoolean(record: Record<string, unknown> | null | undefined, keys: string[]): boolean | null {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = readBoolean(record[key]);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readFirstStringOptional(record: Record<string, unknown> | null | undefined, keys: string[]): string | null {
+  return record ? readFirstString(record, keys) : null;
+}
+
+function readTelemetryProvider(payload: Record<string, unknown>): string | null {
+  const direct = readFirstString(payload, ["provider", "adapter", "providerId", "adapterId"]);
+  if (direct) {
+    return direct;
+  }
+  if (isRecord(payload.llm)) {
+    return readFirstString(payload.llm, ["provider", "adapter", "providerId", "adapterId"]);
+  }
+  if (isRecord(payload.custom)) {
+    return readFirstString(payload.custom, ["provider", "adapter", "providerId", "adapterId"]);
+  }
+  for (const span of collectSpanCandidates(payload)) {
+    const value = readFirstString(span, ["provider", "adapter", "providerId", "adapterId"]);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readTelemetryModel(payload: Record<string, unknown>): string | null {
+  const direct = readFirstString(payload, ["model", "modelName", "model_name"]);
+  if (direct) {
+    return direct;
+  }
+  if (isRecord(payload.llm)) {
+    return readFirstString(payload.llm, ["model", "modelName", "model_name"]);
+  }
+  if (isRecord(payload.custom)) {
+    return readFirstString(payload.custom, ["model", "modelName", "model_name"]);
+  }
+  for (const span of collectSpanCandidates(payload)) {
+    const value = readFirstString(span, ["model", "modelName", "model_name"]);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readTelemetryEventTokens(payload: Record<string, unknown>): number {
+  return (
+    readUsageTotalTokens(payload.usage) ??
+    (isRecord(payload.llm) ? readUsageTotalTokens(payload.llm.usage) : null) ??
+    (isRecord(payload.custom) ? readUsageTotalTokens(payload.custom.usage) : null) ??
+    readFirstNumber(payload, ["totalTokens", "total_tokens", "tokens"]) ??
+    readTelemetrySpanTokens(payload)
+  );
+}
+
+function readUsageTotalTokens(usage: unknown): number | null {
+  if (!isRecord(usage)) {
+    return null;
+  }
+  const total = readFirstNumber(usage, ["total_tokens", "totalTokens", "tokens"]);
+  if (total !== null) {
+    return total;
+  }
+  const input = readFirstNumber(usage, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]) ?? 0;
+  const output = readFirstNumber(usage, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]) ?? 0;
+  const combined = input + output;
+  return combined > 0 ? combined : null;
+}
+
+function readTelemetrySpanTokens(payload: Record<string, unknown>): number {
+  return collectSpanCandidates(payload).reduce((sum, span) => sum + (readFirstNumber(span, ["tokens", "totalTokens", "total_tokens"]) ?? 0), 0);
+}
+
+function readTelemetryEventCost(payload: Record<string, unknown>): number {
+  return (
+    readCostUsd(payload.cost) ??
+    (isRecord(payload.llm) ? readCostUsd(payload.llm.cost) : null) ??
+    (isRecord(payload.custom) ? readCostUsd(payload.custom.cost) : null) ??
+    readFirstNumber(payload, ["costUsd", "cost_usd", "totalCostUsd", "total_cost_usd"]) ??
+    readTelemetrySpanCost(payload)
+  );
+}
+
+function readCostUsd(cost: unknown): number | null {
+  if (typeof cost === "number" && Number.isFinite(cost)) {
+    return cost;
+  }
+  if (typeof cost === "string" && cost.trim() && Number.isFinite(Number(cost))) {
+    return Number(cost);
+  }
+  if (isRecord(cost)) {
+    return readFirstNumber(cost, ["total_usd", "cost_usd", "totalUsd", "costUsd", "input_usd", "output_usd"]);
+  }
+  return null;
+}
+
+function readTelemetrySpanCost(payload: Record<string, unknown>): number {
+  return collectSpanCandidates(payload).reduce((sum, span) => {
+    const direct = readFirstNumber(span, ["costUsd", "cost_usd", "totalUsd", "total_usd"]);
+    if (direct !== null) {
+      return sum + direct;
+    }
+    return sum + (readCostUsd(span.cost) ?? 0);
+  }, 0);
+}
+
+function collectSpanCandidates(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const candidates: Record<string, unknown>[] = [];
+  const spans = payload.spans;
+  if (Array.isArray(spans)) {
+    for (const span of spans) {
+      if (isRecord(span)) {
+        candidates.push(span);
+      }
+    }
+  }
+  for (const key of ["span", "trace", "execution_log"]) {
+    const value = payload[key];
+    if (isRecord(value)) {
+      candidates.push(value);
+    }
+  }
+  return candidates;
+}
+
+function readFirstString(value: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const raw = value[key];
+    if (typeof raw === "string" && raw.trim()) {
+      return raw.trim();
+    }
+  }
+  return null;
+}
+
+function readFirstNumber(value: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const raw = value[key];
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      return raw;
+    }
+    if (typeof raw === "string" && raw.trim() && Number.isFinite(Number(raw))) {
+      return Number(raw);
+    }
+  }
+  return null;
+}
+
+function normalizePositiveNumber(value: number | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return Number(value.toFixed(8));
+}
+
+function percentageOf(value: number, limit: number): number {
+  if (!Number.isFinite(value) || !Number.isFinite(limit) || limit <= 0) {
+    return 0;
+  }
+  return Math.round((value / limit) * 100);
+}
+
+function buildStudioProviderTelemetryAlerts(
+  items: StudioProviderTelemetryItem[],
+  providerTokenBudget: number | null,
+  providerCostBudgetUsd: number | null,
+): StudioProviderTelemetryAlert[] {
+  const alerts: StudioProviderTelemetryAlert[] = [];
+  for (const item of items) {
+    if (providerTokenBudget !== null && item.totalTokens > providerTokenBudget) {
+      alerts.push({
+        scope: "provider_model",
+        severity: "warning",
+        provider: item.provider,
+        model: item.model,
+        metric: "tokens",
+        observed: item.totalTokens,
+        limit: providerTokenBudget,
+        message: `${item.provider}/${item.model} passou do limite de tokens por provider.`,
+      });
+    }
+    if (providerCostBudgetUsd !== null && item.totalCostUsd > providerCostBudgetUsd) {
+      alerts.push({
+        scope: "provider_model",
+        severity: "warning",
+        provider: item.provider,
+        model: item.model,
+        metric: "cost",
+        observed: item.totalCostUsd,
+        limit: providerCostBudgetUsd,
+        message: `${item.provider}/${item.model} passou do limite de custo por provider.`,
+      });
+    }
+  }
+  return alerts;
+}
+
 function buildRegressionSummary(
   left: StudioRunRecord,
   right: StudioRunRecord,
   leftMetrics: StudioRunSignalMetrics,
   rightMetrics: StudioRunSignalMetrics,
   nodeComparisons: StudioNodeComparison[],
+  flow: AgentFlow,
 ): StudioRunRegressionSummary {
   const reasons: string[] = [];
   let severity: StudioRunRegressionSummary["severity"] = "pass";
@@ -872,6 +1882,8 @@ function buildRegressionSummary(
   addGrowthReason(reasons, leftMetrics.totalTokens, rightMetrics.totalTokens, "tokens totais", appliedThresholds.tokenGrowthPct);
   addGrowthReason(reasons, leftMetrics.totalCostUsd, rightMetrics.totalCostUsd, "custo estimado", appliedThresholds.costGrowthPct);
   addGrowthReason(reasons, calcDurationMs(left), calcDurationMs(right), "duração", appliedThresholds.durationGrowthPct);
+  const nodeTypeThresholdReasons = buildNodeTypeThresholdReasons(nodeComparisons, flow, appliedThresholds.nodeTypeThresholds);
+  reasons.push(...nodeTypeThresholdReasons);
   if (severity === "pass" && reasons.length > 0) {
     severity = "warn";
   }
@@ -908,7 +1920,35 @@ function readRegressionThresholds(run: StudioRunRecord): StudioRunRegressionThre
     tokenGrowthPct: normalizeThresholdPercent(rawThresholds.tokenGrowthPct, DEFAULT_REGRESSION_THRESHOLDS.tokenGrowthPct),
     costGrowthPct: normalizeThresholdPercent(rawThresholds.costGrowthPct, DEFAULT_REGRESSION_THRESHOLDS.costGrowthPct),
     durationGrowthPct: normalizeThresholdPercent(rawThresholds.durationGrowthPct, DEFAULT_REGRESSION_THRESHOLDS.durationGrowthPct),
+    nodeTypeThresholds: normalizeNodeTypeThresholds(rawThresholds.nodeTypeThresholds),
   };
+}
+
+function normalizeNodeTypeThresholds(value: unknown): Record<string, StudioRunNodeTypeRegressionThresholds> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const thresholds: Record<string, StudioRunNodeTypeRegressionThresholds> = {};
+  for (const [nodeType, rawThreshold] of Object.entries(value)) {
+    const normalizedNodeType = normalizeNodeTypeKey(nodeType);
+    if (!normalizedNodeType) {
+      continue;
+    }
+    const record = isRecord(rawThreshold) ? rawThreshold : {};
+    const threshold = {
+      maxChangedNodes: normalizeOptionalThresholdCount(record.maxChangedNodes),
+      maxStateDiffs: normalizeOptionalThresholdCount(record.maxStateDiffs),
+      maxOutputDiffs: normalizeOptionalThresholdCount(record.maxOutputDiffs),
+    };
+    if (
+      threshold.maxChangedNodes !== null ||
+      threshold.maxStateDiffs !== null ||
+      threshold.maxOutputDiffs !== null
+    ) {
+      thresholds[normalizedNodeType] = threshold;
+    }
+  }
+  return thresholds;
 }
 
 function normalizeThresholdPercent(value: unknown, fallback: number): number {
@@ -917,6 +1957,53 @@ function normalizeThresholdPercent(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.max(0, Math.min(1000, Math.round(numeric)));
+}
+
+function normalizeOptionalThresholdCount(value: unknown): number | null {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return Math.max(0, Math.min(1000, Math.round(numeric)));
+}
+
+function normalizeNodeTypeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+}
+
+function buildNodeTypeThresholdReasons(
+  nodeComparisons: StudioNodeComparison[],
+  flow: AgentFlow,
+  thresholds: Record<string, StudioRunNodeTypeRegressionThresholds>,
+): string[] {
+  const configured = Object.entries(thresholds);
+  if (!configured.length) {
+    return [];
+  }
+  const typeByNodeId = new Map(flow.nodes.map((node) => [node.id, normalizeNodeTypeKey(node.type)]));
+  const reasons: string[] = [];
+  for (const [nodeType, threshold] of configured) {
+    const changedNodes = nodeComparisons.filter(
+      (node) =>
+        node.inLeft &&
+        node.inRight &&
+        node.changed &&
+        (typeByNodeId.get(node.nodeId) ?? normalizeNodeTypeKey(node.nodeId)) === nodeType,
+    );
+    const changedNodeCount = changedNodes.length;
+    const stateDiffCount = changedNodes.reduce((total, node) => total + node.stateDiff.length, 0);
+    const outputDiffCount = changedNodes.reduce((total, node) => total + node.outputDiff.length, 0);
+    if (threshold.maxChangedNodes !== null && changedNodeCount > threshold.maxChangedNodes) {
+      reasons.push(`tipo ${nodeType}: ${changedNodeCount} nó(s) alterado(s) (limite ${threshold.maxChangedNodes})`);
+    }
+    if (threshold.maxStateDiffs !== null && stateDiffCount > threshold.maxStateDiffs) {
+      reasons.push(`tipo ${nodeType}: ${stateDiffCount} diff(s) de state (limite ${threshold.maxStateDiffs})`);
+    }
+    if (threshold.maxOutputDiffs !== null && outputDiffCount > threshold.maxOutputDiffs) {
+      reasons.push(`tipo ${nodeType}: ${outputDiffCount} diff(s) de output (limite ${threshold.maxOutputDiffs})`);
+    }
+  }
+  return reasons;
 }
 
 function addGrowthReason(

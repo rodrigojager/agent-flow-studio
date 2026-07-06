@@ -13,7 +13,7 @@ pytest -q
 langgraph dev
 ```
 
-Configure `LANGSMITH_API_KEY`, `LANGSMITH_TRACING=true` e `LANGSMITH_PROJECT` em `.env` para registrar traces no LangSmith.
+O modo local não envia traces para LangSmith por padrão. Para registrar traces no serviço hospedado, configure `LANGSMITH_API_KEY`, `LANGSMITH_TRACING=true` e `LANGSMITH_PROJECT` em `.env`.
 Para testar sem chamada real de modelo, mantenha `MOCK_LLM=true`.
 
 ## Entry Point

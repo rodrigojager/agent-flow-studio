@@ -2,7 +2,7 @@
   "id": "reference-runtime",
   "name": "Reference Runtime",
   "version": "0.1.0",
-  "packaging": "monoagent",
+  "packaging": "multiagent",
   "defaultLlm": {
     "adapter": "openai",
     "model": "gpt-4.1-mini",
@@ -13,7 +13,24 @@
     {
       "id": "reference-interview",
       "flowPath": "flows/reference-interview/agent.flow.json",
-      "routePrefix": ""
+      "routePrefix": "/reference-interview"
     }
-  ]
+  ],
+  "orchestration": {
+    "mode": "sequential",
+    "entryAgentId": "reference-interview",
+    "handoffs": [],
+    "memoryPolicy": {
+      "enabled": true,
+      "persistence": "optional_jsonl",
+      "defaultPersist": false,
+      "defaultMemoryPath": "",
+      "maxEntries": 64,
+      "retentionRuns": 50,
+      "maxPreviewChars": 500,
+      "redactKeys": ["api_key", "authorization", "password", "secret", "token"],
+      "includeStepOutputs": true,
+      "includeHandoffDecisions": true
+    }
+  }
 }

@@ -23,7 +23,6 @@ class TurnRequest(IdempotentBody):
 
 class SessionView(BaseModel):
     session_id: str
-    agent_id: str
     status: str
     phase: str
     turn: int
@@ -42,7 +41,6 @@ class MessageView(BaseModel):
 
 class EventView(BaseModel):
     seq: int
-    agent_id: str
     event_type: str
     node: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -87,7 +85,6 @@ class MetadataResponse(BaseModel):
     runtime: str
     contract: str
     flow_id: str
-    agent_id: str
     flow_version: str
     llm_adapter: str
     supports_multi_agent_bundle: bool

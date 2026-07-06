@@ -2,14 +2,156 @@
   "id": "reference-runtime",
   "name": "Reference Runtime",
   "version": "0.1.0",
-  "packaging": "monoagent",
+  "packaging": "multiagent",
   "generatedKind": "runtime-bundle",
+  "sharedStorage": {
+    "database": {
+      "scope": "bundle",
+      "mode": "single-database",
+      "env": "DATABASE_URL",
+      "dockerService": "postgres",
+      "recommendedDriver": "postgresql+psycopg2",
+      "tablesAreNamespacedBy": "agent_id"
+    },
+    "checkpointer": {
+      "scope": "bundle",
+      "env": "USE_POSTGRES_CHECKPOINTER",
+      "dockerService": "postgres"
+    },
+    "cache": {
+      "scope": "bundle",
+      "env": "REDIS_URL",
+      "dockerService": "redis"
+    }
+  },
+  "orchestration": {
+    "format": "agent-flow-builder.runtime-orchestration.v1",
+    "manifestId": "reference-runtime",
+    "manifestVersion": "0.1.0",
+    "mode": "sequential",
+    "capabilities": {
+      "executableRun": true,
+      "debugTrace": true,
+      "structuredConditions": true,
+      "optionalJsonlMemory": true,
+      "persistentMemoryPolicy": true
+    },
+    "memoryPolicy": {
+      "enabled": true,
+      "persistence": "optional_jsonl",
+      "defaultPersist": false,
+      "defaultMemoryPath": "",
+      "maxEntries": 64,
+      "retentionRuns": 50,
+      "maxPreviewChars": 500,
+      "redactKeys": [
+        "api_key",
+        "authorization",
+        "password",
+        "secret",
+        "token"
+      ],
+      "includeStepOutputs": true,
+      "includeHandoffDecisions": true
+    },
+    "entryAgentId": "reference-interview",
+    "handoffs": [],
+    "agents": [
+      {
+        "id": "reference-interview",
+        "routePrefix": "/reference-interview",
+        "resourceName": "sessions",
+        "metadataPath": "/reference-interview/metadata",
+        "sessionsPath": "/reference-interview/sessions"
+      }
+    ],
+    "governance": {
+      "declarativeOnly": true,
+      "generatedFromManifest": true,
+      "excludesSecrets": true,
+      "excludesEnvValues": true,
+      "excludesRuntimePayloads": true
+    }
+  },
+  "agentIsolation": {
+    "format": "agent-flow-builder.runtime-agent-isolation.v1",
+    "manifestId": "reference-runtime",
+    "manifestVersion": "0.1.0",
+    "packaging": "multiagent",
+    "routeIsolation": {
+      "required": true,
+      "uniqueRoutePrefixes": true,
+      "prefixOwnsOpenApiSubtree": true,
+      "rootMetadataOnlyAt": "/metadata"
+    },
+    "runtimeImportIsolation": {
+      "mode": "isolated-python-app-namespace",
+      "clearsModulePrefixes": [
+        "app",
+        "app.*"
+      ],
+      "restoresPreviousModules": true,
+      "restoresSysPath": true
+    },
+    "requestIsolation": {
+      "idempotencyNamespace": "route_prefix",
+      "sessionNamespace": "agent_id",
+      "eventNamespace": "agent_id",
+      "jobNamespace": "agent_id"
+    },
+    "authIsolation": {
+      "scopeNamespace": "agents:<agent_id>",
+      "examples": [
+        "agents:<agent_id>:metadata:read",
+        "agents:<agent_id>:sessions:*",
+        "agents:<agent_id>:jobs:*",
+        "agents:<agent_id>:auth:read"
+      ]
+    },
+    "sharedStorage": {
+      "database": {
+        "scope": "bundle",
+        "mode": "single-database",
+        "env": "DATABASE_URL",
+        "dockerService": "postgres",
+        "recommendedDriver": "postgresql+psycopg2",
+        "tablesAreNamespacedBy": "agent_id"
+      },
+      "checkpointer": {
+        "scope": "bundle",
+        "env": "USE_POSTGRES_CHECKPOINTER",
+        "dockerService": "postgres"
+      },
+      "cache": {
+        "scope": "bundle",
+        "env": "REDIS_URL",
+        "dockerService": "redis"
+      }
+    },
+    "agents": [
+      {
+        "id": "reference-interview",
+        "routePrefix": "/reference-interview",
+        "runtimeDir": "agents/reference-interview",
+        "resourceName": "sessions",
+        "metadataPath": "/reference-interview/metadata",
+        "sessionsPath": "/reference-interview/sessions",
+        "storageNamespaceField": "agent_id"
+      }
+    ],
+    "governance": {
+      "excludesSecrets": true,
+      "excludesEnvValues": true,
+      "excludesRuntimePayloads": true,
+      "generatedFromManifest": true
+    }
+  },
   "agents": [
     {
       "id": "reference-interview",
       "flowId": "reference-interview",
       "flowName": "Agente de Referência",
-      "routePrefix": "",
+      "routePrefix": "/reference-interview",
       "runtimeDir": "agents/reference-interview",
       "resourceName": "sessions"
     }

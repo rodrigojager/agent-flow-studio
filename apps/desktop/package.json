@@ -1,0 +1,7 @@
+{
+  "name": "@agent-flow-builder/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "main.cjs"
+}

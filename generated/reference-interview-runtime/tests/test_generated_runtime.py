@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.generated_flow import AGENT_ID, API_RESOURCE, FLOW_ID
+from app.generated_flow import API_RESOURCE, FLOW_ID
 from tests.conftest import set_test_env
 
 
@@ -25,7 +25,6 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     metadata = client.get("/metadata")
     assert metadata.status_code == 200
     assert metadata.json()["flow_id"] == FLOW_ID
-    assert metadata.json()["agent_id"] == AGENT_ID
 
     create_resp = client.post(
         _path(),
@@ -34,7 +33,6 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     )
     assert create_resp.status_code == 200
     session_id = create_resp.json()["session"]["session_id"]
-    assert create_resp.json()["session"]["agent_id"] == AGENT_ID
 
     duplicate_create = client.post(
         _path(),
@@ -63,7 +61,6 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     turn_data = turn_resp.json()
     assert turn_data["assistant_message"]["code"] == "ECHO"
     assert turn_data["safety"]["decision"] == "allow"
-    assert turn_data["session"]["agent_id"] == AGENT_ID
     assert turn_data["session"]["turn"] == 1
 
     duplicate_turn = client.post(
@@ -80,7 +77,6 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
 
     events = client.get(_path(f"/{session_id}/events")).json()
     assert "llm_called" in [item["event_type"] for item in events]
-    assert {item["agent_id"] for item in events} == {AGENT_ID}
 
 
 def test_generated_runtime_idempotency_conflict_and_safety(tmp_path):

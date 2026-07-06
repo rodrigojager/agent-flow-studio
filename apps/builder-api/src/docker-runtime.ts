@@ -12,11 +12,38 @@ const FETCH_TIMEOUT_MS = 15_000;
 const MAX_COMMAND_BUFFER = 20 * 1024 * 1024;
 const DOCKER_BUILD_PROGRESS_CACHE_MAX = 20;
 
-export type DockerRuntimeOperation = "prepare_env" | "configure_ports" | "build" | "up" | "down" | "smoke" | "inspect" | "cancel";
+export type DockerRuntimeOperation =
+  | "prepare_env"
+  | "configure_ports"
+  | "setup_models"
+  | "build_model_image"
+  | "export_model_image"
+  | "push_model_image"
+  | "check_gpu"
+  | "build"
+  | "up"
+  | "down"
+  | "smoke"
+  | "inspect"
+  | "cancel";
 export type DockerRuntimeOperationStatus = "idle" | "running" | "success" | "error" | "canceled";
 export type DockerBuildProgressStatus = "running" | "done" | "error" | "warning" | "info" | "canceled";
 export type DockerRuntimeHistoryLevel = "error" | "warning" | "info" | "success";
 export type DockerRuntimeTarget = "fastapi-runtime" | "runtime-manifest-bundle";
+export type DockerRuntimeModelExecutionProfile = "cpu" | "gpu";
+
+export interface DockerRuntimeHostGpuDetection {
+  available: boolean;
+  devices: string[];
+  dockerGpuRuntimeAvailable: boolean;
+  dockerGpuRuntimeDetails: string[];
+  dockerGpuRuntimeError: string | null;
+  message: string;
+  error: string | null;
+  checkedAt: string;
+}
+
+export type DockerRuntimeGpuDetector = () => Promise<Omit<DockerRuntimeHostGpuDetection, "checkedAt">>;
 
 interface DockerBuildProgressEvent {
   stage: string;
@@ -58,6 +85,7 @@ export interface DockerRuntimeProject {
   docsUrl: string;
   openapiUrl: string;
   ports: DockerRuntimePorts;
+  modelSetup: DockerRuntimeModelSetup;
 }
 
 export interface DockerRuntimeAgent {
@@ -85,6 +113,7 @@ export interface DockerRuntimeStatus {
   docsUrl: string;
   openapiUrl: string;
   ports: DockerRuntimePorts;
+  modelSetup: DockerRuntimeModelSetup;
   composeFile: boolean;
   dockerfile: boolean;
   envFile: boolean;
@@ -105,6 +134,9 @@ export interface DockerRuntimeOperationResult extends DockerRuntimeStatus {
   stdout?: string;
   stderr?: string;
   smoke?: DockerRuntimeSmokeResult;
+  smokeFailure?: DockerRuntimeSmokeFailure;
+  smokeAll?: DockerRuntimeSmokeAllResult;
+  gpuProbe?: DockerRuntimeGpuProbe;
   progress?: DockerBuildProgressEvent[];
   message: string;
 }
@@ -120,6 +152,53 @@ export interface DockerRuntimePorts {
   api: DockerRuntimePortBinding | null;
   postgres: DockerRuntimePortBinding | null;
   redis: DockerRuntimePortBinding | null;
+}
+
+export interface DockerRuntimeModelSetup {
+  required: boolean;
+  profile: "model-setup";
+  services: string[];
+  models: string[];
+  command: string | null;
+  execution: DockerRuntimeModelExecution;
+  distribution: DockerRuntimeModelDistribution;
+}
+
+export interface DockerRuntimeModelDistribution {
+  modelImageComposeFile: boolean;
+  modelImageDockerfile: boolean;
+  modelImageCommand: string | null;
+  modelImageTag: string | null;
+  modelImageArchivePath: string | null;
+  modelImageExportCommand: string | null;
+  modelImageLoadCommand: string | null;
+  modelImagePushCommand: string | null;
+}
+
+export interface DockerRuntimeModelExecution {
+  cpuCommand: string;
+  gpuCommand: string | null;
+  gpuComposeFile: boolean;
+  hostGpuDetected: boolean;
+  hostGpuDevices: string[];
+  dockerGpuRuntimeAvailable: boolean;
+  dockerGpuRuntimeDetails: string[];
+  dockerGpuRuntimeError: string | null;
+  recommendedProfile: DockerRuntimeModelExecutionProfile;
+  reason: string;
+  checkedAt: string;
+}
+
+export interface DockerRuntimeGpuProbe {
+  image: string;
+  command: string;
+  args: string[];
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  devices: string[];
+  checkedAt: string;
 }
 
 export interface DockerRuntimePortUpdate {
@@ -143,6 +222,9 @@ export interface DockerRuntimeHistoryEntry {
   args?: string[];
   logs: string[];
   smoke?: DockerRuntimeSmokeResult;
+  smokeFailure?: DockerRuntimeSmokeFailure;
+  smokeAll?: DockerRuntimeSmokeAllResult;
+  gpuProbe?: DockerRuntimeGpuProbe;
   inspection?: DockerRuntimeInspection;
   progress?: DockerBuildProgressEvent[];
 }
@@ -190,6 +272,22 @@ export interface DockerRuntimeSmokeResult {
   eventsCount: number;
 }
 
+export interface DockerRuntimeSmokeFailure {
+  agentId: string | null;
+  routePrefix: string;
+  resourceName: string;
+  basePath: string;
+  message: string;
+}
+
+export interface DockerRuntimeSmokeAllResult {
+  agentCount: number;
+  okCount: number;
+  failedCount: number;
+  results: DockerRuntimeSmokeResult[];
+  failures: DockerRuntimeSmokeFailure[];
+}
+
 export interface DockerComposeService {
   name: string | null;
   service: string | null;
@@ -223,24 +321,36 @@ interface RuntimeRecord {
   progress?: DockerBuildProgressEvent[];
 }
 
+interface DockerRuntimeSmokeTarget {
+  agentId: string | null;
+  routePrefix: string;
+  resourceName: string;
+  basePath: string;
+}
+
 interface ActiveDockerOperation {
-  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">;
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "check_gpu" | "cancel">;
   controller: AbortController;
+  args: string[];
 }
 
 interface DockerRuntimeManagerOptions {
   runner?: DockerCommandRunner;
+  gpuDetector?: DockerRuntimeGpuDetector;
 }
 
 export class DockerRuntimeManager {
   private readonly workspaceRoot: string;
   private readonly runner: DockerCommandRunner;
+  private readonly gpuDetector: DockerRuntimeGpuDetector;
   private readonly records = new Map<string, RuntimeRecord>();
   private readonly activeOperations = new Map<string, ActiveDockerOperation>();
+  private gpuDetectionCache: DockerRuntimeHostGpuDetection | null = null;
 
   constructor(workspaceRoot: string, options: DockerRuntimeManagerOptions = {}) {
     this.workspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     this.runner = options.runner ?? defaultDockerCommandRunner;
+    this.gpuDetector = options.gpuDetector ?? defaultGpuDetector;
   }
 
   async status(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeStatus> {
@@ -263,10 +373,160 @@ export class DockerRuntimeManager {
     return this.runDockerCompose(outDir, "build", ["compose", "build", "api"], runtimeUrl);
   }
 
+  async setupModels(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    if (!project.modelSetup.required || project.modelSetup.services.length === 0) {
+      throw new WorkspaceError(
+        "Este runtime não declara serviços de setup de modelos locais no docker-compose.yml.",
+        409,
+        project.modelSetup,
+      );
+    }
+    return this.runDockerCompose(
+      project.outDir,
+      "setup_models",
+      ["compose", "--profile", project.modelSetup.profile, "up", ...project.modelSetup.services],
+      project.runtimeUrl,
+    );
+  }
+
+  async buildModelImage(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    if (!project.modelSetup.distribution.modelImageComposeFile || !project.modelSetup.distribution.modelImageDockerfile) {
+      throw new WorkspaceError(
+        "Este runtime não possui docker-compose.model-image.yml e ollama-models/Dockerfile para construir imagem Ollama pré-carregada.",
+        409,
+        project.modelSetup.distribution,
+      );
+    }
+    return this.runDockerCompose(
+      project.outDir,
+      "build_model_image",
+      ["compose", "-f", "docker-compose.yml", "-f", "docker-compose.model-image.yml", "build", "ollama"],
+      project.runtimeUrl,
+    );
+  }
+
+  async exportModelImage(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    const distribution = project.modelSetup.distribution;
+    if (!distribution.modelImageTag || !distribution.modelImageArchivePath || !distribution.modelImageExportCommand) {
+      throw new WorkspaceError(
+        "Este runtime não possui imagem Ollama pré-carregada com tag exportável.",
+        409,
+        distribution,
+      );
+    }
+    await mkdir(path.join(project.absoluteOutDir, path.dirname(distribution.modelImageArchivePath)), { recursive: true });
+    return this.runDockerCompose(
+      project.outDir,
+      "export_model_image",
+      ["image", "save", "-o", distribution.modelImageArchivePath, distribution.modelImageTag],
+      project.runtimeUrl,
+    );
+  }
+
+  async pushModelImage(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    const distribution = project.modelSetup.distribution;
+    if (!distribution.modelImageTag || !distribution.modelImagePushCommand) {
+      throw new WorkspaceError(
+        "Este runtime não possui tag OLLAMA_MODEL_IMAGE publicável em registry externo.",
+        409,
+        distribution,
+      );
+    }
+    return this.runDockerCompose(
+      project.outDir,
+      "push_model_image",
+      ["image", "push", distribution.modelImageTag],
+      project.runtimeUrl,
+    );
+  }
+
+  async checkGpu(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    if (!project.modelSetup.execution.gpuComposeFile) {
+      throw new WorkspaceError(
+        "Este runtime não possui docker-compose.gpu.yml para validar GPU em container.",
+        409,
+        project.modelSetup.execution,
+      );
+    }
+    const startedAt = new Date().toISOString();
+    const image = "nvidia/cuda:12.4.1-base-ubuntu22.04";
+    const args = ["run", "--rm", "--gpus", "all", image, "nvidia-smi", "-L"];
+    this.updateRecord(project.outDir, {
+      lastOperation: "check_gpu",
+      lastStatus: "running",
+      lastExitCode: null,
+      updatedAt: new Date().toISOString(),
+      logs: [`docker ${args.join(" ")}`],
+      inspection: this.readRecord(project.outDir).inspection,
+    });
+    const result = await this.runner({
+      command: "docker",
+      args,
+      cwd: project.absoluteOutDir,
+      timeoutMs: COMMAND_TIMEOUT_MS,
+    }).catch(commandErrorToResult);
+    const devices = parseNvidiaSmiDevices(result.stdout);
+    const ok = result.exitCode === 0 && devices.length > 0;
+    const gpuProbe: DockerRuntimeGpuProbe = {
+      image,
+      command: "docker",
+      args,
+      ok,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      devices,
+      checkedAt: new Date().toISOString(),
+    };
+    const message = ok
+      ? `Probe Docker GPU confirmou ${devices.length} dispositivo(s) no container.`
+      : "Probe Docker GPU não confirmou GPU dentro do container.";
+    const logs = [
+      ...(result.stdout.trim() ? [result.stdout.trim()] : []),
+      ...(result.stderr.trim() ? [result.stderr.trim()] : []),
+    ];
+    this.updateRecord(project.outDir, {
+      lastOperation: "check_gpu",
+      lastStatus: ok ? "success" : "error",
+      lastExitCode: result.exitCode,
+      updatedAt: new Date().toISOString(),
+      logs,
+      inspection: this.readRecord(project.outDir).inspection,
+    });
+    await this.appendHistory(project, {
+      operation: "check_gpu",
+      ok,
+      status: ok ? "success" : "error",
+      exitCode: result.exitCode,
+      startedAt,
+      message,
+      command: "docker",
+      args,
+      logs,
+      gpuProbe,
+    });
+    return {
+      ...(await this.statusFromProject(project)),
+      operation: "check_gpu",
+      ok,
+      command: "docker",
+      args,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      gpuProbe,
+      message,
+    };
+  }
+
   async cancel(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
     const project = await this.resolveProject(outDir, runtimeUrl);
     const active = this.activeOperations.get(project.outDir);
-    if (!active || active.operation !== "build") {
+    if (!active || !isDockerBuildLikeOperation(active.operation)) {
       throw new WorkspaceError("Nenhum build Docker em execução para cancelar.", 409);
     }
 
@@ -277,7 +537,7 @@ export class DockerRuntimeManager {
     ].slice(-40);
     this.updateRecord(project.outDir, {
       ...this.readRecord(project.outDir),
-      lastOperation: "build",
+      lastOperation: active.operation,
       lastStatus: "running",
       lastExitCode: null,
       updatedAt: new Date().toISOString(),
@@ -291,7 +551,7 @@ export class DockerRuntimeManager {
       startedAt: new Date().toISOString(),
       message: "Cancelamento do build Docker solicitado.",
       command: "docker",
-      args: ["compose", "build", "api"],
+      args: active.args,
       logs,
     });
 
@@ -300,7 +560,7 @@ export class DockerRuntimeManager {
       operation: "cancel",
       ok: true,
       command: "docker",
-      args: ["compose", "build", "api"],
+      args: active.args,
       message: "Cancelamento do build Docker solicitado.",
     };
   }
@@ -401,8 +661,25 @@ export class DockerRuntimeManager {
     };
   }
 
-  async up(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
-    return this.runDockerCompose(outDir, "up", ["compose", "up", "-d", "--build"], runtimeUrl);
+  async up(
+    outDir: string,
+    runtimeUrl?: string,
+    modelExecutionProfile: DockerRuntimeModelExecutionProfile = "cpu",
+  ): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    const profile = normalizeModelExecutionProfile(modelExecutionProfile);
+    if (profile === "gpu" && !project.modelSetup.execution.gpuComposeFile) {
+      throw new WorkspaceError(
+        "Este runtime não possui docker-compose.gpu.yml para subir modelos locais com GPU.",
+        409,
+        project.modelSetup.execution,
+      );
+    }
+    const args =
+      profile === "gpu"
+        ? ["compose", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "--build"]
+        : ["compose", "up", "-d", "--build"];
+    return this.runDockerCompose(project.outDir, "up", args, project.runtimeUrl);
   }
 
   async down(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
@@ -423,59 +700,7 @@ export class DockerRuntimeManager {
     });
 
     try {
-      const health = await runtimeJson(project.runtimeUrl, "/health");
-      const metadata = await runtimeJson(project.runtimeUrl, "/metadata");
-      const agentMetadata = smokeTarget.routePrefix ? await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.routePrefix, "metadata")) : undefined;
-      const created = await runtimeJson(project.runtimeUrl, smokeTarget.basePath, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "Idempotency-Key": `builder-smoke-create-${Date.now()}`,
-        },
-        body: JSON.stringify({
-          metadata: { source: "builder-api-smoke", ...(smokeTarget.agentId ? { agent_id: smokeTarget.agentId } : {}) },
-          max_turns: 2,
-        }),
-      });
-      const sessionId = extractSessionId(created);
-      await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "start"), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "Idempotency-Key": `builder-smoke-start-${Date.now()}`,
-        },
-        body: JSON.stringify({}),
-      });
-      await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "turn"), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "Idempotency-Key": `builder-smoke-turn-${Date.now()}`,
-        },
-        body: JSON.stringify({ user_message: "Smoke test do container final." }),
-      });
-      const transcript = await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "transcript"));
-      const events = await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "events"));
-      const smoke: DockerRuntimeSmokeResult = {
-        health,
-        metadata,
-        agentMetadata,
-        agentId: smokeTarget.agentId ?? undefined,
-        routePrefix: smokeTarget.routePrefix || undefined,
-        resourceName: smokeTarget.resourceName,
-        basePath: smokeTarget.basePath,
-        sessionId,
-        transcriptCount: Array.isArray(transcript) ? transcript.length : 0,
-        eventsCount: Array.isArray(events) ? events.length : 0,
-      };
-      const logs = [
-        `Health: ${readStatusField(health) ?? "ok"}.`,
-        `Endpoint: ${smokeTarget.basePath}.`,
-        ...(smokeTarget.agentId ? [`Agente: ${smokeTarget.agentId}.`] : []),
-        `Sessao: ${sessionId}.`,
-        `Transcript: ${smoke.transcriptCount} mensagem(ns).`,
-        `Eventos: ${smoke.eventsCount} evento(s).`,
-      ];
+      const { smoke, logs } = await executeSmoke(project, smokeTarget);
       this.updateRecord(project.outDir, {
         lastOperation: "smoke",
         lastStatus: "success",
@@ -504,6 +729,13 @@ export class DockerRuntimeManager {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const smokeFailure: DockerRuntimeSmokeFailure = {
+        agentId: smokeTarget.agentId,
+        routePrefix: smokeTarget.routePrefix,
+        resourceName: smokeTarget.resourceName,
+        basePath: smokeTarget.basePath,
+        message,
+      };
       this.updateRecord(project.outDir, {
         lastOperation: "smoke",
         lastStatus: "error",
@@ -520,14 +752,90 @@ export class DockerRuntimeManager {
         startedAt,
         message,
         logs: [`Smoke test falhou: ${message}`],
+        smokeFailure,
       });
       return {
         ...(await this.statusFromProject(project)),
         operation: "smoke",
         ok: false,
+        smokeFailure,
         message,
       };
     }
+  }
+
+  async smokeAll(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
+    const project = await this.resolveProject(outDir, runtimeUrl);
+    const targets = project.target === "runtime-manifest-bundle"
+      ? project.agents.map((agent) => resolveSmokeTarget(project, agent.id))
+      : [resolveSmokeTarget(project)];
+    const startedAt = new Date().toISOString();
+    this.updateRecord(project.outDir, {
+      lastOperation: "smoke",
+      lastStatus: "running",
+      lastExitCode: null,
+      updatedAt: new Date().toISOString(),
+      logs: [`Smoke test iniciado para ${targets.length} agente(s) em ${project.runtimeUrl}.`],
+      inspection: this.readRecord(project.outDir).inspection,
+    });
+
+    const results: DockerRuntimeSmokeResult[] = [];
+    const failures: DockerRuntimeSmokeFailure[] = [];
+    const logs: string[] = [];
+    for (const target of targets) {
+      try {
+        const executed = await executeSmoke(project, target);
+        results.push(executed.smoke);
+        logs.push(...executed.logs);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push({
+          agentId: target.agentId,
+          routePrefix: target.routePrefix,
+          resourceName: target.resourceName,
+          basePath: target.basePath,
+          message,
+        });
+        logs.push(`Smoke falhou em ${target.agentId ?? target.basePath}: ${message}`);
+      }
+    }
+
+    const smokeAll: DockerRuntimeSmokeAllResult = {
+      agentCount: targets.length,
+      okCount: results.length,
+      failedCount: failures.length,
+      results,
+      failures,
+    };
+    const ok = failures.length === 0;
+    const message = ok
+      ? `Smoke test executado com sucesso em ${results.length} agente(s).`
+      : `Smoke test multiagente falhou em ${failures.length} de ${targets.length} agente(s).`;
+    this.updateRecord(project.outDir, {
+      lastOperation: "smoke",
+      lastStatus: ok ? "success" : "error",
+      lastExitCode: ok ? 0 : 1,
+      updatedAt: new Date().toISOString(),
+      logs,
+      inspection: this.readRecord(project.outDir).inspection,
+    });
+    await this.appendHistory(project, {
+      operation: "smoke",
+      ok,
+      status: ok ? "success" : "error",
+      exitCode: ok ? 0 : 1,
+      startedAt,
+      message,
+      logs,
+      smokeAll,
+    });
+    return {
+      ...(await this.statusFromProject(project)),
+      operation: "smoke",
+      ok,
+      smokeAll,
+      message,
+    };
   }
 
   async inspect(outDir: string, runtimeUrl?: string): Promise<DockerRuntimeOperationResult> {
@@ -605,7 +913,7 @@ export class DockerRuntimeManager {
 
   private async runDockerCompose(
     outDir: string,
-    operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
+    operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "check_gpu" | "cancel">,
     args: string[],
     runtimeUrl?: string,
   ): Promise<DockerRuntimeOperationResult> {
@@ -615,7 +923,7 @@ export class DockerRuntimeManager {
     }
     const controller = new AbortController();
     const startedAt = new Date().toISOString();
-    this.activeOperations.set(project.outDir, { operation, controller });
+    this.activeOperations.set(project.outDir, { operation, controller, args });
     this.updateRecord(project.outDir, {
       lastOperation: operation,
       lastStatus: "running",
@@ -623,12 +931,12 @@ export class DockerRuntimeManager {
       updatedAt: new Date().toISOString(),
       logs: [`docker ${args.join(" ")}`],
       inspection: this.readRecord(project.outDir).inspection,
-      progress: operation === "build" ? [] : undefined,
+      progress: isDockerBuildLikeOperation(operation) ? [] : undefined,
     });
 
     let liveBuildLogs: string[] = [];
     let liveBuildProgress: DockerBuildProgressEvent[] = [];
-    const onBuildOutput = operation === "build"
+    const onBuildOutput = isDockerBuildLikeOperation(operation)
       ? (chunk: string) => {
           liveBuildLogs = [...liveBuildLogs, chunk.trim()].filter(Boolean).slice(-40);
           liveBuildProgress = dedupeDockerBuildProgress([
@@ -670,7 +978,7 @@ export class DockerRuntimeManager {
     const ok = result.exitCode === 0;
     const canceled = result.aborted === true;
     const now = new Date().toISOString();
-    const progress = operation === "build"
+    const progress = isDockerBuildLikeOperation(operation)
       ? withBuildProgressTail(dedupeDockerBuildProgress(parseDockerBuildProgress(logs)), ok, now, canceled)
       : [];
     this.updateRecord(project.outDir, {
@@ -747,6 +1055,7 @@ export class DockerRuntimeManager {
       docsUrl: `${normalizedRuntimeUrl}/docs`,
       openapiUrl: `${normalizedRuntimeUrl}/openapi.json`,
       ports,
+      modelSetup: await readComposeModelSetup(absoluteOutDir, await this.detectHostGpu()),
     };
   }
 
@@ -765,6 +1074,7 @@ export class DockerRuntimeManager {
       docsUrl: project.docsUrl,
       openapiUrl: project.openapiUrl,
       ports: project.ports,
+      modelSetup: project.modelSetup,
       composeFile: await fileExists(project.absoluteOutDir, "docker-compose.yml"),
       dockerfile: await fileExists(project.absoluteOutDir, "Dockerfile"),
       envFile: await fileExists(project.absoluteOutDir, ".env"),
@@ -850,10 +1160,7 @@ export class DockerRuntimeManager {
           return false;
         }
         if (searchFilter) {
-          const haystack = [entry.operation, entry.status, entry.message, ...entry.logs, entry.runtimeUrl]
-            .filter((item): item is string => Boolean(item))
-            .join(" ")
-            .toLowerCase();
+          const haystack = dockerRuntimeHistoryEntrySearchText(entry).toLowerCase();
           if (!haystack.includes(searchFilter)) {
             return false;
           }
@@ -885,6 +1192,41 @@ export class DockerRuntimeManager {
   private historyFilePath(outDir: string): string {
     return path.join(this.workspaceRoot, ".agent-flow", "docker-runtime-history", `${historyKey(outDir)}.jsonl`);
   }
+
+  private async detectHostGpu(): Promise<DockerRuntimeHostGpuDetection> {
+    const now = Date.now();
+    if (this.gpuDetectionCache) {
+      const cachedAt = Date.parse(this.gpuDetectionCache.checkedAt);
+      if (Number.isFinite(cachedAt) && now - cachedAt < 30_000) {
+        return this.gpuDetectionCache;
+      }
+    }
+    let detected: Omit<DockerRuntimeHostGpuDetection, "checkedAt">;
+    try {
+      detected = await this.gpuDetector();
+    } catch (error) {
+      detected = {
+        available: false,
+        devices: [],
+        dockerGpuRuntimeAvailable: false,
+        dockerGpuRuntimeDetails: [],
+        dockerGpuRuntimeError: null,
+        message: "Não foi possível verificar GPU local.",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    this.gpuDetectionCache = {
+      available: detected.available,
+      devices: detected.devices,
+      dockerGpuRuntimeAvailable: detected.dockerGpuRuntimeAvailable,
+      dockerGpuRuntimeDetails: detected.dockerGpuRuntimeDetails,
+      dockerGpuRuntimeError: detected.dockerGpuRuntimeError,
+      message: detected.message,
+      error: detected.error,
+      checkedAt: new Date(now).toISOString(),
+    };
+    return this.gpuDetectionCache;
+  }
 }
 
 async function defaultDockerCommandRunner(invocation: DockerCommandInvocation): Promise<DockerCommandResult> {
@@ -906,6 +1248,66 @@ async function defaultDockerCommandRunner(invocation: DockerCommandInvocation): 
     };
   } catch (error) {
     return commandErrorToResult(error);
+  }
+}
+
+async function defaultGpuDetector(): Promise<Omit<DockerRuntimeHostGpuDetection, "checkedAt">> {
+  const dockerGpuRuntime = await detectDockerGpuRuntime();
+  try {
+    const result = await execFileAsync("nvidia-smi", ["-L"], {
+      timeout: 2_000,
+      windowsHide: true,
+      maxBuffer: 256 * 1024,
+    });
+    const devices = String(result.stdout ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return {
+      available: devices.length > 0,
+      devices,
+      dockerGpuRuntimeAvailable: dockerGpuRuntime.available,
+      dockerGpuRuntimeDetails: dockerGpuRuntime.details,
+      dockerGpuRuntimeError: dockerGpuRuntime.error,
+      message: devices.length
+        ? `GPU NVIDIA detectada: ${devices.join(", ")}.${dockerGpuRuntime.available ? " Runtime NVIDIA disponível no Docker." : " Runtime NVIDIA não confirmado no Docker."}`
+        : "nvidia-smi respondeu sem listar GPUs.",
+      error: null,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      devices: [],
+      dockerGpuRuntimeAvailable: dockerGpuRuntime.available,
+      dockerGpuRuntimeDetails: dockerGpuRuntime.details,
+      dockerGpuRuntimeError: dockerGpuRuntime.error,
+      message: "GPU NVIDIA não detectada automaticamente; use CPU ou confirme suporte NVIDIA manualmente.",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function detectDockerGpuRuntime(): Promise<{ available: boolean; details: string[]; error: string | null }> {
+  try {
+    const result = await execFileAsync("docker", ["info", "--format", "{{json .Runtimes}}"], {
+      timeout: 2_500,
+      windowsHide: true,
+      maxBuffer: 256 * 1024,
+    });
+    const raw = String(result.stdout ?? "").trim();
+    const runtimes = raw ? JSON.parse(raw) as unknown : null;
+    const details = isRecord(runtimes) ? Object.keys(runtimes).sort() : [];
+    return {
+      available: details.includes("nvidia"),
+      details,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      details: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -1067,10 +1469,75 @@ function readGeneratedAgents(metadata: GeneratedMetadata): DockerRuntimeAgent[] 
     }));
 }
 
+async function executeSmoke(
+  project: DockerRuntimeProject,
+  smokeTarget: DockerRuntimeSmokeTarget,
+): Promise<{ smoke: DockerRuntimeSmokeResult; logs: string[] }> {
+  const runId = `${Date.now()}-${smokeTarget.agentId ?? "runtime"}`;
+  const health = await runtimeJson(project.runtimeUrl, "/health");
+  const metadata = await runtimeJson(project.runtimeUrl, "/metadata");
+  const agentMetadata = smokeTarget.routePrefix
+    ? await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.routePrefix, "metadata"))
+    : undefined;
+  const created = await runtimeJson(project.runtimeUrl, smokeTarget.basePath, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "Idempotency-Key": `builder-smoke-create-${runId}`,
+    },
+    body: JSON.stringify({
+      metadata: { source: "builder-api-smoke", ...(smokeTarget.agentId ? { agent_id: smokeTarget.agentId } : {}) },
+      max_turns: 2,
+    }),
+  });
+  const sessionId = extractSessionId(created);
+  await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "start"), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "Idempotency-Key": `builder-smoke-start-${runId}`,
+    },
+    body: JSON.stringify({}),
+  });
+  await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "turn"), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "Idempotency-Key": `builder-smoke-turn-${runId}`,
+    },
+    body: JSON.stringify({ user_message: "Smoke test do container final." }),
+  });
+  const transcript = await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "transcript"));
+  const events = await runtimeJson(project.runtimeUrl, joinRuntimePath(smokeTarget.basePath, sessionId, "events"));
+  const smoke: DockerRuntimeSmokeResult = {
+    health,
+    metadata,
+    agentMetadata,
+    agentId: smokeTarget.agentId ?? undefined,
+    routePrefix: smokeTarget.routePrefix || undefined,
+    resourceName: smokeTarget.resourceName,
+    basePath: smokeTarget.basePath,
+    sessionId,
+    transcriptCount: Array.isArray(transcript) ? transcript.length : 0,
+    eventsCount: Array.isArray(events) ? events.length : 0,
+  };
+  return {
+    smoke,
+    logs: [
+      `Health: ${readStatusField(health) ?? "ok"}.`,
+      `Endpoint: ${smokeTarget.basePath}.`,
+      ...(smokeTarget.agentId ? [`Agente: ${smokeTarget.agentId}.`] : []),
+      `Sessao: ${sessionId}.`,
+      `Transcript: ${smoke.transcriptCount} mensagem(ns).`,
+      `Eventos: ${smoke.eventsCount} evento(s).`,
+    ],
+  };
+}
+
 function resolveSmokeTarget(
   project: DockerRuntimeProject,
   requestedAgentId?: string,
-): { agentId: string | null; routePrefix: string; resourceName: string; basePath: string } {
+): DockerRuntimeSmokeTarget {
   if (project.target === "fastapi-runtime") {
     const resourceName = project.resourceName ?? "sessions";
     return {
@@ -1396,10 +1863,22 @@ function stripAnsi(value: string): string {
 }
 
 function dockerSuccessMessage(
-  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "check_gpu" | "cancel">,
 ): string {
   if (operation === "build") {
     return "Build Docker final concluido.";
+  }
+  if (operation === "build_model_image") {
+    return "Imagem Ollama pré-carregada construída.";
+  }
+  if (operation === "export_model_image") {
+    return "Imagem Ollama pré-carregada exportada.";
+  }
+  if (operation === "push_model_image") {
+    return "Imagem Ollama pré-carregada publicada no registry.";
+  }
+  if (operation === "setup_models") {
+    return "Modelos locais preparados no Ollama.";
   }
   if (operation === "up") {
     return "Container Docker final iniciado.";
@@ -1408,12 +1887,24 @@ function dockerSuccessMessage(
 }
 
 function dockerFailureMessage(
-  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "check_gpu" | "cancel">,
   result: DockerCommandResult,
 ): string {
   const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.exitCode}`;
   if (operation === "build") {
     return `Build Docker final falhou: ${detail}`;
+  }
+  if (operation === "build_model_image") {
+    return `Build da imagem Ollama pré-carregada falhou: ${detail}`;
+  }
+  if (operation === "export_model_image") {
+    return `Exportação da imagem Ollama pré-carregada falhou: ${detail}`;
+  }
+  if (operation === "push_model_image") {
+    return `Publicação da imagem Ollama pré-carregada falhou: ${detail}`;
+  }
+  if (operation === "setup_models") {
+    return `Setup de modelos locais falhou: ${detail}`;
   }
   if (operation === "up") {
     return `Inicialização do container final falhou: ${detail}`;
@@ -1422,15 +1913,40 @@ function dockerFailureMessage(
 }
 
 function dockerCanceledMessage(
-  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "cancel">,
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "check_gpu" | "cancel">,
 ): string {
   if (operation === "build") {
     return "Build Docker final cancelado pelo usuário.";
+  }
+  if (operation === "build_model_image") {
+    return "Build da imagem Ollama pré-carregada cancelado pelo usuário.";
+  }
+  if (operation === "export_model_image") {
+    return "Exportação da imagem Ollama pré-carregada cancelada pelo usuário.";
+  }
+  if (operation === "push_model_image") {
+    return "Publicação da imagem Ollama pré-carregada cancelada pelo usuário.";
+  }
+  if (operation === "setup_models") {
+    return "Setup de modelos locais cancelado pelo usuário.";
   }
   if (operation === "up") {
     return "Inicialização do container final cancelada pelo usuário.";
   }
   return "Parada do container final cancelada pelo usuário.";
+}
+
+function isDockerBuildLikeOperation(
+  operation: Exclude<DockerRuntimeOperation, "prepare_env" | "configure_ports" | "smoke" | "inspect" | "check_gpu" | "cancel">,
+): boolean {
+  return operation === "build" || operation === "build_model_image";
+}
+
+function parseNvidiaSmiDevices(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^GPU\s+\d+:/i.test(line));
 }
 
 function dockerInspectionFailureMessage(ps: DockerCommandResult, logs: DockerCommandResult): string {
@@ -1488,6 +2004,209 @@ async function readComposePorts(absoluteOutDir: string): Promise<DockerRuntimePo
     postgres: readComposeServicePort(compose, "postgres", 5432),
     redis: readComposeServicePort(compose, "redis", 6379),
   };
+}
+
+async function readComposeModelSetup(
+  absoluteOutDir: string,
+  hostGpu: DockerRuntimeHostGpuDetection,
+): Promise<DockerRuntimeModelSetup> {
+  const compose = await readDockerCompose(absoluteOutDir);
+  const services = compose.services;
+  if (!isRecord(services)) {
+    throw new WorkspaceError("docker-compose.yml não possui services.", 422);
+  }
+  const setupServices = Object.entries(services)
+    .filter(([name, value]) => isOllamaPullService(name, value))
+    .map(([name, value]) => ({
+      service: name,
+      model: readComposeOllamaPullModel(value as Record<string, unknown>) ?? name.replace(/^ollama-pull-/, "").replace(/-/g, ":"),
+    }))
+    .sort((left, right) => left.service.localeCompare(right.service));
+  const serviceNames = setupServices.map((item) => item.service);
+  return {
+    required: serviceNames.length > 0,
+    profile: "model-setup",
+    services: serviceNames,
+    models: setupServices.map((item) => item.model),
+    command: serviceNames.length ? `docker compose --profile model-setup up ${serviceNames.join(" ")}` : null,
+    execution: await readComposeModelExecution(absoluteOutDir, hostGpu),
+    distribution: await readComposeModelDistribution(absoluteOutDir),
+  };
+}
+
+async function readComposeModelDistribution(absoluteOutDir: string): Promise<DockerRuntimeModelDistribution> {
+  const modelImageComposeFile = await fileExists(absoluteOutDir, "docker-compose.model-image.yml");
+  const modelImageDockerfile = await fileExists(absoluteOutDir, "ollama-models/Dockerfile");
+  const modelImageTag = modelImageComposeFile ? await readComposeModelImageTag(absoluteOutDir) : null;
+  const modelImageArchivePath = modelImageTag ? `model-distribution/${safeModelImageArchiveName(modelImageTag)}.tar` : null;
+  return {
+    modelImageComposeFile,
+    modelImageDockerfile,
+    modelImageCommand: modelImageComposeFile && modelImageDockerfile
+      ? "docker compose -f docker-compose.yml -f docker-compose.model-image.yml build ollama"
+      : null,
+    modelImageTag,
+    modelImageArchivePath,
+    modelImageExportCommand: modelImageTag && modelImageArchivePath
+      ? `docker image save -o ${toPosixPath(modelImageArchivePath)} ${modelImageTag}`
+      : null,
+    modelImageLoadCommand: modelImageArchivePath
+      ? `docker image load -i ${toPosixPath(modelImageArchivePath)}`
+      : null,
+    modelImagePushCommand: modelImageTag && isPushableModelImageTag(modelImageTag)
+      ? `docker image push ${modelImageTag}`
+      : null,
+  };
+}
+
+async function readComposeModelImageTag(absoluteOutDir: string): Promise<string | null> {
+  let parsed: unknown;
+  try {
+    parsed = parse(await readFile(path.join(absoluteOutDir, "docker-compose.model-image.yml"), "utf-8"));
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.services)) {
+    return null;
+  }
+  const ollama = parsed.services.ollama;
+  if (!isRecord(ollama)) {
+    return null;
+  }
+  const image = typeof ollama.image === "string" ? ollama.image.trim() : "";
+  if (!image) {
+    return null;
+  }
+  return resolveComposeImageValue(image, await readRuntimeEnvValues(absoluteOutDir));
+}
+
+async function readRuntimeEnvValues(absoluteOutDir: string): Promise<Record<string, string>> {
+  const values: Record<string, string> = {};
+  for (const fileName of [".env", ".env.example"]) {
+    const content = await readFile(path.join(absoluteOutDir, fileName), "utf-8").catch(() => "");
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) {
+        continue;
+      }
+      const index = line.indexOf("=");
+      if (index <= 0) {
+        continue;
+      }
+      const key = line.slice(0, index).trim();
+      const value = line.slice(index + 1).trim().replace(/^['"]|['"]$/g, "");
+      if (key && values[key] === undefined) {
+        values[key] = value;
+      }
+    }
+  }
+  return values;
+}
+
+function resolveComposeImageValue(value: string, envValues: Record<string, string>): string | null {
+  const expression = /^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*))?\}$/.exec(value);
+  if (!expression) {
+    return value;
+  }
+  const [, envName, fallback = ""] = expression;
+  const envValue = envValues[envName]?.trim();
+  return envValue || fallback.trim() || null;
+}
+
+function safeModelImageArchiveName(imageTag: string): string {
+  return imageTag
+    .trim()
+    .toLowerCase()
+    .replace(/:/g, ".")
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120) || "ollama-models";
+}
+
+function toPosixPath(relativePath: string): string {
+  return relativePath.split(path.sep).join("/");
+}
+
+function isPushableModelImageTag(imageTag: string): boolean {
+  const trimmed = imageTag.trim();
+  if (!trimmed || trimmed.endsWith(":local")) {
+    return false;
+  }
+  return trimmed.includes("/") && !trimmed.startsWith("ollama/");
+}
+
+async function readComposeModelExecution(
+  absoluteOutDir: string,
+  hostGpu: DockerRuntimeHostGpuDetection,
+): Promise<DockerRuntimeModelExecution> {
+  const gpuComposeFile = await fileExists(absoluteOutDir, "docker-compose.gpu.yml");
+  const gpuCommand = gpuComposeFile
+    ? "docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build"
+    : null;
+  const dockerGpuCompatible = hostGpu.available && hostGpu.dockerGpuRuntimeAvailable;
+  const recommendedProfile: DockerRuntimeModelExecutionProfile = gpuComposeFile && dockerGpuCompatible ? "gpu" : "cpu";
+  const reason = recommendedProfile === "gpu"
+    ? `GPU local e runtime NVIDIA do Docker detectados${hostGpu.devices.length ? `: ${hostGpu.devices.join(", ")}` : ""}.`
+    : gpuComposeFile
+      ? gpuExecutionFallbackReason(hostGpu)
+      : "Perfil CPU recomendado; o artefato não inclui docker-compose.gpu.yml.";
+  return {
+    cpuCommand: "docker compose up -d --build",
+    gpuCommand,
+    gpuComposeFile,
+    hostGpuDetected: hostGpu.available,
+    hostGpuDevices: hostGpu.devices,
+    dockerGpuRuntimeAvailable: hostGpu.dockerGpuRuntimeAvailable,
+    dockerGpuRuntimeDetails: hostGpu.dockerGpuRuntimeDetails,
+    dockerGpuRuntimeError: hostGpu.dockerGpuRuntimeError,
+    recommendedProfile,
+    reason,
+    checkedAt: hostGpu.checkedAt,
+  };
+}
+
+function gpuExecutionFallbackReason(hostGpu: DockerRuntimeHostGpuDetection): string {
+  if (!hostGpu.available) {
+    return hostGpu.message || "Perfil GPU disponível no artefato, mas GPU local não foi detectada automaticamente.";
+  }
+  if (!hostGpu.dockerGpuRuntimeAvailable) {
+    const detail = hostGpu.dockerGpuRuntimeError
+      ? ` Erro ao consultar Docker: ${hostGpu.dockerGpuRuntimeError}`
+      : hostGpu.dockerGpuRuntimeDetails.length
+        ? ` Runtimes Docker detectados: ${hostGpu.dockerGpuRuntimeDetails.join(", ")}.`
+        : " Nenhum runtime Docker foi retornado pela inspeção.";
+    return `GPU NVIDIA local detectada, mas o runtime NVIDIA do Docker não foi confirmado.${detail}`;
+  }
+  return hostGpu.message || "Perfil GPU disponível, mas a compatibilidade não foi confirmada.";
+}
+
+function normalizeModelExecutionProfile(value: string): DockerRuntimeModelExecutionProfile {
+  if (value === "gpu") {
+    return "gpu";
+  }
+  return "cpu";
+}
+
+function isOllamaPullService(name: string, value: unknown): value is Record<string, unknown> {
+  if (!name.startsWith("ollama-pull-") || !isRecord(value)) {
+    return false;
+  }
+  const profiles = value.profiles;
+  return Array.isArray(profiles) && profiles.map(String).includes("model-setup");
+}
+
+function readComposeOllamaPullModel(service: Record<string, unknown>): string | null {
+  const command = service.command;
+  if (Array.isArray(command)) {
+    const pullIndex = command.findIndex((item) => String(item) === "pull");
+    const next = pullIndex >= 0 ? command[pullIndex + 1] : command.at(-1);
+    return typeof next === "string" && next.trim() ? next.trim() : null;
+  }
+  if (typeof command === "string") {
+    const match = /\bpull\s+([^\s]+)/.exec(command);
+    return match?.[1] ?? null;
+  }
+  return null;
 }
 
 function readComposeServicePort(
@@ -1691,6 +2410,42 @@ function entryProgressMatchesStage(entry: DockerRuntimeHistoryEntry, needle: str
   return (entry.progress ?? []).some((step) =>
     [step.stage, step.message, step.line].some((value) => value.toLowerCase().includes(needle)),
   );
+}
+
+function dockerRuntimeHistoryEntrySearchText(entry: DockerRuntimeHistoryEntry): string {
+  return [
+    entry.operation,
+    entry.status,
+    entry.message,
+    ...entry.logs,
+    entry.runtimeUrl,
+    ...(entry.smoke ? dockerRuntimeSmokeSearchFields(entry.smoke) : []),
+    ...(entry.smokeFailure ? dockerRuntimeSmokeFailureSearchFields(entry.smokeFailure) : []),
+    ...(entry.smokeAll?.results ?? []).flatMap(dockerRuntimeSmokeSearchFields),
+    ...(entry.smokeAll?.failures ?? []).flatMap(dockerRuntimeSmokeFailureSearchFields),
+  ]
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .join(" ");
+}
+
+function dockerRuntimeSmokeSearchFields(smoke: DockerRuntimeSmokeResult): string[] {
+  return [
+    smoke.agentId,
+    smoke.routePrefix,
+    smoke.resourceName,
+    smoke.basePath,
+    smoke.sessionId,
+  ].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function dockerRuntimeSmokeFailureSearchFields(failure: DockerRuntimeSmokeFailure): string[] {
+  return [
+    failure.agentId,
+    failure.routePrefix,
+    failure.resourceName,
+    failure.basePath,
+    failure.message,
+  ].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
 function entryProgressMatchesStatus(entry: DockerRuntimeHistoryEntry, status: DockerBuildProgressStatus): boolean {

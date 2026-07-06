@@ -214,7 +214,7 @@ Decisao:
 Razao:
 
 - O schedule modal e intuitivo, mas exige semantica de jobs/worker.
-- O plano ainda tem jobs pos-finalizacao e worker como futuro.
+- A primeira camada persistente/manual de jobs pos-finalizacao, retry, reprocessamento manual, schedule manual por job, recorrencia por intervalo ou cron basico, worker CLI opcional e o serviço `worker` no Docker Compose ja existem; triggers avancados e operacao continua refinada ainda dependem de uma camada operacional mais madura.
 
 Anti-regressao:
 
@@ -256,6 +256,7 @@ Decisao:
   - erro;
   - diff/snapshot de estado quando possivel.
 - Para LLM, registrar prompt renderizado, modelo, resposta bruta, tokens e custo estimado quando o provider fornecer.
+- Alertas derivados de uso/custo por provider devem poder sair do estado transitório da tela e entrar em uma inbox local por flow, com retenção, reconhecimento e exportação sem payload bruto ou secrets.
 
 Razao:
 
@@ -271,18 +272,22 @@ Anti-regressao:
 Decisao:
 
 - Fase inicial: cenarios salvos, smoke tests e scoring nodes ja previstos.
-- Fase seguinte: datasets locais simples e comparacao entre runs.
-- Fase posterior: evaluators, annotation queues e rubricas humanas.
+- Fase seguinte implementada: datasets locais, comparação entre runs, evaluators textuais/JSON path compostos, evaluators HTTP/LLM-as-judge locais, histórico experimental compacto, dashboard agregado por flow com snapshots históricos backend por workspace e fila de revisão no próprio painel de cenários, com cache local, backend compartilhado por workspace, responsável, triagem em lote para assumir/aprovar/reprovar pendências visíveis, identidade local de revisor, policy local por responsável, papéis locais, filtros, histórico compacto/audit trail, snapshots históricos compactos/exportáveis `.afannotationhistory.json` sem payload bruto dos itens, sincronização manual, detecção/resolução de conflitos de revisão com snapshots completos das versões conflitantes no pacote operacional, export/diff governado `.afannotation-conflicts.json`/`.afannotation-conflicts-diff.json` sem itens completos/snapshots/output bruto e import/export `.afevaluators.json`/`.afannotations.json`.
+- Fase seguinte implementada no editor de arquivos: biblioteca local/exportável/importável de padrões de JSON Schema em `.afschemapatterns.json`, permitindo salvar o schema visual atual, ver preview/diff local de adições/conflitos antes de aplicar, exportar/importar/revisar diff governado `.afschemapatterndiff.json` com verificação de hash, salvar/exportar/importar histórico `.afschemapatternhistory.json`, comparar/exportar/importar/revisar diff histórico `.afschemapatternhistorydiff.json` sem schema bruto, aplicar padrões por merge não destrutivo e fazer curadoria local por status `rascunho`/`aprovado`/`deprecado`, uso e último uso; a curadoria compartilhada multiworkspace/multiusuário de schemas complexos continua como etapa posterior.
+- O histórico experimental deve aparecer onde o usuário já está testando o agente, com métricas de ok/pass médio, tendência, melhor/pior execução e drift de flow por dataset, além de dashboard agregado por flow e exports `.afexperiments.json`/`.afexperiment-dashboard.json`.
+- Fase posterior: colaboração multiusuário com auth, permissões, resolução avançada de conflitos, rubricas humanas avançadas e dashboards históricos dedicados/filtráveis quando houver volume suficiente para justificar uma tela própria.
 
 Razao:
 
 - LangSmith tem suite ampla de datasets, experiments, evaluators e annotation queues.
-- Nosso backlog principal ainda e Studio Local, tema, trace, aprovacao e Docker.
+- Nosso produto precisa da evidência de experimento sem interromper o fluxo local `testar -> depurar -> aprovar`.
+- Dashboard separado cedo demais cria navegação extra e pouco ganho para datasets pequenos.
 
 Anti-regressao:
 
-- Nao deixar evaluators/annotation queues atrasarem o Studio Local basico.
+- Nao deixar evaluators/annotation queues multiusuário atrasarem o Studio Local basico.
 - Nao criar dashboards vazios que nao ajudem a testar/aprovar agente.
+- Nao esconder o histórico experimental fora do contexto do dataset selecionado enquanto a suite ainda for local e compacta.
 
 ### 14. Runtime substitui Deployments cloud no nosso fluxo
 
@@ -419,8 +424,8 @@ Anti-regressao:
 6. Persistencia local de traces.
 7. Aprovacao por hash integrada ao Studio.
 8. Geracao da API Docker apenas de versao aprovada.
-9. Build/up/smoke do container pela UI.
-10. Import/export claro de workspace, sandbox e runtime.
+9. Build/up/smoke do container pela UI, com checklist guiado de entrega final, próxima ação clara e relatório JSON de prontidão/exportação.
+10. Import/export claro de workspace, sandbox e runtime, com manifesto embarcado, auditoria visível, runbook destacável com rotas reais por agente, porta real do compose exportado e distinção entre ZIP preliminar e ZIP final validado.
 
 ## Checklist Anti-Regressao
 

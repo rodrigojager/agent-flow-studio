@@ -46,7 +46,27 @@ export const LlmConfigSchema = z.object({
   mockEnv: z.string().min(1).optional(),
 });
 
+export const SafetyRuleSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1).optional(),
+  description: z.string().optional(),
+  match: z.string().min(1),
+  matchType: z.enum(["contains", "regex"]).default("contains").optional(),
+  category: z.string().min(1).optional(),
+  severity: z.enum(["low", "medium", "high", "critical"]).default("medium").optional(),
+  action: z.enum(["warn", "safe_redirect", "block"]).default("safe_redirect").optional(),
+  safeResponse: z.string().optional(),
+});
+
 export type LlmAdapterStatus = "supported" | "planned";
+
+export interface LlmLocalModelPreset {
+  id: string;
+  label: string;
+  model: string;
+  hardware: string;
+  description: string;
+}
 
 export interface LlmAdapterCatalogItem {
   id: string;
@@ -58,6 +78,9 @@ export interface LlmAdapterCatalogItem {
   baseUrlEnv?: string;
   mockEnv: string;
   defaultBaseUrl?: string;
+  requiresApiKey?: boolean;
+  defaultApiKey?: string;
+  localModelPresets?: LlmLocalModelPreset[];
   notes: string;
 }
 
@@ -97,6 +120,43 @@ export const LLM_ADAPTER_CATALOG: LlmAdapterCatalogItem[] = [
     notes: "Gateway OpenRouter usando protocolo compatível com OpenAI.",
   },
   {
+    id: "ollama",
+    label: "Ollama local",
+    status: "supported",
+    protocol: "openai-responses",
+    defaultModel: "qwen3:8b",
+    apiKeyEnv: "OLLAMA_API_KEY",
+    baseUrlEnv: "OLLAMA_BASE_URL",
+    mockEnv: "MOCK_LLM",
+    defaultBaseUrl: "http://localhost:11434/v1",
+    requiresApiKey: false,
+    defaultApiKey: "ollama",
+    localModelPresets: [
+      {
+        id: "ollama-light-cpu",
+        label: "Leve / CPU",
+        model: "llama3.2:3b",
+        hardware: "CPU ou notebook com pouca memória",
+        description: "Preset conservador para testes locais rápidos, entrevistas simples e prompts curtos.",
+      },
+      {
+        id: "ollama-balanced-local",
+        label: "Equilibrado",
+        model: "qwen3:8b",
+        hardware: "Máquina local intermediária",
+        description: "Preset padrão para agentes locais com melhor equilíbrio entre qualidade e custo de hardware.",
+      },
+      {
+        id: "ollama-quality-local",
+        label: "Qualidade local",
+        model: "qwen3:14b",
+        hardware: "Máquina com mais memória ou GPU local",
+        description: "Preset para respostas mais fortes quando a máquina aguenta um modelo maior.",
+      },
+    ],
+    notes: "Modelo local via Ollama/OpenAI-compatible em localhost; exige o modelo instalado localmente.",
+  },
+  {
     id: "opencode-go",
     label: "opencode Go",
     status: "planned",
@@ -121,7 +181,10 @@ export const LLM_ADAPTER_CATALOG: LlmAdapterCatalogItem[] = [
 ];
 
 export function llmAdapterCatalog(): LlmAdapterCatalogItem[] {
-  return LLM_ADAPTER_CATALOG.map((adapter) => ({ ...adapter }));
+  return LLM_ADAPTER_CATALOG.map((adapter) => ({
+    ...adapter,
+    localModelPresets: adapter.localModelPresets?.map((preset) => ({ ...preset })),
+  }));
 }
 
 export function findLlmAdapter(adapterId: string): LlmAdapterCatalogItem | undefined {
@@ -146,10 +209,11 @@ export const NodeSchema = z
     id: z.string().min(1),
     type: NodeTypeSchema,
     description: z.string().optional(),
+    tags: z.array(z.string().min(1)).optional(),
     promptId: z.string().min(1).optional(),
     outputSchema: z.string().min(1).optional(),
     handler: z.string().min(1).optional(),
-    codeLanguage: z.enum(["python", "typescript", "javascript", "external"]).optional(),
+    codeLanguage: z.enum(["python", "typescript", "javascript", "bash", "shell", "sh", "external"]).optional(),
     codeExecution: z.enum(["native", "inline", "file", "http", "mcp", "sidecar", "runtime_adapter"]).optional(),
     codePath: z.string().min(1).optional(),
     codeInline: z.string().min(1).optional(),
@@ -161,7 +225,33 @@ export const NodeSchema = z
     mcpProtocolVersion: z.string().min(1).optional(),
     sidecarCommand: z.string().min(1).optional(),
     sidecarArgs: z.array(z.string().min(1)).optional(),
+    sandboxIsolation: z.enum(["shared", "ephemeral_workspace", "dedicated_process", "container", "vm"]).optional(),
+    sandboxEnvAllowlist: z.array(z.string().min(1)).optional(),
+    sandboxContainerImageId: z.string().min(1).optional(),
+    sandboxContainerImage: z.string().min(1).optional(),
+    sandboxContainerEngine: z.string().min(1).optional(),
+    sandboxContainerProfile: z.enum(["baseline", "hardened"]).optional(),
+    sandboxContainerMemory: z.string().min(1).optional(),
+    sandboxContainerCpus: z.string().min(1).optional(),
+    sandboxContainerPidsLimit: z.number().int().positive().optional(),
+    sandboxContainerReadOnlyRootfs: z.boolean().optional(),
+    sandboxContainerDropCapabilities: z.boolean().optional(),
+    sandboxContainerNoNewPrivileges: z.boolean().optional(),
+    sandboxVmImageId: z.string().min(1).optional(),
+    sandboxVmRunner: z.string().min(1).optional(),
+    sandboxVmArgs: z.array(z.string().min(1)).optional(),
+    sandboxVmRunnerManifest: z.string().min(1).optional(),
+    sandboxVmImage: z.string().min(1).optional(),
+    sandboxVmImageManifest: z.string().min(1).optional(),
+    sandboxVmEngine: z.enum(["qemu", "firecracker", "cloud-hypervisor", "custom"]).optional(),
+    sandboxVmProfile: z.enum(["baseline", "hardened"]).optional(),
+    sandboxVmMemory: z.string().min(1).optional(),
+    sandboxVmCpus: z.string().min(1).optional(),
     stage: z.enum(["input", "output", "context"]).optional(),
+    safetyMode: z.enum(["default", "custom", "default_and_custom"]).optional(),
+    safetySeverityThreshold: z.enum(["low", "medium", "high", "critical"]).optional(),
+    safetyFallbackResponse: z.string().optional(),
+    safetyRules: z.array(SafetyRuleSchema).optional(),
     llm: LlmConfigSchema.partial().optional(),
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
     url: z.string().min(1).optional(),
@@ -190,6 +280,10 @@ export const NodeSchema = z
     maxChars: z.number().int().positive().max(1_000_000).optional(),
     maxRows: z.number().int().positive().max(500).optional(),
     timeoutSeconds: z.number().int().positive().max(120).optional(),
+    retryAttempts: z.number().int().min(0).max(5).optional(),
+    payloadAllowPaths: z.array(z.string().min(1)).optional(),
+    redactPaths: z.array(z.string().min(1)).optional(),
+    maxPayloadBytes: z.number().int().positive().max(10_000_000).optional(),
     position: NodePositionSchema.optional(),
   })
   .passthrough();
@@ -286,6 +380,32 @@ export const RuntimeManifestAgentSchema = z.object({
   routePrefix: z.string().default(""),
 });
 
+export const RuntimeManifestHandoffSchema = z.object({
+  fromAgentId: z.string().min(1),
+  toAgentId: z.string().min(1),
+  condition: z.string().optional(),
+});
+
+export const RuntimeManifestOrchestrationMemoryPolicySchema = z.object({
+  enabled: z.boolean().default(true),
+  persistence: z.enum(["disabled", "optional_jsonl", "always_jsonl"]).default("optional_jsonl"),
+  defaultPersist: z.boolean().default(false),
+  defaultMemoryPath: z.string().default(""),
+  maxEntries: z.number().int().min(1).max(1000).default(64),
+  retentionRuns: z.number().int().min(1).max(10000).default(50),
+  maxPreviewChars: z.number().int().min(80).max(5000).default(500),
+  redactKeys: z.array(z.string().min(1)).default(["api_key", "authorization", "password", "secret", "token"]),
+  includeStepOutputs: z.boolean().default(true),
+  includeHandoffDecisions: z.boolean().default(true),
+});
+
+export const RuntimeManifestOrchestrationSchema = z.object({
+  mode: z.enum(["router", "sequential", "parallel"]).default("router"),
+  entryAgentId: z.string().optional(),
+  handoffs: z.array(RuntimeManifestHandoffSchema).default([]),
+  memoryPolicy: RuntimeManifestOrchestrationMemoryPolicySchema.optional(),
+});
+
 export const RuntimeManifestSchema = z
   .object({
     id: z.string().min(1),
@@ -294,6 +414,7 @@ export const RuntimeManifestSchema = z
     packaging: z.enum(["monoagent", "multiagent"]),
     defaultLlm: LlmConfigSchema.optional(),
     agents: z.array(RuntimeManifestAgentSchema).min(1),
+    orchestration: RuntimeManifestOrchestrationSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
     const ids = new Set<string>();
@@ -343,6 +464,38 @@ export const RuntimeManifestSchema = z
           code: z.ZodIssueCode.custom,
           path: ["agents", agent.id, "routePrefix"],
           message: "Manifestos multiagent exigem routePrefix não vazio e diferente de '/'.",
+        });
+      }
+    }
+
+    if (manifest.orchestration?.entryAgentId && !ids.has(manifest.orchestration.entryAgentId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["orchestration", "entryAgentId"],
+        message: `entryAgentId não aponta para um agente do manifesto: ${manifest.orchestration.entryAgentId}.`,
+      });
+    }
+
+    for (const [handoffIndex, handoff] of (manifest.orchestration?.handoffs ?? []).entries()) {
+      if (!ids.has(handoff.fromAgentId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["orchestration", "handoffs", handoffIndex, "fromAgentId"],
+          message: `fromAgentId não aponta para um agente do manifesto: ${handoff.fromAgentId}.`,
+        });
+      }
+      if (!ids.has(handoff.toAgentId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["orchestration", "handoffs", handoffIndex, "toAgentId"],
+          message: `toAgentId não aponta para um agente do manifesto: ${handoff.toAgentId}.`,
+        });
+      }
+      if (handoff.fromAgentId === handoff.toAgentId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["orchestration", "handoffs", handoffIndex, "toAgentId"],
+          message: "handoff não pode apontar para o mesmo agente de origem.",
         });
       }
     }
@@ -474,13 +627,242 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
         nodeId: node.id,
       });
     }
+    if (node.type === "safety_gate") {
+      if (node.safetyMode === "custom" && !node.safetyRules?.length) {
+        add({
+          severity: "warning",
+          code: "custom_safety_without_rules",
+          message: `Safety gate ${node.id} usa modo custom, mas não declara safetyRules.`,
+          path: `nodes.${node.id}.safetyRules`,
+          nodeId: node.id,
+        });
+      }
+      for (const [ruleIndex, rule] of (node.safetyRules ?? []).entries()) {
+        if (rule.matchType === "regex") {
+          try {
+            new RegExp(rule.match);
+          } catch {
+            add({
+              severity: "error",
+              code: "invalid_safety_regex",
+              message: `Regra de safety ${rule.id} do nó ${node.id} possui regex inválida.`,
+              path: `nodes.${node.id}.safetyRules.${ruleIndex}.match`,
+              nodeId: node.id,
+            });
+          }
+        }
+      }
+    } else if (node.safetyRules?.length || node.safetyMode || node.safetySeverityThreshold || node.safetyFallbackResponse) {
+      add({
+        severity: "warning",
+        code: "safety_policy_on_non_safety_node",
+        message: `Nó ${node.id} declara política de safety, mas não é do tipo safety_gate.`,
+        path: `nodes.${node.id}`,
+        nodeId: node.id,
+      });
+    }
     if (node.type === "code") {
-      if (!node.handler && !node.codePath && !node.codeInline) {
+      const codeExecution = node.codeExecution ?? "native";
+      const sandboxIsolation = node.sandboxIsolation ?? "shared";
+      const externalContractExecutionModes = new Set(["http", "mcp", "sidecar", "runtime_adapter"]);
+      if (!node.handler && !node.codePath && !node.codeInline && !externalContractExecutionModes.has(codeExecution)) {
         add({
           severity: "warning",
           code: "missing_code_contract",
           message: `Nó ${node.id} precisa declarar handler, codePath ou codeInline para representar comportamento customizado.`,
           path: `nodes.${node.id}`,
+          nodeId: node.id,
+        });
+      }
+      if ((codeExecution === "http" || (codeExecution === "runtime_adapter" && sandboxIsolation !== "vm")) && !node.url) {
+        add({
+          severity: "warning",
+          code: codeExecution === "runtime_adapter" ? "missing_runtime_adapter_url" : "missing_code_http_url",
+          message:
+            codeExecution === "runtime_adapter"
+              ? `Nó ${node.id} usa runtime_adapter e precisa declarar a URL do adapter.`
+              : `Nó ${node.id} usa execução HTTP e precisa declarar url.`,
+          path: `nodes.${node.id}.url`,
+          nodeId: node.id,
+        });
+      }
+      if (codeExecution === "mcp") {
+        if (!node.mcpCommand) {
+          add({
+            severity: "warning",
+            code: "missing_mcp_command",
+            message: `Nó ${node.id} usa MCP e precisa declarar mcpCommand.`,
+            path: `nodes.${node.id}.mcpCommand`,
+            nodeId: node.id,
+          });
+        }
+        if (!node.mcpToolName) {
+          add({
+            severity: "warning",
+            code: "missing_mcp_tool_name",
+            message: `Nó ${node.id} usa MCP e precisa declarar mcpToolName.`,
+            path: `nodes.${node.id}.mcpToolName`,
+            nodeId: node.id,
+          });
+        }
+      }
+      if (codeExecution === "sidecar" && !node.sidecarCommand) {
+        add({
+          severity: "warning",
+          code: "missing_sidecar_command",
+          message: `Nó ${node.id} usa sidecar e precisa declarar sidecarCommand.`,
+          path: `nodes.${node.id}.sidecarCommand`,
+          nodeId: node.id,
+        });
+      }
+      const language = String(node.codeLanguage ?? "python").toLowerCase();
+      const runtimeExecution = codeExecution === "native" || codeExecution === "inline" || codeExecution === "file";
+      const runtimeAdapterVmExecution = codeExecution === "runtime_adapter" && sandboxIsolation === "vm";
+      const nodeRuntimeExecution = ["javascript", "js", "typescript", "ts"].includes(language) && runtimeExecution;
+      const shellRuntimeExecution = ["bash", "shell", "sh"].includes(language) && runtimeExecution;
+      const processBackedExecution =
+        codeExecution === "mcp" ||
+        codeExecution === "sidecar" ||
+        nodeRuntimeExecution ||
+        shellRuntimeExecution;
+      const pythonDedicatedProcessExecution =
+        ["python", "py"].includes(language) &&
+        runtimeExecution;
+      const dedicatedProcessExecution = pythonDedicatedProcessExecution || shellRuntimeExecution;
+      const containerExecution = dedicatedProcessExecution || nodeRuntimeExecution;
+      const vmExecution = pythonDedicatedProcessExecution || nodeRuntimeExecution || shellRuntimeExecution || runtimeAdapterVmExecution;
+      if (sandboxIsolation === "ephemeral_workspace" && !processBackedExecution) {
+        add({
+          severity: "warning",
+          code: "code_sandbox_isolation_not_applicable",
+          message: `sandboxIsolation=ephemeral_workspace do nó ${node.id} só se aplica a MCP, sidecar, Shell ou JavaScript/TypeScript por processo dedicado.`,
+          path: `nodes.${node.id}.sandboxIsolation`,
+          nodeId: node.id,
+        });
+      }
+      if (sandboxIsolation === "dedicated_process" && !dedicatedProcessExecution) {
+        add({
+          severity: "warning",
+          code: "code_sandbox_isolation_not_applicable",
+          message: `sandboxIsolation=dedicated_process do nó ${node.id} só se aplica a Python ou Shell native/inline/file nesta camada inicial.`,
+          path: `nodes.${node.id}.sandboxIsolation`,
+          nodeId: node.id,
+        });
+      }
+      if (sandboxIsolation === "container" && !containerExecution) {
+        add({
+          severity: "warning",
+          code: "code_sandbox_isolation_not_applicable",
+          message: `sandboxIsolation=container do nó ${node.id} só se aplica a Python, JavaScript, TypeScript ou Shell native/inline/file nesta camada inicial.`,
+          path: `nodes.${node.id}.sandboxIsolation`,
+          nodeId: node.id,
+        });
+      }
+      if (sandboxIsolation === "container" && !node.sandboxContainerImage) {
+        add({
+          severity: "warning",
+          code: "missing_code_container_image",
+          message: `sandboxIsolation=container do nó ${node.id} precisa declarar sandboxContainerImage ou configurar AGENT_FLOW_CODE_CONTAINER_IMAGE no runtime.`,
+          path: `nodes.${node.id}.sandboxContainerImage`,
+          nodeId: node.id,
+        });
+      }
+      if (sandboxIsolation === "vm" && !vmExecution) {
+        add({
+          severity: "warning",
+          code: "code_sandbox_isolation_not_applicable",
+          message: `sandboxIsolation=vm do nó ${node.id} só se aplica a Python, JavaScript, TypeScript ou Bash/Shell native/inline/file ou runtime_adapter nesta camada inicial.`,
+          path: `nodes.${node.id}.sandboxIsolation`,
+          nodeId: node.id,
+        });
+      }
+      if (runtimeAdapterVmExecution && !node.codePath && !node.codeInline) {
+        add({
+          severity: "warning",
+          code: "missing_runtime_adapter_vm_source",
+          message: `Nó ${node.id} usa runtime_adapter em VM e precisa declarar codeInline ou codePath para o adapter executado no runner VM.`,
+          path: `nodes.${node.id}.codeInline`,
+          nodeId: node.id,
+        });
+      }
+      if (sandboxIsolation === "vm" && !node.sandboxVmRunner) {
+        add({
+          severity: "warning",
+          code: "missing_code_vm_runner",
+          message: `sandboxIsolation=vm do nó ${node.id} precisa declarar sandboxVmRunner ou configurar AGENT_FLOW_CODE_VM_RUNNER no runtime.`,
+          path: `nodes.${node.id}.sandboxVmRunner`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sandboxContainerProfile && sandboxIsolation !== "container") {
+        add({
+          severity: "warning",
+          code: "code_container_policy_not_applicable",
+          message: `sandboxContainerProfile do nó ${node.id} só se aplica quando sandboxIsolation=container.`,
+          path: `nodes.${node.id}.sandboxContainerProfile`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sandboxVmProfile && sandboxIsolation !== "vm") {
+        add({
+          severity: "warning",
+          code: "code_vm_policy_not_applicable",
+          message: `sandboxVmProfile do nó ${node.id} só se aplica quando sandboxIsolation=vm.`,
+          path: `nodes.${node.id}.sandboxVmProfile`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sandboxVmImageId && sandboxIsolation !== "vm") {
+        add({
+          severity: "warning",
+          code: "code_vm_image_not_applicable",
+          message: `sandboxVmImageId do nó ${node.id} só se aplica quando sandboxIsolation=vm.`,
+          path: `nodes.${node.id}.sandboxVmImageId`,
+          nodeId: node.id,
+        });
+      }
+      if ((node.sandboxVmRunnerManifest || node.sandboxVmImageManifest || node.sandboxVmEngine) && sandboxIsolation !== "vm") {
+        add({
+          severity: "warning",
+          code: "code_vm_manifest_not_applicable",
+          message: `Manifestos/engine VM do nó ${node.id} só se aplicam quando sandboxIsolation=vm.`,
+          path: `nodes.${node.id}.sandboxVmRunnerManifest`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sandboxContainerMemory && !/^[1-9]\d*(b|k|m|g|kb|mb|gb)$/i.test(node.sandboxContainerMemory)) {
+        add({
+          severity: "warning",
+          code: "invalid_code_container_memory",
+          message: `sandboxContainerMemory do nó ${node.id} deve usar formato Docker como 256m, 1g ou 512mb.`,
+          path: `nodes.${node.id}.sandboxContainerMemory`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sandboxContainerCpus && !/^[0-9]+(\.[0-9]+)?$/.test(node.sandboxContainerCpus)) {
+        add({
+          severity: "warning",
+          code: "invalid_code_container_cpus",
+          message: `sandboxContainerCpus do nó ${node.id} deve ser numérico, como 0.5 ou 1.`,
+          path: `nodes.${node.id}.sandboxContainerCpus`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sandboxVmMemory && !/^[1-9]\d*(b|k|m|g|kb|mb|gb)$/i.test(node.sandboxVmMemory)) {
+        add({
+          severity: "warning",
+          code: "invalid_code_vm_memory",
+          message: `sandboxVmMemory do nó ${node.id} deve usar formato como 512m, 1g ou 1024mb.`,
+          path: `nodes.${node.id}.sandboxVmMemory`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sandboxVmCpus && !/^[0-9]+(\.[0-9]+)?$/.test(node.sandboxVmCpus)) {
+        add({
+          severity: "warning",
+          code: "invalid_code_vm_cpus",
+          message: `sandboxVmCpus do nó ${node.id} deve ser numérico, como 1 ou 2.`,
+          path: `nodes.${node.id}.sandboxVmCpus`,
           nodeId: node.id,
         });
       }
@@ -501,6 +883,23 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
           path: `nodes.${node.id}.inputPath`,
           nodeId: node.id,
         });
+      }
+      for (const [field, values] of [
+        ["payloadAllowPaths", node.payloadAllowPaths],
+        ["redactPaths", node.redactPaths],
+      ] as const) {
+        for (const value of values ?? []) {
+          const normalizedValue = value === "input" || value.startsWith("input.") ? "state" : value;
+          if (!isValidStatePath(normalizedValue) && !value.startsWith("context.")) {
+            add({
+              severity: "warning",
+              code: `invalid_code_${field}`,
+              message: `${field} do nó ${node.id} contém caminho inválido: ${value}.`,
+              path: `nodes.${node.id}.${field}`,
+              nodeId: node.id,
+            });
+          }
+        }
       }
       if (node.resultPath && !isValidStatePath(node.resultPath)) {
         add({

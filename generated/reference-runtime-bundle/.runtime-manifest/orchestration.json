@@ -1,0 +1,49 @@
+{
+  "format": "agent-flow-builder.runtime-orchestration.v1",
+  "manifestId": "reference-runtime",
+  "manifestVersion": "0.1.0",
+  "mode": "sequential",
+  "capabilities": {
+    "executableRun": true,
+    "debugTrace": true,
+    "structuredConditions": true,
+    "optionalJsonlMemory": true,
+    "persistentMemoryPolicy": true
+  },
+  "memoryPolicy": {
+    "enabled": true,
+    "persistence": "optional_jsonl",
+    "defaultPersist": false,
+    "defaultMemoryPath": "",
+    "maxEntries": 64,
+    "retentionRuns": 50,
+    "maxPreviewChars": 500,
+    "redactKeys": [
+      "api_key",
+      "authorization",
+      "password",
+      "secret",
+      "token"
+    ],
+    "includeStepOutputs": true,
+    "includeHandoffDecisions": true
+  },
+  "entryAgentId": "reference-interview",
+  "handoffs": [],
+  "agents": [
+    {
+      "id": "reference-interview",
+      "routePrefix": "/reference-interview",
+      "resourceName": "sessions",
+      "metadataPath": "/reference-interview/metadata",
+      "sessionsPath": "/reference-interview/sessions"
+    }
+  ],
+  "governance": {
+    "declarativeOnly": true,
+    "generatedFromManifest": true,
+    "excludesSecrets": true,
+    "excludesEnvValues": true,
+    "excludesRuntimePayloads": true
+  }
+}

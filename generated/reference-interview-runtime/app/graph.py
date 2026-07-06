@@ -84,7 +84,6 @@ ANALYTICS_NODE_IDS = _node_ids(node_type="analytics")
 class ReferenceState(TypedDict, total=False):
     action: Literal["start", "turn", "finish"]
     session_id: str
-    agent_id: str
     status: str
     phase: str
     turn: int
@@ -103,7 +102,6 @@ class ReferenceState(TypedDict, total=False):
     scores: dict[str, Any]
     analytics: dict[str, Any]
     custom: dict[str, Any]
-    session_metadata: dict[str, Any]
     is_complete: bool
     executed_nodes: list[str]
 
@@ -210,153 +208,6 @@ def build_graph(
         if isinstance(value, dict):
             return {str(key): jsonable(item) for key, item in value.items()}
         return str(value)
-
-    def pinned_node_output(state: ReferenceState, node_id: str) -> tuple[bool, Any]:
-        metadata = state.get("session_metadata") or {}
-        if not isinstance(metadata, dict):
-            return False, None
-        node_pins = metadata.get("nodePins") or metadata.get("node_pins")
-        if not isinstance(node_pins, dict) or node_pins.get("enabled") is not True:
-            return False, None
-        items = node_pins.get("items")
-        if not isinstance(items, list):
-            return False, None
-        for item in items:
-            if isinstance(item, dict) and item.get("nodeId") == node_id:
-                return True, item.get("output")
-        return False, None
-
-    def pinned_payload(output: Any) -> dict[str, Any]:
-        payload = dict(output) if isinstance(output, dict) else {"value": output}
-        payload.setdefault("mock", True)
-        payload.setdefault("pinned", True)
-        return payload
-
-    def pinned_assistant_message(output: Any, fallback: str) -> dict[str, str]:
-        payload = output if isinstance(output, dict) else {}
-        assistant = None
-        if isinstance(payload, dict):
-            assistant = payload.get("assistant_message") or payload.get("assistantMessage")
-        if isinstance(assistant, dict):
-            text = assistant.get("text") or assistant.get("content") or fallback
-            code = assistant.get("code") or "PIN"
-            return {"code": str(code), "text": str(text)}
-        if isinstance(payload, dict):
-            for key in ("text", "content", "message", "value"):
-                value = payload.get(key)
-                if isinstance(value, (str, int, float, bool)) and str(value).strip():
-                    return {"code": "PIN", "text": str(value)}
-        if output is not None and not isinstance(output, dict):
-            return {"code": "PIN", "text": str(output)}
-        return {"code": "PIN", "text": fallback}
-
-    def pinned_category_updates(
-        state: ReferenceState,
-        node_id: str,
-        root_key: str,
-        result_path: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        updates: dict[str, Any] = {}
-        results = dict(state.get(root_key) or {})
-        results[node_id] = payload
-        updates[root_key] = results
-        default_path = f"{root_key}.{node_id}"
-        if result_path != default_path:
-            assign_state_path(updates, state, result_path, payload)
-        return updates
-
-    def apply_pinned_state_overrides(updates: dict[str, Any], payload: dict[str, Any]) -> None:
-        for key in ("status", "phase", "turn", "is_complete"):
-            if key in payload:
-                updates[key] = payload[key]
-        assistant = payload.get("assistant_message") or payload.get("assistantMessage")
-        if isinstance(assistant, dict) and "assistant_message" not in updates:
-            updates["assistant_message"] = {
-                "code": str(assistant.get("code") or "PIN"),
-                "text": str(assistant.get("text") or assistant.get("content") or "Resposta fixada por pin de nó."),
-            }
-
-    def pinned_node_update(
-        state: ReferenceState,
-        node_id: str,
-        kind: str,
-        *,
-        result_path: str | None = None,
-    ) -> ReferenceState | None:
-        found, output = pinned_node_output(state, node_id)
-        if not found:
-            return None
-        payload = pinned_payload(output)
-        updates: dict[str, Any] = {}
-        if kind == "start":
-            updates.update({
-                "status": "active",
-                "phase": "awaiting_turn",
-                "assistant_message": pinned_assistant_message(output, START_MESSAGE),
-                "is_complete": False,
-            })
-        elif kind == "finish":
-            updates.update({
-                "status": "completed",
-                "phase": "closing",
-                "assistant_message": pinned_assistant_message(output, "Sessão finalizada por replay de pin."),
-                "is_complete": True,
-            })
-        elif kind == "human_input":
-            updates.update({
-                "status": "active",
-                "phase": "awaiting_turn",
-                "is_complete": False,
-                "assistant_message": pinned_assistant_message(output, "Aguardando entrada do usuário."),
-            })
-        elif kind == "llm":
-            llm_payload = dict(payload)
-            llm_payload.setdefault("provider", "pinned")
-            llm_payload.setdefault("model", "pinned")
-            llm_payload.setdefault("attempts", 0)
-            llm_payload.setdefault("node_id", node_id)
-            updates["assistant_message"] = pinned_assistant_message(output, "Resposta fixada por pin de nó.")
-            updates["llm"] = llm_payload
-        elif kind == "safety":
-            safety_source = payload.get("safety") if isinstance(payload.get("safety"), dict) else payload
-            safety_payload = dict(safety_source) if isinstance(safety_source, dict) else {"value": safety_source}
-            safety_payload.setdefault("blocked", False)
-            safety_payload.setdefault("decision", "allow")
-            safety_payload.setdefault("mock", True)
-            safety_payload.setdefault("pinned", True)
-            updates["safety"] = safety_payload
-            if safety_payload.get("blocked"):
-                updates["assistant_message"] = pinned_assistant_message(output, "Mensagem bloqueada por replay de pin.")
-                updates["phase"] = "safety"
-                updates["is_complete"] = safety_payload.get("decision") == "block"
-                updates["status"] = "completed" if updates["is_complete"] else "active"
-        elif kind == "code":
-            payload.setdefault("status", "custom_code_executed")
-            payload.setdefault("node_id", node_id)
-            updates.update(pinned_category_updates(state, node_id, "custom", result_path or f"custom.{node_id}", payload))
-        elif kind == "http":
-            updates.update(pinned_category_updates(state, node_id, "http", result_path or f"http.{node_id}", payload))
-        elif kind == "transform":
-            updates.update(pinned_category_updates(state, node_id, "transforms", result_path or f"transforms.{node_id}", payload))
-        elif kind == "database":
-            updates.update(pinned_category_updates(state, node_id, "database", result_path or f"database.{node_id}", payload))
-        elif kind == "file":
-            updates.update(pinned_category_updates(state, node_id, "files", result_path or f"files.{node_id}", payload))
-        elif kind == "rag":
-            updates.update(pinned_category_updates(state, node_id, "rag", result_path or f"rag.{node_id}", payload))
-        elif kind == "approval":
-            updates.update(pinned_category_updates(state, node_id, "approvals", result_path or f"approvals.{node_id}", payload))
-        elif kind == "score":
-            updates.update(pinned_category_updates(state, node_id, "scores", result_path or f"scores.{node_id}", payload))
-        elif kind == "analytics":
-            updates.update(pinned_category_updates(state, node_id, "analytics", result_path or f"analytics.{node_id}", payload))
-        else:
-            custom = dict(state.get("custom") or {})
-            custom[node_id] = payload
-            updates["custom"] = custom
-        apply_pinned_state_overrides(updates, payload)
-        return mark_node(state, node_id, updates)
 
     def normalized_params(value: Any, state: ReferenceState) -> dict[str, Any]:
         if value is None:
@@ -479,16 +330,14 @@ def build_graph(
             "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
         }
 
-    def execute_custom_node_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
+    def execute_custom_javascript_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         node_id = config["id"]
         started_at = time.perf_counter()
         entry_name = str(config.get("codeEntry") or "run")
         source_path = config.get("codePath")
         inline_source = config.get("codeInline")
-        language = str(config.get("codeLanguage") or "javascript").lower()
         request: dict[str, Any] = {
             "entry": entry_name,
-            "language": language,
         }
         if inline_source:
             request["inlineSource"] = str(inline_source)
@@ -537,7 +386,7 @@ def build_graph(
                 "status": "custom_code_failed",
                 "node_id": node_id,
                 "contract": contract,
-                "error": error.get("message") if isinstance(error, dict) else str(error or "node_runner_failed"),
+                "error": error.get("message") if isinstance(error, dict) else str(error or "javascript_runner_failed"),
                 "stderr": stderr,
             }
         return {
@@ -549,363 +398,10 @@ def build_graph(
             "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
         }
 
-    def execute_custom_http_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
-        node_id = config["id"]
-        started_at = time.perf_counter()
-        method = str(config.get("method") or "POST").upper()
-        url = str(config.get("url") or "")
-        input_path = str(config.get("inputPath") or "state")
-        input_value = state_path_value(state, input_path)
-        if not url:
-            return {
-                "ok": False,
-                "status": "custom_code_not_executed",
-                "node_id": node_id,
-                "contract": contract,
-                "reason": "url_not_configured",
-            }
-
-        request_payload = {
-            "input": jsonable(input_value),
-            "context": {
-                "node_id": node_id,
-                "session_id": state.get("session_id"),
-                "turn": state.get("turn"),
-                "input_path": input_path,
-                "state": jsonable(state),
-            },
-            "contract": contract,
-        }
-        if url.startswith("mock://"):
-            return {
-                "ok": True,
-                "status": "custom_code_executed",
-                "node_id": node_id,
-                "contract": contract,
-                "output": {
-                    "mock": True,
-                    "method": method,
-                    "url": url,
-                    "request": request_payload,
-                },
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-
-        try:
-            data = None
-            headers = {"Accept": "application/json"}
-            if method not in {"GET", "DELETE"}:
-                data = json.dumps(request_payload).encode("utf-8")
-                headers["Content-Type"] = "application/json"
-            request = urllib.request.Request(url, data=data, headers=headers, method=method)
-            timeout = int(config.get("timeoutSeconds") or 30)
-            with urllib.request.urlopen(request, timeout=timeout) as result:
-                raw = result.read().decode("utf-8", errors="replace")
-                try:
-                    content: Any = json.loads(raw) if raw else None
-                except json.JSONDecodeError:
-                    content = raw
-                if isinstance(content, dict):
-                    external_ok = bool(content.get("ok", True))
-                    output = content.get("output") if "output" in content else content
-                    error = content.get("error")
-                else:
-                    external_ok = True
-                    output = content
-                    error = None
-                return {
-                    "ok": external_ok and 200 <= result.status < 400,
-                    "status": "custom_code_executed" if external_ok and 200 <= result.status < 400 else "custom_code_failed",
-                    "node_id": node_id,
-                    "contract": contract,
-                    "output": jsonable(output),
-                    "status_code": result.status,
-                    "error": error,
-                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-                }
-        except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "status_code": exc.code,
-                "error": raw,
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": str(exc),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-
-    def execute_custom_sidecar_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
-        node_id = config["id"]
-        started_at = time.perf_counter()
-        command = str(config.get("sidecarCommand") or "").strip()
-        raw_args = config.get("sidecarArgs") or []
-        if isinstance(raw_args, str):
-            sidecar_args = [item.strip() for item in raw_args.splitlines() if item.strip()]
-        elif isinstance(raw_args, list):
-            sidecar_args = [str(item).strip() for item in raw_args if str(item).strip()]
-        else:
-            sidecar_args = []
-        input_path = str(config.get("inputPath") or "state")
-        input_value = state_path_value(state, input_path)
-        if not command:
-            return {
-                "ok": False,
-                "status": "custom_code_not_executed",
-                "node_id": node_id,
-                "contract": contract,
-                "reason": "sidecar_command_not_configured",
-            }
-
-        request_payload = {
-            "input": jsonable(input_value),
-            "context": {
-                "node_id": node_id,
-                "session_id": state.get("session_id"),
-                "turn": state.get("turn"),
-                "input_path": input_path,
-                "state": jsonable(state),
-            },
-            "contract": contract,
-        }
-        timeout_seconds = int(config.get("timeoutSeconds") or 30)
-        try:
-            completed = subprocess.run(
-                [command, *sidecar_args],
-                input=json.dumps(request_payload),
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-                cwd=str(CODE_ROOT),
-                check=False,
-            )
-            stdout = (completed.stdout or "").strip()
-            stderr = (completed.stderr or "").strip()
-            try:
-                content: Any = json.loads(stdout) if stdout else None
-            except json.JSONDecodeError:
-                content = stdout
-            if isinstance(content, dict):
-                external_ok = bool(content.get("ok", True))
-                output = content.get("output") if "output" in content else content
-                error = content.get("error")
-            else:
-                external_ok = True
-                output = content
-                error = None
-            ok = completed.returncode == 0 and external_ok
-            return {
-                "ok": ok,
-                "status": "custom_code_executed" if ok else "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "output": jsonable(output),
-                "exit_code": completed.returncode,
-                "stderr": stderr,
-                "error": error,
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except subprocess.TimeoutExpired as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": f"sidecar_timeout_after_{timeout_seconds}s",
-                "stdout": str(exc.stdout or ""),
-                "stderr": str(exc.stderr or ""),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": str(exc),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-
-    def execute_custom_mcp_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
-        node_id = config["id"]
-        started_at = time.perf_counter()
-        command = str(config.get("mcpCommand") or "").strip()
-        tool_name = str(config.get("mcpToolName") or "").strip()
-        raw_args = config.get("mcpArgs") or []
-        if isinstance(raw_args, str):
-            mcp_args = [item.strip() for item in raw_args.splitlines() if item.strip()]
-        elif isinstance(raw_args, list):
-            mcp_args = [str(item).strip() for item in raw_args if str(item).strip()]
-        else:
-            mcp_args = []
-        input_path = str(config.get("inputPath") or "state")
-        input_value = state_path_value(state, input_path)
-        if not command:
-            return {
-                "ok": False,
-                "status": "custom_code_not_executed",
-                "node_id": node_id,
-                "contract": contract,
-                "reason": "mcp_command_not_configured",
-            }
-        if not tool_name:
-            return {
-                "ok": False,
-                "status": "custom_code_not_executed",
-                "node_id": node_id,
-                "contract": contract,
-                "reason": "mcp_tool_not_configured",
-            }
-
-        tool_arguments = input_value if isinstance(input_value, dict) else {"input": jsonable(input_value)}
-        protocol_version = str(config.get("mcpProtocolVersion") or "2025-11-25")
-        messages = [
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": protocol_version,
-                    "capabilities": {},
-                    "clientInfo": {"name": "agent-flow-runtime", "version": "0.1.0"},
-                },
-            },
-            {
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-                "params": {},
-            },
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": jsonable(tool_arguments),
-                },
-            },
-        ]
-        stdin_payload = "\n".join(json.dumps(message) for message in messages) + "\n"
-        timeout_seconds = int(config.get("timeoutSeconds") or 30)
-        try:
-            completed = subprocess.run(
-                [command, *mcp_args],
-                input=stdin_payload,
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-                cwd=str(CODE_ROOT),
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": f"mcp_timeout_after_{timeout_seconds}s",
-                "stdout": str(exc.stdout or ""),
-                "stderr": str(exc.stderr or ""),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "error": str(exc),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-
-        stdout = (completed.stdout or "").strip()
-        stderr = (completed.stderr or "").strip()
-        responses: list[dict[str, Any]] = []
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(message, dict):
-                responses.append(message)
-        initialize_response = next((message for message in responses if message.get("id") == 1), None)
-        tool_response = next((message for message in responses if message.get("id") == 2), None)
-        if completed.returncode != 0:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "exit_code": completed.returncode,
-                "stderr": stderr,
-                "error": "mcp_process_failed",
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        if not tool_response:
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "stderr": stderr,
-                "error": "mcp_tools_call_response_missing",
-                "mcp_initialize": jsonable(initialize_response),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        if tool_response.get("error"):
-            return {
-                "ok": False,
-                "status": "custom_code_failed",
-                "node_id": node_id,
-                "contract": contract,
-                "stderr": stderr,
-                "error": jsonable(tool_response.get("error")),
-                "mcp_initialize": jsonable(initialize_response),
-                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-            }
-        result = tool_response.get("result") if isinstance(tool_response.get("result"), dict) else {}
-        output: Any = result
-        content = result.get("content") if isinstance(result, dict) else None
-        if isinstance(result, dict) and "structuredContent" in result:
-            output = result.get("structuredContent")
-        elif isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict) and content[0].get("type") == "text":
-            text = str(content[0].get("text") or "")
-            try:
-                output = json.loads(text)
-            except json.JSONDecodeError:
-                output = text
-        return {
-            "ok": True,
-            "status": "custom_code_executed",
-            "node_id": node_id,
-            "contract": contract,
-            "output": jsonable(output),
-            "mcp_initialize": jsonable(initialize_response),
-            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
-        }
-
     def execute_custom_code(config: dict[str, Any], state: ReferenceState, contract: dict[str, Any]) -> dict[str, Any]:
         language = str(config.get("codeLanguage") or "python").lower()
         execution = str(config.get("codeExecution") or "native").lower()
-        if execution == "http":
-            return execute_custom_http_code(config, state, contract)
-        if execution == "mcp":
-            return execute_custom_mcp_code(config, state, contract)
-        if execution == "sidecar":
-            return execute_custom_sidecar_code(config, state, contract)
-        if language == "external" or execution in {"runtime_adapter"}:
+        if language == "external" or execution in {"http", "mcp", "sidecar", "runtime_adapter"}:
             return {
                 "ok": False,
                 "status": "custom_code_not_executed",
@@ -913,9 +409,9 @@ def build_graph(
                 "contract": contract,
                 "reason": "external_executor_not_configured",
             }
-        if language in {"javascript", "js", "typescript", "ts"}:
+        if language in {"javascript", "js"}:
             try:
-                return execute_custom_node_code(config, state, contract)
+                return execute_custom_javascript_code(config, state, contract)
             except Exception as exc:
                 return {
                     "ok": False,
@@ -945,59 +441,7 @@ def build_graph(
                 "traceback": traceback.format_exc(limit=5),
             }
 
-    def redact_log_text(value: Any) -> str:
-        text = str(value or "")
-        for marker in ["api_key=", "apikey=", "token=", "password=", "senha=", "secret="]:
-            lower = text.lower()
-            index = lower.find(marker)
-            while index >= 0:
-                end = len(text)
-                for separator in ["&", " ", "\n", "\r", "\t"]:
-                    separator_index = text.find(separator, index + len(marker))
-                    if separator_index >= 0:
-                        end = min(end, separator_index)
-                text = f"{text[:index]}{text[index:index + len(marker)]}***REDACTED***{text[end:]}"
-                lower = text.lower()
-                index = lower.find(marker, index + len(marker) + len("***REDACTED***"))
-        return text
-
-    def custom_execution_target(contract: dict[str, Any]) -> str:
-        for key in ["url", "mcp_tool_name", "sidecar_command", "path", "entry"]:
-            value = contract.get(key)
-            if value not in (None, ""):
-                return redact_log_text(value)
-        return "inline"
-
-    def with_custom_observability(node_id: str, result: dict[str, Any]) -> dict[str, Any]:
-        enriched = dict(result)
-        contract = enriched.get("contract") if isinstance(enriched.get("contract"), dict) else {}
-        mode = str(contract.get("execution") or contract.get("language") or "native")
-        status = str(enriched.get("status") or ("custom_code_executed" if enriched.get("ok") else "custom_code_failed"))
-        execution_log = {
-            "mode": mode,
-            "status": status,
-            "node_id": node_id,
-            "target": custom_execution_target(contract),
-            "input_path": contract.get("input_path"),
-            "duration_ms": enriched.get("duration_ms"),
-            "status_code": enriched.get("status_code"),
-            "exit_code": enriched.get("exit_code"),
-            "reason": enriched.get("reason"),
-            "error": redact_log_text(enriched.get("error")) if enriched.get("error") is not None else None,
-            "stderr": redact_log_text(enriched.get("stderr")) if enriched.get("stderr") else None,
-        }
-        enriched["execution_log"] = {key: value for key, value in execution_log.items() if value not in (None, "")}
-        enriched["span"] = {
-            "name": f"custom_code.{mode}",
-            "status": "ok" if enriched.get("ok") else "error",
-            "duration_ms": enriched.get("duration_ms"),
-            "operation": "custom_code",
-            "target": enriched["execution_log"].get("target"),
-        }
-        return enriched
-
     def remember_custom_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
-        result = with_custom_observability(node_id, result)
         updates: dict[str, Any] = {}
         custom_results = dict(state.get("custom") or {})
         custom_results[node_id] = result
@@ -1119,9 +563,6 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "start")
-            if pinned is not None:
-                return pinned
             return mark_node(state, node_id, {
                 "status": "active",
                 "phase": "awaiting_turn",
@@ -1136,9 +577,6 @@ def build_graph(
         stage = config.get("stage")
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "safety")
-            if pinned is not None:
-                return pinned
             if stage == "input":
                 decision = safety_gate.check_input(state.get("user_message", ""))
                 if decision.blocked:
@@ -1181,9 +619,6 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "llm")
-            if pinned is not None:
-                return pinned
             result = llm_client.generate(
                 system_prompt=prompt_for_node(config),
                 user_message=state.get("user_message", ""),
@@ -1222,21 +657,9 @@ def build_graph(
             "input_path": config.get("inputPath"),
             "has_inline_code": bool(config.get("codeInline")),
             "dependencies": config.get("codeDependencies"),
-            "method": config.get("method"),
-            "url": config.get("url"),
-            "mcp_command": config.get("mcpCommand"),
-            "mcp_args": config.get("mcpArgs"),
-            "mcp_tool_name": config.get("mcpToolName"),
-            "mcp_protocol_version": config.get("mcpProtocolVersion"),
-            "sidecar_command": config.get("sidecarCommand"),
-            "sidecar_args": config.get("sidecarArgs"),
-            "timeout_seconds": config.get("timeoutSeconds"),
         }
 
         def deterministic_gate(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "code", result_path=result_path)
-            if pinned is not None:
-                return pinned
             next_turn = int(state.get("turn") or 0) + 1
             max_turns = int(state.get("max_turns") or 3)
             if next_turn >= max_turns:
@@ -1259,9 +682,6 @@ def build_graph(
             })
 
         def run_custom_code(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "code", result_path=result_path)
-            if pinned is not None:
-                return pinned
             contract = {key: value for key, value in custom_contract.items() if value not in (None, "", False)}
             if not contract:
                 return mark_node(state, node_id, {})
@@ -1273,9 +693,6 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "state")
-            if pinned is not None:
-                return pinned
             return mark_node(state, node_id, {})
 
         return run
@@ -1284,9 +701,6 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "human_input")
-            if pinned is not None:
-                return pinned
             updates: ReferenceState = {
                 "status": "active",
                 "phase": "awaiting_turn",
@@ -1307,9 +721,6 @@ def build_graph(
         timeout = int(config.get("timeoutSeconds") or 10)
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "http", result_path=response_path)
-            if pinned is not None:
-                return pinned
             request_body = state_path_value(state, body_path) if body_path else None
             if not url:
                 response = {
@@ -1381,9 +792,6 @@ def build_graph(
         output_path = str(config.get("outputPath") or f"transforms.{node_id}")
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "transform", result_path=output_path)
-            if pinned is not None:
-                return pinned
             value = state_path_value(state, input_path)
             transformed = {
                 "node_id": node_id,
@@ -1408,9 +816,6 @@ def build_graph(
         max_rows = int(config.get("maxRows") or 50)
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "database", result_path=result_path)
-            if pinned is not None:
-                return pinned
             if not query.strip():
                 result_payload = {
                     "ok": False,
@@ -1457,9 +862,6 @@ def build_graph(
         result_path = str(config.get("resultPath") or f"database.{node_id}")
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "database", result_path=result_path)
-            if pinned is not None:
-                return pinned
             data_value = jsonable(state_path_value(state, data_path))
             params = normalized_params(state_path_value(state, params_path), state)
             try:
@@ -1523,9 +925,6 @@ def build_graph(
         max_chars = int(config.get("maxChars") or 20000)
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "file", result_path=content_path)
-            if pinned is not None:
-                return pinned
             try:
                 result_payload = read_asset_text(source_path, max_chars)
             except Exception as exc:
@@ -1548,9 +947,6 @@ def build_graph(
         max_chars = int(config.get("maxChars") or 200000)
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "rag", result_path=context_path)
-            if pinned is not None:
-                return pinned
             query = str(state_path_value(state, query_path) or "")
             try:
                 root = safe_asset_path(collection_path)
@@ -1620,9 +1016,6 @@ def build_graph(
             return "pending"
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "approval", result_path=result_path)
-            if pinned is not None:
-                return pinned
             raw_value = state_path_value(state, decision_path)
             decision = normalize_decision(raw_value)
             result_payload = {
@@ -1663,9 +1056,6 @@ def build_graph(
             return max(0.1, min(1.0, len(words) / 30))
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "score", result_path=result_path)
-            if pinned is not None:
-                return pinned
             value = state_path_value(state, input_path)
             score = score_value(value)
             result_payload = {
@@ -1686,9 +1076,6 @@ def build_graph(
         result_path = str(config.get("resultPath") or f"analytics.{node_id}")
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "analytics", result_path=result_path)
-            if pinned is not None:
-                return pinned
             payload = jsonable(state_path_value(state, payload_path)) if payload_path else {
                 "session_id": state.get("session_id"),
                 "turn": state.get("turn"),
@@ -1733,9 +1120,6 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "finish")
-            if pinned is not None:
-                return pinned
             return mark_node(state, node_id, {
                 "status": "completed",
                 "phase": "closing",
@@ -1749,9 +1133,6 @@ def build_graph(
         node_id = config["id"]
 
         def run(state: ReferenceState) -> ReferenceState:
-            pinned = pinned_node_update(state, node_id, "state")
-            if pinned is not None:
-                return pinned
             return mark_node(state, node_id, {})
 
         return run

@@ -28,6 +28,8 @@ O fluxo de uso do produto deve ter quatro etapas explícitas:
 3. Artefato LangGraph/LangSmith opcional:
    - manter compatibilidade com LangGraph Platform, incluindo `langgraph.json`, módulo Python exportando o grafo e `.env.example` com variáveis LangSmith;
    - permitir uso de `langgraph dev` e do Studio web oficial quando o usuário quiser;
+   - gerar handoff governado `.aflangsmithhandoff.json` com checklist, comandos, status de sandbox/aprovação e nomes de env sem valores;
+   - registrar evidência local de deploy/verificação externa em `.aflangsmithdeployments.json`, com ator/papel, URLs sanitizadas, deploy opcional por endpoint governado e sync central opcional com token somente no header;
    - não depender de LangSmith Cloud para o fluxo principal.
 
 4. Runtime de API embarcada:
@@ -49,7 +51,7 @@ A direção de produto passa a ser:
 - funcionar 100% localmente sem conta LangSmith;
 - não depender de taxas de plataforma cloud;
 - manter uso opcional de provedores pagos de modelo, quando configurados pelo usuário;
-- suportar mock e modelos locais para custo zero de inferência;
+- suportar mock e modelos locais para custo zero de inferência; a primeira camada implementada usa o adapter `ollama` local/OpenAI-compatible em `http://localhost:11434/v1`, com `LLM_MODEL`, chave dummy apenas para compatibilidade do SDK, presets locais por perfil de hardware, verificação guiada de servidor/modelos instalados pelo Builder, `docker-compose.yml` gerado com serviço `ollama`, volume `ollama_models`, profile explícito `model-setup` para baixar os modelos usados quando o runtime ou bundle usa adapter local, ação visual `Modelos` no painel da API Docker para executar esse profile sem terminal, detecção conservadora de GPU local e seletor visual `CPU/GPU` para subir o runtime com ou sem `docker-compose.gpu.yml`;
 - oferecer tema claro e escuro;
 - unificar Builder Visual, Studio Local, aprovação e Docker final na mesma interface.
 
@@ -135,7 +137,7 @@ O baseline implementa OpenAI/OpenAI-compatible primeiro, com mock determinístic
 
 ## Safety
 
-O MVP terá Safety Gate simples, determinístico e configurável para entrada e saída:
+O MVP começou com Safety Gate simples, determinístico e configurável para entrada e saída:
 
 ```text
 input_safety_check
@@ -143,11 +145,11 @@ llm_step
 output_safety_check
 ```
 
-O Safety Gate deve poder bloquear entrada, impedir chamada ao LLM, devolver resposta segura e registrar evento. No futuro, o sistema precisa aceitar um Safety Harness completo, mesmo que isso exija uma camada de implementação mais robusta ou um produto/componente separado.
+O Safety Gate deve poder bloquear entrada, impedir chamada ao LLM, devolver resposta segura e registrar evento. A primeira camada de Safety Harness local já existe no `safety_gate`: modo padrão/custom, threshold de severidade, resposta segura padrão e regras versionáveis `contains`/`regex` com ação `warn`, `safe_redirect` ou `block`. O Builder também possui Safety Harness no inspector do nó, com avaliação local, provider HTTP externo opcional, histórico backend por workspace e revisão humana simples. O runtime final também pode chamar provider HTTP externo por env vars `SAFETY_PROVIDER_*`, preservando fallback local, fail-open por padrão e fail-closed opcional. A camada avançada ainda pode exigir dashboards dedicados, governança compartilhável e auditoria contínua.
 
 ## Autenticação
 
-O baseline terá autenticação simples por API key em header, por exemplo `X-Agent-API-Key`, desativável em dev/test. OAuth, OIDC, permissões, multi-tenant e rotação de chaves ficam para evolução futura.
+O baseline possui autenticação por API key em header `X-Agent-API-Key`, desativável em dev/test. A chave legada `AGENT_API_KEY` continua funcionando como acesso total, `AGENT_API_KEYS` permite múltiplas chaves locais com escopos por operação (`metadata:read`, `auth:read`, `sessions:read`, `sessions:write`, `jobs:read`, `jobs:write`, `sessions:*` ou `*`) e `AGENT_API_KEYS_PATH` permite apontar para um JSON local de chaves recarregado nas autenticações, viabilizando rotação local sem rebuild ou restart. Objetos de chave aceitam `expires_at` ou `expiresAt` para expiração local em ISO 8601 ou timestamp Unix. `AGENT_API_REVOKED_KEY_IDS` e `AGENT_API_REVOKED_KEY_IDS_PATH` permitem revogação local persistente por `key_id` simples ou por origem, como `AGENT_API_KEYS_PATH:reader`. Em bundles multiagente, os mesmos escopos podem ser limitados ao agente atual com `agents:<agent_id>:metadata:read`, `agents:<agent_id>:sessions:*`, `agents:<agent_id>:jobs:*`, `agents:<agent_id>:auth:read` ou `agents:<agent_id>:*`. `GET /auth/keys` expõe apenas `agent_id`, `key_id`, origem, scopes, metadados de expiração e status de revogação. O SSE de eventos e os WebSockets de eventos/turno também aceitam query `api_key` para clientes de navegador que não conseguem enviar header customizado nesses transportes. O runtime também possui primeira camada local de rate limit opcional por credencial/escopo e auditoria via `GET /auth/audit`, com janela em memória e persistência local opcional em JSONL por `AUTH_AUDIT_PATH`, sem registrar valores brutos de chave. O Studio Local consegue operar runtimes autenticados usando `STUDIO_RUNTIME_API_KEY` ou `AGENT_API_KEY` de `Secrets locais`, aplica a query nos streams quando necessário, mostra o inventário seguro de chaves em painel próprio, exporta `.afauthkeys.json` governado sem valores brutos/caminhos locais e mostra a auditoria visualmente. OAuth, OIDC, multi-tenant, rotação governada de chaves e auditoria centralizada ficam para evolução futura.
 
 ## Baseline de Geração
 
@@ -351,6 +353,8 @@ Entregáveis:
 - botão gerar código base;
 - botão gerar pacote de sandbox LangSmith/LangGraph;
 - botão para aprovar a versão testada no sandbox;
+- botão para gerar handoff opcional LangSmith/LangGraph Cloud sem persistir token;
+- formulário compacto para registrar evidência de deploy/verificação externa sem token;
 - botão para gerar a API Docker a partir da versão aprovada;
 - preview de arquivos;
 - download ou escrita em workspace;
@@ -368,7 +372,7 @@ Testar agentes gerados rapidamente em dois níveis: sandbox local integrado ao B
 Entregáveis:
 
 - iniciar o artefato LangGraph em sandbox local;
-- link ou instrução clara para abrir traces/runs no LangSmith apenas como integração opcional;
+- handoff local governado com instrução clara para abrir traces/runs no LangSmith apenas como integração opcional, registro/sync central opcional de evidências externas sem token no corpo e sem chamada cloud automática;
 - iniciar runtime gerado localmente;
 - link para Swagger;
 - formulário para criar sessão, start, turn e finish;
@@ -409,8 +413,8 @@ Adicionar nós e capacidades além do baseline:
 - structured output avançado;
 - scoring;
 - analytics;
-- jobs pós-finalização;
-- bundles multiagente.
+- jobs pós-finalização iniciais;
+- bundles multiagente com smoke por agente, smoke agregado e contrato de storage compartilhado.
 
 ### Fase 7: Studio Local Completo
 
@@ -432,7 +436,7 @@ Entregáveis:
 - traces persistidos localmente;
 - aprovação por hash dentro do Studio;
 - geração e smoke test da API Docker final pela UI;
-- suporte posterior a multiagente, streaming, worker, safety e auth avançada.
+- suporte posterior a multiagente avançado, streaming avançado, worker avançado, safety e autenticação corporativa.
 
 Critério de sucesso:
 
@@ -440,32 +444,28 @@ Critério de sucesso:
 
 ## Melhorias Futuras Já Identificadas
 
-Autenticação avançada:
+Autenticação futura além da camada local:
 
-- múltiplas chaves;
-- rotação;
-- escopos;
+- rotação governada além dos arquivos locais `AGENT_API_KEYS_PATH` e `AGENT_API_REVOKED_KEY_IDS_PATH`;
 - JWT;
 - OAuth/OIDC;
-- rate limit;
+- rate limit distribuído/persistente;
 - multi-tenant.
 
 Streaming:
 
-- SSE;
-- WebSocket;
-- resposta incremental;
+- streaming de eventos por SSE e WebSocket já existe;
+- resposta incremental por SSE/WebSocket em `/turn/stream` já existe, com callback nativo de tokens no grafo quando disponível, fallback por resposta final e consumo visual básico no Studio;
 - progresso ao vivo do grafo.
 
 Jobs pós-finalização:
 
-- fila persistente;
-- worker separado;
-- agendamento;
-- reprocessamento;
-- métricas.
+- fila persistente inicial já existe em `agent_jobs`;
+- worker CLI opcional, serviço `worker` no Docker Compose, retry, reprocessamento manual, schedule manual por job, recorrência por intervalo, cron básico ou evento (`trigger_type="event"` + `POST /job-schedules/trigger-event`), endpoints nativos de lote, limpeza governada por `POST /jobs/cleanup` com prévia, ações em lote via Studio e métricas agregadas/operacionais de sucesso, duração e atividade recente já existem; faltam escala e políticas operacionais avançadas por ambiente;
+- agendamento avançado;
+- métricas históricas com janelas configuráveis, percentis, throughput e drill-down por tipo/agente.
 
-Safety Harness completo:
+Safety Harness avançado:
 
 - scanners avançados;
 - privacidade;
@@ -473,6 +473,7 @@ Safety Harness completo:
 - alarmes;
 - política por agente ou organização;
 - possível extração como produto/componente próprio.
+- primeira camada local configurável por nó já existe, incluindo provider externo opcional no Builder e no runtime final.
 
 ## Critérios de Sucesso do Produto
 

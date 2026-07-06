@@ -1,13 +1,16 @@
 # Melhoria Futura: Streaming
 
-O baseline não precisa suportar streaming de resposta. Os agentes atuais usam chamadas request/response por turno, em que o consumidor envia uma entrada e recebe a resposta completa do agente.
+O baseline agora possui streaming de eventos do runtime por SSE em `GET /sessions/{session_id}/events/stream` e por WebSocket em `/sessions/{session_id}/events/ws`. O runtime manual e o runtime gerado também emitem spans nativos durante a chamada como eventos `span_started` e `span_completed`, persistidos em `/events` e transmitidos pelos mesmos streams, com `span_id`, `node_id`, `node_type`, `duration_ms`, `source=runtime_native_span` e `payload.span` compatível com a UI. O Studio Local já tem painel para escolher WebSocket ou SSE, conectar/desconectar o stream, mesclar eventos novos na timeline e acompanhar `Execução ao vivo` com progresso por nó, último evento, spans observados, duração, tokens/custo e uso por provider/modelo derivados da timeline atual. Também já existe a primeira camada de `Telemetria histórica`, agregada dos runs locais persistidos por flow, com janela configurável, provider/modelo, tokens, custo, erros, último run observado, alertas locais por limite de tokens/custo por provider, inbox local/exportável de alertas com retenção/reconhecimento, roteamento lógico por `AGENT_FLOW_PROVIDER_TELEMETRY_ALERT_ROUTES`, escalonamento local por `AGENT_FLOW_PROVIDER_TELEMETRY_ALERT_ESCALATION_POLICY`, política de entrega por `AGENT_FLOW_PROVIDER_TELEMETRY_ALERT_DELIVERY_POLICY`, prontidão exportável `.afproviderdelivery.json` e dispatch externo governado por rota via `AGENT_FLOW_PROVIDER_TELEMETRY_ALERT_ROUTE_SINKS`, sem expor URLs de webhook ou secrets em status/export.
 
-Streaming pode ser útil futuramente para:
+O runtime manual e o runtime gerado também expõem streaming do turno em `POST /sessions/{session_id}/turn/stream` por SSE e `/sessions/{session_id}/turn/stream/ws` por WebSocket. O SSE mantém o mesmo payload e a mesma idempotência de `POST /sessions/{session_id}/turn`; o WebSocket usa `user_message` e `idempotency_key` na query. Ambos emitem `turn_started`, eventos `token`, `turn_completed` e `stream_closed`, usando callback incremental do grafo/LLM quando disponível e fallback por resposta final quando o provider não entrega chunks. O payload de token inclui `source` para diferenciar `llm_callback` de `assistant_message`. O Studio Local já consome esse stream no envio de turno, permite escolher SSE ou WebSocket e mostra a resposta incremental em um painel próprio com contador de tokens, origem dos chunks, texto finalizado e estado de conclusão/erro.
 
-- interfaces de chat em tempo real;
+As próximas camadas de streaming podem ser úteis para:
+
+- interfaces de chat em tempo real com tokens parciais;
 - respostas muito longas;
-- progresso ao vivo de execução do grafo;
 - logs operacionais durante uma chamada;
-- consumo via SSE ou WebSocket.
+- dashboards históricos adicionais e políticas ainda mais avançadas de entrega/escalonamento de alertas de uso/custo por provider além do dashboard histórico dedicado, escalonamento local, lote/cooldown local, prontidão exportável e dispatch governado atual.
 
-No MVP, o contrato deve priorizar `POST /sessions/{session_id}/turn` para resposta completa e `GET /sessions/{session_id}/events` para auditoria e depuração.
+O contrato atual preserva `POST /sessions/{session_id}/turn` para resposta completa, adiciona `POST /sessions/{session_id}/turn/stream` para consumo SSE por token e `/sessions/{session_id}/turn/stream/ws` para consumo WebSocket por token, mantém `GET /sessions/{session_id}/events` para auditoria e depuração paginável por `from_seq`, `GET /sessions/{session_id}/events/stream` para acompanhar eventos novos por SSE e `/sessions/{session_id}/events/ws` para acompanhar os mesmos eventos por WebSocket.
+
+Ainda falta evoluir a telemetria para dashboards adicionais e políticas ainda mais avançadas de entrega/escalonamento; a emissão nativa de spans durante a chamada, a primeira camada visual de progresso por nó, uso/custo agregado, histórico local por provider/modelo com janela e alertas por orçamento, dashboard histórico dedicado por provider com snapshots/export, retenção local, reconhecimento, export, roteamento lógico, escalonamento local, lote/cooldown local, prontidão exportável e dispatch externo governado dos alertas já existem no Studio.

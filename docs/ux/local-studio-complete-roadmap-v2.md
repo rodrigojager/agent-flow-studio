@@ -36,7 +36,7 @@ Regra de sucesso:
 
 4. **Linguagem dos comportamentos customizados**  
    Python, JavaScript e TypeScript são nativos (arquivo/inline).
-   Outras linguagens entram como contrato suportado e podem ser executadas por HTTP, MCP stdio ou sidecar local até haver runtime adapter dedicado.
+Outras linguagens entram como contrato suportado e podem ser executadas por HTTP, MCP stdio, sidecar local ou runtime adapter por endpoint; `runtime_adapter` também já pode ser executado pelo runner VM local quando `sandboxIsolation="vm"` e o adapter declara `codeInline` ou `codePath`. Python já possui workspace temporário, processo dedicado, container dedicado e ponte VM local, e JavaScript/TypeScript já possuem workspace temporário, container dedicado via runner Node e ponte VM local. O Studio já possui presets iniciais de imagem gerenciada por executor, presets gerenciados de VM para Python/Node, checker local de runner/imagem/manifestos VM, validação de protocolo/engine/imageId/tamanho/SHA-256/capabilities hardened, scaffold QEMU com cloud-init/build/boot/transportador SSH, scaffold microVM direct-kernel com preparo rootfs/kernel ou firmware/seed, política hardened e preflights Firecracker/Cloud Hypervisor, smoke real Docker/QEMU com cloud image Debian, gate microVM real opt-in para Firecracker/Cloud Hypervisor com dry-run, preflight real e boot launch smoke quando binários/artefatos são fornecidos, contrato de homologação `.afvmhomologation.json` com estados `blocked`, `preflight_verified` e `homologated`, receita oficial local `vm-image:microvm-recipe`, registro consumível `vm-image:microvm-register`, empacotamento `.afvmimagebundle` com manifestos sanitizados, imagem, artefatos obrigatórios de boot e manifesto de política copiados/verificados, `runner-kit` portátil auto-verificável, runner de referência opt-in para contrato Python local, runner QEMU de preflight com plano Q35/microVM, runner Firecracker/Cloud Hypervisor de preflight direct-kernel com enforcement de política hardened, transporte externo explícito para guest, fail-closed quando o runner não prova `providesVmIsolation=true`, guest agent Python embutível na imagem, perfil hardened de orquestração de container e configuração de runner VM; artefatos binários microVM prontos/oficiais e políticas mais fortes ficam para ambientes que exigirem sandbox próprio.
 
 5. **Aprovação com rastreabilidade**  
    Hash cobre:
@@ -98,6 +98,8 @@ Escopo:
 - Pin de cenário e reexecução repetível.
 - “Último cenário” + “cenário favorito” com quick-run.
 
+Status 2026-07-02: implementado no Studio Local com cenário fixado, favorito exclusivo, repetição do último uso e botões dedicados de execução rápida.
+
 Critério de aceite:
 - Reproduzir uma falha de forma determinística com 1 clique.
 
@@ -108,6 +110,8 @@ Escopo:
   - seleção no timeline destacando nó e mostrando node-io completo.
 - Empty states com CTA única por painel.
 - Status global de sessão/runs no topo do painel.
+
+Status 2026-07-02: primeira camada implementada com faixa `Status global do Studio`, mostrando sessão, quantidade de runs, eventos visíveis/totais, nó em foco, falha mais recente e CTA contextual (`Iniciar Studio`, `Criar sessão`, `Enviar turno`, `Abrir nó` ou `Abrir falha`). A execução ao vivo também preserva o estado do grafo por agente mesmo quando a timeline está filtrada por nó; ao selecionar um evento na timeline, o nó correspondente fica destacado e exibe evento/phase para orientar o drill-down de Node IO. A timeline ganhou empty state com CTA única contextual para limpar filtros, iniciar o Studio, criar sessão ou enviar turno.
 
 Critério de aceite:
 - Usuário sem experiência ainda consegue seguir a execução até o nó com falha.
@@ -120,6 +124,8 @@ Escopo:
   - bloqueio de geração quando inválido;
   - evidência de run base usada na aprovação.
 - “Regenerar artefato sem aprovação” fica explicitamente bloqueado.
+
+Status 2026-07-02: primeira camada implementada no Studio Local com gate de aprovação visível no fluxo operacional, mostrando status, versão, hash, cobertura `flow/assets`, artefato, evidência de run/sessão/eventos e ações `Preparar sandbox`, `Registrar aprovação` e `Gerar runtime final`; o CTA final fica bloqueado quando não há aprovação válida. A ação de aprovação a partir do Studio registra no approval JSON uma evidência resumida sem payload bruto/secrets, e o runtime final aprovado recebe essa evidência junto do comprovante.
 
 Critério de aceite:
 - Não é possível gerar runtime final a partir de estado não aprovado.
