@@ -1,0 +1,10 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "teste_api_simples": "./app/langgraph_app.py:graph"
+  },
+  "env": ".env",
+  "python_version": "3.12"
+}

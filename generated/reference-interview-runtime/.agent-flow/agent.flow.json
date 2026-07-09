@@ -109,21 +109,6 @@
   ],
   "edges": [
     {
-      "from": "start",
-      "to": "start_node",
-      "condition": "action == 'start'"
-    },
-    {
-      "from": "start",
-      "to": "input_safety_check",
-      "condition": "action == 'turn'"
-    },
-    {
-      "from": "start",
-      "to": "finish_node",
-      "condition": "action == 'finish'"
-    },
-    {
       "from": "input_safety_check",
       "to": "llm_step",
       "condition": "safety.decision == 'allow'"

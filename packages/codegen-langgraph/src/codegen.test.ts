@@ -413,6 +413,42 @@ def test_switch_and_human_input_events(tmp_path):
   });
 });
 
+test("generated runtime routes OpenCode Go and Zen models through documented endpoints", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-opencode-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente OpenCode");
+  const flow = {
+    ...simpleFlow("opencode-agent", "Agente OpenCode"),
+    llm: {
+      adapter: "opencode-zen",
+      model: "gpt-5.5",
+      apiKeyEnv: "OPENCODE_ZEN_API_KEY",
+      baseUrlEnv: "OPENCODE_ZEN_BASE_URL",
+      mockEnv: "MOCK_LLM",
+    },
+    nodes: simpleFlow("opencode-agent", "Agente OpenCode").nodes.map((node) =>
+      node.id === "llm_step" ? { ...node, llm: { adapter: "opencode-go", model: "kimi-k2.7-code" } } : node,
+    ),
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  const llmClient = await readFile(path.join(outDir, "app", "llm.py"), "utf-8");
+  const envExample = await readFile(path.join(outDir, ".env.example"), "utf-8");
+  assert.match(envExample, /OPENCODE_ZEN_BASE_URL=https:\/\/opencode\.ai\/zen\/v1/);
+  assert.ok(llmClient.includes('\\"opencode-go\\": \\"https://opencode.ai/zen/go/v1\\"'));
+  assert.match(llmClient, /def _llm_endpoint_protocol/);
+  assert.match(llmClient, /return "chat_completions"/);
+  assert.match(llmClient, /return "anthropic_messages"/);
+  assert.match(llmClient, /return "google_model"/);
+  assert.match(llmClient, /client\.responses\.create/);
+  assert.match(llmClient, /client\.chat\.completions\.create/);
+  assert.match(llmClient, /_join_url\(base_url, "messages"\)/);
+  assert.match(llmClient, /models\/\{model\}:generateContent/);
+});
+
 test("generated runtime applies configurable safety harness rules", async (t) => {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-safety-harness-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
@@ -2791,6 +2827,20 @@ test("generated runtime executes database query and save nodes", async (t) => {
         query: "SELECT node_id, payload_json FROM agent_node_records WHERE session_id = :session_id ORDER BY created_at DESC",
         resultPath: "database.load_saved_response",
       },
+      {
+        id: "unsafe_read_guard",
+        type: "database_query",
+        sqlMode: "read",
+        query: "DELETE FROM agent_node_records WHERE session_id = :session_id",
+        resultPath: "database.unsafe_read_guard",
+      },
+      {
+        id: "load_after_guard",
+        type: "database_query",
+        sqlMode: "read",
+        query: "SELECT count(*) AS total FROM agent_node_records WHERE session_id = :session_id",
+        resultPath: "database.load_after_guard",
+      },
       { id: "finish_node", type: "end" },
     ],
     edges: [
@@ -2802,7 +2852,9 @@ test("generated runtime executes database query and save nodes", async (t) => {
       { from: "input_safety_check", to: "end", condition: "safety.blocked == true" },
       { from: "llm_step", to: "save_response" },
       { from: "save_response", to: "load_saved_response" },
-      { from: "load_saved_response", to: "end" },
+      { from: "load_saved_response", to: "unsafe_read_guard" },
+      { from: "unsafe_read_guard", to: "load_after_guard" },
+      { from: "load_after_guard", to: "end" },
       { from: "finish_node", to: "end" },
     ],
   };
@@ -2851,13 +2903,100 @@ def test_database_query_and_save_events(tmp_path):
 
     events = client.get(_path(f"/{session_id}/events")).json()
     by_type = {item["event_type"]: item for item in events}
+    database_events = {item["node"]: item for item in events if item["event_type"] == "database_query_completed"}
     saved = by_type["database_save_completed"]["payload"]["database"]
-    loaded = by_type["database_query_completed"]["payload"]["database"]
+    loaded = database_events["load_saved_response"]["payload"]["database"]
+    guarded = database_events["unsafe_read_guard"]["payload"]["database"]
+    after_guard = database_events["load_after_guard"]["payload"]["database"]
     assert saved["ok"] is True
     assert saved["table"] == "agent_node_records"
     assert loaded["ok"] is True
     assert loaded["row_count"] == 1
     assert loaded["rows"][0]["node_id"] == "save_response"
+    assert guarded["ok"] is False
+    assert guarded["reason"] == "sql_mode_mismatch"
+    assert guarded["expected"] == "read"
+    assert guarded["actual"] == "mutation"
+    assert after_guard["ok"] is True
+    assert after_guard["rows"][0]["total"] == 1
+`,
+    "utf-8",
+  );
+
+  await execFileAsync("python", ["-m", "pytest", "-q", outDir], {
+    cwd: outDir,
+    timeout: 120000,
+  });
+});
+
+test("generated runtime schedules and runs flow triggers from worker", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-codegen-flow-trigger-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const flowRoot = path.join(workspaceRoot, "flow");
+  const outDir = path.join(workspaceRoot, "runtime");
+  await writeFlowAssets(flowRoot, "Agente com worker");
+
+  const flow: AgentFlow = {
+    ...simpleFlow("worker-trigger-agent", "Agente Worker"),
+    triggers: [
+      {
+        id: "poll_catalog",
+        label: "Poll catalog",
+        kind: "interval",
+        enabled: true,
+        intervalSeconds: 60,
+        userMessage: "Execute a rotina periódica.",
+        input: { source: "timer" },
+        maxTurns: 2,
+        maxAttempts: 2,
+      },
+    ],
+  };
+
+  await generateLangGraphRuntime({ flow, flowRoot, outDir });
+  const generatedFlow = await readFile(path.join(outDir, "app", "generated_flow.py"), "utf-8");
+  assert.match(generatedFlow, /FLOW_TRIGGERS/);
+  await writeFile(
+    path.join(outDir, "tests", "test_flow_trigger_worker.py"),
+    `from tests.conftest import set_test_env
+
+
+def test_worker_bootstraps_and_runs_flow_trigger_without_http(tmp_path):
+    set_test_env(str(tmp_path / "flow-trigger.db"))
+    from app import repo
+    from app.db import engine, session_scope
+    from app.models import Base
+    from app.worker import build_worker_service, process_pending_jobs
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    service = build_worker_service()
+    result = process_pending_jobs(service, limit=5, worker_id="test-worker")
+    assert result["pending_seen"] == 1
+    assert result["processed"] == 1
+    assert result["failed"] == 0
+
+    with session_scope() as db:
+        schedules = repo.list_job_schedules(db, limit=10)
+        schedule = next(item for item in schedules if item.kind == "flow_trigger")
+        jobs = repo.list_jobs(db, status="succeeded", limit=20)
+        job = next(item for item in jobs if item.kind == "flow_trigger")
+        schedule_payload = dict(schedule.payload_json or {})
+        schedule_trigger_type = schedule.trigger_type
+        job_result = dict(job.result_json or {})
+        control_event_types = [item.event_type for item in repo.get_events(db, schedule.session_id)]
+        execution_session_id = job_result["execution_session_id"]
+        execution_roles = [item.role for item in repo.get_transcript(db, execution_session_id)]
+
+    assert schedule_payload["flow_trigger"]["id"] == "poll_catalog"
+    assert schedule_trigger_type == "interval"
+    assert job_result["trigger_id"] == "poll_catalog"
+    assert job_result["turn_ran"] is True
+    assert "flow_trigger_completed" in control_event_types
+    assert execution_roles.count("user") == 1
+    assert execution_roles.count("assistant") >= 2
 `,
     "utf-8",
   );

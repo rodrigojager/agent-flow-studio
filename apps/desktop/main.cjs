@@ -58,6 +58,23 @@ function createWindow() {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.focus();
+  });
+
+  mainWindow.on("focus", () => {
+    mainWindow.webContents.focus();
+  });
+
+  mainWindow.on("restore", () => {
+    mainWindow.focus();
+    mainWindow.webContents.focus();
+  });
+
+  mainWindow.webContents.on("dom-ready", () => {
+    if (mainWindow.isFocused()) {
+      mainWindow.webContents.focus();
+    }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

@@ -79,6 +79,7 @@ export interface FlowNode {
   inputPath?: string;
   outputPath?: string;
   query?: string;
+  sqlMode?: SqlMode;
   table?: string;
   dataPath?: string;
   paramsPath?: string;
@@ -199,6 +200,25 @@ export interface FlowEdge {
   condition?: string;
 }
 
+export type SqlMode = "auto" | "read" | "mutation" | "schema" | "raw";
+
+export interface FlowTrigger {
+  id: string;
+  label?: string;
+  description?: string;
+  kind: "interval" | "cron" | "event" | "manual";
+  enabled?: boolean;
+  intervalSeconds?: number;
+  cronExpression?: string;
+  eventType?: string;
+  userMessage?: string;
+  input?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  maxTurns?: number;
+  maxAttempts?: number;
+  autoFinish?: boolean;
+}
+
 export interface AgentFlow {
   id: string;
   name: string;
@@ -228,6 +248,7 @@ export interface AgentFlow {
   schemas: SchemaRef[];
   nodes: FlowNode[];
   edges: FlowEdge[];
+  triggers?: FlowTrigger[];
 }
 
 export type LlmAdapterStatus = "supported" | "planned";
@@ -260,6 +281,28 @@ export interface LlmAdapterCatalogResult {
   adapters: LlmAdapterCatalogItem[];
 }
 
+export interface LlmModelCatalogItem {
+  id: string;
+  label: string;
+  description?: string;
+  contextLength?: number;
+  source: "official" | "local" | "fallback";
+}
+
+export interface LlmModelCatalogResult {
+  format: "agent-flow-builder.llm-model-catalog.v1";
+  adapter: string;
+  provider: "codex-cli" | "ollama" | "openai-compatible" | "openrouter" | "unsupported";
+  status: "ok" | "fallback" | "unsupported_adapter" | "blocked" | "unreachable" | "error";
+  ok: boolean;
+  checkedAt: string;
+  baseUrl: string | null;
+  modelCount: number;
+  models: LlmModelCatalogItem[];
+  message: string;
+  nextActions: string[];
+}
+
 export interface LocalLlmProviderStatus {
   format: "agent-flow-builder.local-llm-provider-status.v1";
   adapter: string;
@@ -289,6 +332,13 @@ export interface CreatedFlowWorkspace {
   flow: AgentFlow;
   prompts: FlowAssetContent[];
   schemas: FlowAssetContent[];
+}
+
+export interface FlowDeleteResult {
+  status: "ok";
+  flowId: string;
+  path: string;
+  root: string;
 }
 
 export type FlowDiagnosticSeverity = "error" | "warning" | "info";

@@ -1,0 +1,716 @@
+TUTORIAL - TESTAR UM AGENTE SIMPLES E GERAR UMA API DOCKER DE TESTE
+====================================================================
+
+Objetivo
+--------
+
+Criar um agente simples no Agent Flow Studio, testar o fluxo basico e gerar
+uma API Docker pronta para teste local/deploy de homologacao.
+
+Este tutorial usa o caminho visual principal:
+
+Validar -> LangGraph -> Aprovar -> API Docker -> Preparar .env -> Build -> Up CPU -> Smoke
+
+Observacao importante:
+O botao "+" ao lado do seletor de Flow cria um flow em branco. Para este
+teste simples, use um template do Catalogo, porque ele ja vem com prompt,
+schema, nos e conexoes suficientes para gerar uma API funcional.
+
+
+1. ABRIR O BUILDER
+------------------
+
+Se voce ja esta com a interface aberta, pule para a etapa 2.
+
+Se precisar iniciar manualmente, abra dois terminais na pasta do projeto:
+
+C:\Users\Rodrigo\Downloads\AGENTES IA-20260629T172914Z-3-001\AGENTES IA
+
+Terminal 1:
+
+npm run dev:builder-api
+
+Aguarde a API local subir. Normalmente ela fica em:
+
+http://127.0.0.1:3333
+
+Terminal 2:
+
+npm run dev:builder-ui
+
+Abra no navegador:
+
+http://127.0.0.1:5173
+
+Se voce estiver usando a aplicacao desktop, abra a tela do Agent Flow Studio
+normalmente e siga a partir da etapa 2.
+
+
+2. CRIAR UM FLOW SIMPLES A PARTIR DO CATALOGO
+---------------------------------------------
+
+1. No topo da tela, localize o seletor de Flow.
+
+2. Nao clique no botao "+" para este tutorial.
+   O "+" cria um flow vazio. Ele serve para montar tudo do zero.
+
+3. No painel da direita, clique na aba:
+
+Catalogo
+
+4. Na caixa de busca do Catalogo, digite:
+
+conversa
+
+5. Procure um template com nome parecido com:
+
+Agente de conversa guiada
+
+6. No card desse template, clique no botao:
+
+Criar flow
+
+7. Vai abrir um dialogo com o titulo "Criar flow".
+
+8. No input "ID do novo flow", apague o que estiver escrito e digite:
+
+teste-api-simples
+
+9. Clique no botao:
+
+Criar flow
+
+10. Aguarde o Studio criar o flow.
+
+11. No seletor de Flow do topo, confirme que o flow selecionado agora e:
+
+teste-api-simples
+
+ou que o nome visivel seja algo como:
+
+Teste Api Simples
+
+
+3. EDITAR O PROMPT DO AGENTE
+----------------------------
+
+1. No painel da direita, clique na aba:
+
+Arquivos
+
+2. Procure a secao de Prompt.
+
+3. No seletor/lista de prompts, selecione:
+
+system
+
+4. No editor de texto do prompt, substitua o conteudo pelo texto abaixo.
+   Copie e cole exatamente:
+
+# Atendimento de Teste
+
+Voce e um agente de atendimento inicial para teste de API.
+
+Responda sempre em portugues brasileiro, de forma curta, clara e educada.
+
+Quando o usuario pedir ajuda, pergunte apenas uma informacao por vez.
+
+Se o usuario perguntar sobre status, explique que este e um ambiente de teste.
+
+Nunca diga que executou uma acao externa real. Se precisar simular uma acao,
+diga claramente que e uma simulacao de teste.
+
+5. Clique no botao:
+
+Salvar prompt
+
+6. No topo da tela, clique no botao com icone de disquete:
+
+Salvar
+
+Se o botao estiver desabilitado ou mostrando "Salvo", pode continuar.
+
+
+4. VALIDAR O FLOW
+-----------------
+
+1. No topo da tela, clique no botao:
+
+Validar
+
+2. Aguarde a validacao terminar.
+
+3. Se aparecer "Nenhum diagnostico" ou status equivalente de sucesso,
+   continue para a etapa 5.
+
+4. Se aparecer erro:
+   - clique no diagnostico;
+   - corrija o campo indicado;
+   - clique em "Salvar";
+   - clique em "Validar" novamente.
+
+5. Se aparecerem estes dois erros:
+
+   error - missing_start_edge
+   error - missing_end_edge
+
+   e o resumo mostrar:
+
+   NOS: 0
+   ARESTAS: 0
+
+   isso significa que o flow foi criado vazio. Ele tem prompt e schema, mas
+   ainda nao tem grafo executavel.
+
+   Para corrigir pela UI:
+
+   1. Va para o canvas.
+   2. Na Palette, clique no item:
+
+      LLM
+
+   3. Selecione o no LLM criado.
+   4. No inspector do no, confirme:
+
+      Prompt: system
+      Provider/modelo: pode manter o padrao
+
+   5. Crie as conexoes:
+
+      start -> llm_step
+      llm_step -> end
+
+      Se a UI estiver dificultando criar as conexoes em um flow totalmente
+      vazio, use o Catalogo para criar o flow a partir de template ou edite o
+      JSON conforme o exemplo abaixo.
+
+   Exemplo minimo valido em agent.flow.json:
+
+   "nodes": [
+     {
+       "id": "llm_step",
+       "type": "llm_prompt",
+       "description": "Responde ao turno usando o prompt system.",
+       "promptId": "system",
+       "llm": {
+         "adapter": "openai",
+         "model": "gpt-4.1-mini"
+       },
+       "position": {
+         "x": 460,
+         "y": 260
+       }
+     }
+   ],
+   "edges": [
+     {
+       "from": "start",
+       "to": "llm_step"
+     },
+     {
+       "from": "llm_step",
+       "to": "end"
+     }
+   ]
+
+   Depois disso:
+
+   1. Recarregue/atualize o flow na UI.
+   2. Clique em "Salvar", se houver alteracao pendente.
+   3. Clique em "Validar" novamente.
+
+Nao continue para Docker enquanto houver erro de validacao.
+
+
+5. TESTAR O FLUXO NO STUDIO LOCAL
+---------------------------------
+
+Esta etapa e recomendada antes de aprovar a versao.
+
+1. No painel da direita, clique na aba:
+
+Studio
+
+2. Procure a area de dataset/cenario/sessao local.
+
+3. Na secao "Sessao", clique no botao:
+
+Criar
+
+   Esse botao cria e inicia a sessao. Aguarde o cabecalho da secao "Sessao"
+   mostrar status parecido com:
+
+active
+
+   ou a barra inferior mostrar:
+
+Sessao ... iniciada.
+
+4. Quando houver um campo para mensagem do usuario, escreva:
+
+Ola, preciso de ajuda para testar esta API.
+
+5. Clique no botao:
+
+Enviar turno
+
+   Se aparecer "Sessao precisa ser iniciada antes do primeiro turno", clique
+   em "Criar" novamente na secao "Sessao", aguarde a sessao ficar ativa e
+   depois clique em "Enviar turno" de novo.
+
+6. Enquanto o runtime responde, procure logo abaixo do botao "Enviar turno"
+   uma caixa chamada:
+
+Resposta em streaming
+
+   A resposta parcial/final do agente aparece ali durante a execucao.
+
+7. Depois que o envio termina, role um pouco para baixo na mesma aba Studio
+   ate a secao:
+
+Transcript
+
+   Nessa lista aparecem as mensagens da sessao. Procure uma entrada com:
+
+assistant
+
+   O texto dessa entrada e a resposta final do agente.
+
+8. Tambem da para ver detalhes tecnicos na secao:
+
+Node IO
+
+   Selecione o ultimo evento na Timeline e veja o campo "Output".
+
+9. Confira se o agente responde em portugues e de forma curta.
+
+10. Se a resposta estiver ruim, volte para "Arquivos", edite o prompt,
+   salve e teste de novo.
+
+Se voce nao encontrar a area de teste por causa da janela bugada, tudo bem:
+para este caso simples, continue para a etapa 6. O smoke do container tambem
+vai validar a API gerada.
+
+
+6. GERAR O PACOTE LANGGRAPH
+---------------------------
+
+1. No topo da tela, clique no botao:
+
+LangGraph
+
+2. Aguarde a geracao terminar.
+
+3. Depois da geracao, o Studio deve abrir ou atualizar a aba:
+
+Artefato
+
+4. O diretorio gerado deve ser parecido com:
+
+generated/teste-api-simples-langgraph-sandbox
+
+Este pacote e o sandbox/artefato intermediario usado para aprovacao por hash.
+
+
+7. APROVAR A VERSAO TESTADA
+---------------------------
+
+1. No topo da tela, clique no botao:
+
+Aprovar
+
+2. Aguarde a mensagem de sucesso.
+
+3. Confirme se o botao:
+
+API Docker
+
+ficou habilitado.
+
+Importante:
+Se voce editar o flow, prompt ou schema depois da aprovacao, a aprovacao pode
+ficar desatualizada. Nesse caso, repita:
+
+Salvar -> Validar -> LangGraph -> Aprovar
+
+
+8. GERAR A API DOCKER FINAL
+---------------------------
+
+1. No topo da tela, clique no botao:
+
+API Docker
+
+2. Aguarde a geracao terminar.
+
+3. O Studio deve abrir ou atualizar a aba:
+
+Artefato
+
+4. Na aba Artefato, procure a secao:
+
+API Docker final
+
+5. O diretorio gerado deve ser parecido com:
+
+generated/teste-api-simples-runtime
+
+Esse diretorio e a API FastAPI/Docker final do agente.
+
+
+9. CONFIGURAR PORTAS E .ENV
+---------------------------
+
+1. Na secao "API Docker final", localize o campo:
+
+Runtime URL
+
+2. Use o valor padrao:
+
+http://127.0.0.1:8080
+
+3. Confira os inputs de portas. Use estes valores para o primeiro teste:
+
+API: 8080
+Postgres: 5433
+Redis: 6380
+
+4. Se voce souber que alguma dessas portas esta ocupada, troque antes de subir.
+   Exemplo:
+
+API: 8081
+Postgres: 5434
+Redis: 6381
+
+5. Se voce alterou qualquer porta, clique no botao:
+
+Aplicar portas no compose
+
+6. Clique no botao:
+
+Preparar .env
+
+7. Aguarde a confirmacao.
+
+Por padrao, o .env de teste deve manter:
+
+MOCK_LLM=true
+
+Isso permite testar sem chave real de OpenAI/OpenRouter/opencode.
+
+
+10. BUILD DO CONTAINER
+----------------------
+
+1. Ainda na secao "API Docker final", clique no botao:
+
+Build
+
+2. Aguarde o build terminar.
+
+3. Se aparecer erro dizendo que Docker nao esta disponivel:
+   - abra o Docker Desktop;
+   - espere o Docker ficar "running";
+   - volte para o Studio;
+   - clique em "Build" novamente.
+
+4. Se aparecer erro de porta, volte para a etapa 9 e altere as portas.
+
+
+11. SUBIR O CONTAINER
+---------------------
+
+1. Depois do build concluir, clique no botao:
+
+Up CPU
+
+2. Aguarde o container subir.
+
+3. Clique em:
+
+Status
+
+ou:
+
+Inspecionar
+
+4. Confirme que a API esta rodando.
+
+Se seu flow tiver workers periodicos configurados, o docker compose gerado
+tambem deve subir o servico de worker junto com a API.
+
+
+12. RODAR SMOKE TEST
+--------------------
+
+1. Clique no botao:
+
+Smoke
+
+2. Aguarde o resultado.
+
+3. Se o Smoke passar, a API esta pronta para teste local.
+
+4. Se o Smoke falhar:
+   - clique em "Inspecionar" para ver detalhes;
+   - confira se a URL esta correta;
+   - confira se a porta API esta livre;
+   - confirme que o container esta de pe;
+   - rode "Smoke" novamente.
+
+
+13. ABRIR A API GERADA
+----------------------
+
+1. Abra no navegador:
+
+http://127.0.0.1:8080/docs
+
+Se voce mudou a porta API, ajuste a URL. Exemplo:
+
+http://127.0.0.1:8081/docs
+
+2. No Swagger, teste primeiro:
+
+GET /health
+
+3. Depois teste:
+
+GET /metadata
+
+4. Confira se o metadata mostra o flow correto:
+
+teste-api-simples
+
+
+14. TESTAR UMA SESSAO PELA API
+------------------------------
+
+No Swagger em /docs:
+
+1. Abra o endpoint:
+
+POST /sessions
+
+2. Clique em:
+
+Try it out
+
+3. No corpo JSON, use:
+
+{
+  "metadata": {
+    "source": "swagger-test"
+  },
+  "max_turns": 3
+}
+
+4. Clique em:
+
+Execute
+
+5. Copie o valor retornado em:
+
+session_id
+
+Exemplo:
+
+0f4c0f0c-0000-0000-0000-000000000000
+
+6. Abra o endpoint:
+
+POST /sessions/{session_id}/start
+
+7. Clique em:
+
+Try it out
+
+8. Cole o session_id no input:
+
+session_id
+
+9. No corpo JSON, deixe:
+
+{}
+
+10. Clique em:
+
+Execute
+
+11. Agora abra:
+
+POST /sessions/{session_id}/turn
+
+12. Clique em:
+
+Try it out
+
+13. Cole o mesmo session_id.
+
+14. No corpo JSON, use:
+
+{
+  "user_message": "Ola, preciso de ajuda para testar esta API."
+}
+
+15. Clique em:
+
+Execute
+
+16. Confira se a resposta contem uma mensagem do agente.
+
+17. Para ver historico, abra:
+
+GET /sessions/{session_id}/transcript
+
+18. Cole o session_id e clique em:
+
+Execute
+
+19. Para ver eventos tecnicos do fluxo, abra:
+
+GET /sessions/{session_id}/events
+
+20. Cole o session_id e clique em:
+
+Execute
+
+21. Para finalizar a sessao, abra:
+
+POST /sessions/{session_id}/finish
+
+22. Cole o session_id, use corpo:
+
+{}
+
+23. Clique em:
+
+Execute
+
+
+15. GERAR ZIP FINAL PARA DEPLOY DE TESTE
+----------------------------------------
+
+1. Volte para o Agent Flow Studio.
+
+2. Abra a aba:
+
+Artefato
+
+3. Na secao "API Docker final", procure o checklist de entrega.
+
+4. Verifique se as etapas estao concluidas:
+
+- .env preparado
+- build executado
+- container subiu
+- smoke passou
+
+5. Se aparecer o botao:
+
+Baixar zip final
+
+clique nele.
+
+6. Se aparecer:
+
+Baixar zip preliminar
+
+significa que ainda falta alguma etapa. Normalmente e uma destas:
+
+- Preparar .env
+- Build
+- Up CPU
+- Smoke
+
+Complete a etapa pendente e volte ao botao.
+
+O ZIP final e o pacote para deploy/teste fora do Builder. Ele deve excluir
+valores secretos de .env e incluir manifesto de exportacao.
+
+
+16. OPERAR PELO TERMINAL, SE A UI FALHAR
+----------------------------------------
+
+Se a UI estiver bugada, depois que o runtime for gerado voce tambem pode subir
+a API pelo terminal.
+
+1. Abra um terminal na raiz do projeto.
+
+2. Entre no runtime gerado:
+
+cd generated/teste-api-simples-runtime
+
+3. Suba o container:
+
+docker compose up -d --build
+
+4. Veja os containers:
+
+docker compose ps
+
+5. Abra:
+
+http://127.0.0.1:8080/docs
+
+6. Para parar:
+
+docker compose down
+
+
+17. USAR LLM REAL EM VEZ DE MOCK
+--------------------------------
+
+Para o primeiro teste, mantenha:
+
+MOCK_LLM=true
+
+Quando quiser testar com modelo real:
+
+1. Abra o arquivo:
+
+generated/teste-api-simples-runtime/.env
+
+2. Ajuste conforme o provider do seu flow.
+
+Para OpenAI:
+
+MOCK_LLM=false
+OPENAI_API_KEY=sua-chave-aqui
+OPENAI_BASE_URL=
+
+Para OpenRouter:
+
+MOCK_LLM=false
+OPENROUTER_API_KEY=sua-chave-aqui
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+3. Depois reinicie o container:
+
+docker compose down
+docker compose up -d --build
+
+4. Rode o Smoke novamente pela UI ou teste pelo Swagger.
+
+
+CHECKLIST FINAL
+---------------
+
+Use esta lista para confirmar que chegou no final:
+
+[ ] Flow criado a partir do Catalogo
+[ ] Prompt system editado
+[ ] Workspace salvo
+[ ] Validacao sem erro bloqueante
+[ ] LangGraph gerado
+[ ] Sandbox aprovado
+[ ] API Docker gerada
+[ ] .env preparado
+[ ] Build concluido
+[ ] Up CPU concluido
+[ ] Smoke passou
+[ ] Swagger abre em /docs
+[ ] POST /sessions funciona
+[ ] POST /sessions/{session_id}/start funciona
+[ ] POST /sessions/{session_id}/turn responde
+[ ] ZIP final disponivel

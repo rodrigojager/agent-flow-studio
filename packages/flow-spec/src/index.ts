@@ -58,6 +58,27 @@ export const SafetyRuleSchema = z.object({
   safeResponse: z.string().optional(),
 });
 
+export const SqlModeSchema = z.enum(["auto", "read", "mutation", "schema", "raw"]);
+
+export const FlowTriggerSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1).optional(),
+    description: z.string().optional(),
+    kind: z.enum(["interval", "cron", "event", "manual"]),
+    enabled: z.boolean().default(true).optional(),
+    intervalSeconds: z.number().int().positive().optional(),
+    cronExpression: z.string().min(1).optional(),
+    eventType: z.string().min(1).optional(),
+    userMessage: z.string().optional(),
+    input: z.record(z.unknown()).optional(),
+    metadata: z.record(z.unknown()).optional(),
+    maxTurns: z.number().int().positive().max(50).optional(),
+    maxAttempts: z.number().int().positive().max(10).optional(),
+    autoFinish: z.boolean().optional(),
+  })
+  .passthrough();
+
 export type LlmAdapterStatus = "supported" | "planned";
 
 export interface LlmLocalModelPreset {
@@ -85,6 +106,17 @@ export interface LlmAdapterCatalogItem {
 }
 
 export const LLM_ADAPTER_CATALOG: LlmAdapterCatalogItem[] = [
+  {
+    id: "codex-cli",
+    label: "Codex CLI",
+    status: "supported",
+    protocol: "openai-responses",
+    defaultModel: "default",
+    apiKeyEnv: "OPENAI_API_KEY",
+    baseUrlEnv: "OPENAI_BASE_URL",
+    mockEnv: "MOCK_LLM",
+    notes: "Catálogo de modelos consultado pelo Codex CLI local; execução usa o runtime OpenAI-compatible configurado.",
+  },
   {
     id: "openai",
     label: "OpenAI",
@@ -159,24 +191,26 @@ export const LLM_ADAPTER_CATALOG: LlmAdapterCatalogItem[] = [
   {
     id: "opencode-go",
     label: "opencode Go",
-    status: "planned",
+    status: "supported",
     protocol: "openai-responses",
     defaultModel: "default",
     apiKeyEnv: "OPENCODE_GO_API_KEY",
     baseUrlEnv: "OPENCODE_GO_BASE_URL",
     mockEnv: "MOCK_LLM",
-    notes: "Entrada planejada no catálogo; ainda não é emitida pelo codegen Python.",
+    defaultBaseUrl: "https://opencode.ai/zen/go/v1",
+    notes: "Gateway opencode Go compatível com OpenAI; configure OPENCODE_GO_BASE_URL para consultar e executar modelos.",
   },
   {
     id: "opencode-zen",
     label: "opencode Zen",
-    status: "planned",
+    status: "supported",
     protocol: "openai-responses",
     defaultModel: "default",
     apiKeyEnv: "OPENCODE_ZEN_API_KEY",
     baseUrlEnv: "OPENCODE_ZEN_BASE_URL",
     mockEnv: "MOCK_LLM",
-    notes: "Entrada planejada no catálogo; ainda não é emitida pelo codegen Python.",
+    defaultBaseUrl: "https://opencode.ai/zen/v1",
+    notes: "Gateway opencode Zen compatível com OpenAI; configure OPENCODE_ZEN_BASE_URL para consultar e executar modelos.",
   },
 ];
 
@@ -260,6 +294,7 @@ export const NodeSchema = z
     inputPath: z.string().min(1).optional(),
     outputPath: z.string().min(1).optional(),
     query: z.string().min(1).optional(),
+    sqlMode: SqlModeSchema.optional(),
     table: z.string().min(1).optional(),
     dataPath: z.string().min(1).optional(),
     paramsPath: z.string().min(1).optional(),
@@ -316,8 +351,9 @@ export const AgentFlowSchema = z
     }),
     prompts: z.array(PromptRefSchema).min(1),
     schemas: z.array(SchemaRefSchema).default([]),
-    nodes: z.array(NodeSchema).min(1),
-    edges: z.array(EdgeSchema).min(1),
+    nodes: z.array(NodeSchema).default([]),
+    edges: z.array(EdgeSchema).default([]),
+    triggers: z.array(FlowTriggerSchema).optional(),
   })
   .superRefine((flow, ctx) => {
     const nodeIds = new Set(flow.nodes.map((node) => node.id));
@@ -553,6 +589,56 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
       path: "state.schemaRef",
       assetId: flow.state.schemaRef,
     });
+  }
+
+  const triggerIds = new Set<string>();
+  for (const trigger of flow.triggers ?? []) {
+    if (triggerIds.has(trigger.id)) {
+      add({
+        severity: "error",
+        code: "duplicate_flow_trigger_id",
+        message: `Trigger duplicado: ${trigger.id}.`,
+        path: `triggers.${trigger.id}`,
+        assetId: trigger.id,
+      });
+    }
+    triggerIds.add(trigger.id);
+    if (trigger.kind === "interval" && !trigger.intervalSeconds) {
+      add({
+        severity: "warning",
+        code: "missing_interval_trigger_seconds",
+        message: `Trigger ${trigger.id} é interval, mas não declara intervalSeconds.`,
+        path: `triggers.${trigger.id}.intervalSeconds`,
+        assetId: trigger.id,
+      });
+    }
+    if (trigger.kind === "interval" && trigger.intervalSeconds && trigger.intervalSeconds < 60) {
+      add({
+        severity: "warning",
+        code: "short_interval_trigger",
+        message: `Trigger ${trigger.id} usa intervalo menor que 60 segundos; isso pode gerar carga excessiva.`,
+        path: `triggers.${trigger.id}.intervalSeconds`,
+        assetId: trigger.id,
+      });
+    }
+    if (trigger.kind === "cron" && !trigger.cronExpression) {
+      add({
+        severity: "warning",
+        code: "missing_cron_trigger_expression",
+        message: `Trigger ${trigger.id} é cron, mas não declara cronExpression.`,
+        path: `triggers.${trigger.id}.cronExpression`,
+        assetId: trigger.id,
+      });
+    }
+    if (trigger.kind === "event" && !trigger.eventType) {
+      add({
+        severity: "warning",
+        code: "missing_event_trigger_type",
+        message: `Trigger ${trigger.id} é event, mas não declara eventType.`,
+        path: `triggers.${trigger.id}.eventType`,
+        assetId: trigger.id,
+      });
+    }
   }
 
   for (const node of flow.nodes) {
@@ -970,6 +1056,15 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
           nodeId: node.id,
         });
       }
+      if (node.sqlMode === "read" && node.query && !isReadOnlySql(node.query)) {
+        add({
+          severity: "warning",
+          code: "database_query_read_mode_with_non_read_sql",
+          message: `Nó ${node.id} está em modo read, mas a query não parece ser somente leitura.`,
+          path: `nodes.${node.id}.query`,
+          nodeId: node.id,
+        });
+      }
       if (node.paramsPath && !isValidStatePath(node.paramsPath)) {
         add({
           severity: "warning",
@@ -1014,6 +1109,15 @@ export function analyzeAgentFlow(flow: AgentFlow): FlowAnalysisResult {
           code: "invalid_database_save_result_path",
           message: `resultPath do nó ${node.id} deve ser um caminho simples de estado.`,
           path: `nodes.${node.id}.resultPath`,
+          nodeId: node.id,
+        });
+      }
+      if (node.sqlMode === "read" && node.query && !isReadOnlySql(node.query)) {
+        add({
+          severity: "warning",
+          code: "database_save_read_mode_with_non_read_sql",
+          message: `Nó ${node.id} está em modo read, mas a query opcional não parece ser somente leitura.`,
+          path: `nodes.${node.id}.query`,
           nodeId: node.id,
         });
       }
@@ -1329,6 +1433,15 @@ function isValidStatePath(value: string): boolean {
 
 function isValidSqlIdentifier(value: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
+
+function isReadOnlySql(value: string): boolean {
+  const withoutComments = value
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*$/gm, " ")
+    .trim()
+    .toLowerCase();
+  return /^(select|with|show|pragma|explain|describe)\b/.test(withoutComments);
 }
 
 function isSafeRelativePath(value: string): boolean {

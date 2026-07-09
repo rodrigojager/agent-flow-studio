@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Novo Agente State",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "turn": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_turns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "user_message": {
+      "type": "string"
+    },
+    "assistant_message": {
+      "type": "object"
+    },
+    "safety": {
+      "type": "object"
+    },
+    "llm": {
+      "type": "object"
+    },
+    "executed_nodes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,4 +1,14 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type RefObject } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FocusEvent,
+  type RefObject,
+} from "react";
 import {
   Background,
   Controls,
@@ -83,6 +93,7 @@ import {
   createRuntimeSession,
   createPromptAsset,
   createSchemaAsset,
+  deleteFlowWorkspace,
   deletePromptAsset,
   deleteSchemaAsset,
   deleteModelImageRemoteRegistryEntry,
@@ -155,6 +166,7 @@ import {
   listLocalCatalog,
   listFlows,
   listLlmAdapters,
+  listLlmAdapterModels,
   listSandboxes,
   listSafetyHarnessRuns,
   listStudioRuns,
@@ -371,6 +383,7 @@ import type {
   LangSmithCloudDeploymentStatus,
   LangSmithCloudHandoff,
   LlmAdapterCatalogItem,
+  LlmModelCatalogResult,
   LocalLlmProviderStatus,
   LoadedFlow,
   LoadedRuntimeManifest,
@@ -4899,6 +4912,26 @@ interface CommandPaletteAction {
   run: () => void;
 }
 
+interface TextPromptDialogState {
+  title: string;
+  label: string;
+  description?: string;
+  defaultValue: string;
+  confirmLabel: string;
+  resolve: (value: string | null) => void;
+}
+
+type FlowTrigger = NonNullable<AgentFlow["triggers"]>[number];
+type SqlMode = "auto" | "read" | "mutation" | "schema" | "raw";
+
+const sqlModeOptions: Array<{ value: SqlMode; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: "read", label: "Read" },
+  { value: "mutation", label: "Mutation" },
+  { value: "schema", label: "Schema" },
+  { value: "raw", label: "Raw" },
+];
+
 const nodeTypeOptions = [
   { type: "start", label: "Start", icon: Play },
   { type: "safety_gate", label: "Safety", icon: ShieldCheck },
@@ -4909,7 +4942,7 @@ const nodeTypeOptions = [
   { type: "human_input", label: "Humano", icon: Send },
   { type: "http_request", label: "HTTP", icon: Terminal },
   { type: "transform_json", label: "Transform", icon: Boxes },
-  { type: "database_query", label: "DB Query", icon: FileJson },
+  { type: "database_query", label: "SQL Query", icon: FileJson },
   { type: "database_save", label: "DB Save", icon: Download },
   { type: "file_extract", label: "Arquivo", icon: FileText },
   { type: "rag_retrieval", label: "RAG", icon: Search },
@@ -5532,6 +5565,7 @@ export default function App() {
   const [loadedSchemaContents, setLoadedSchemaContents] = useState<Record<string, string>>({});
   const [promptDirty, setPromptDirty] = useState(false);
   const [schemaDirty, setSchemaDirty] = useState(false);
+  const [assetReloadToken, setAssetReloadToken] = useState(0);
   const [promptAssetLoadState, setPromptAssetLoadState] =
     useState<PanelLoadState>({ kind: "idle", message: "Nenhum prompt selecionado." });
   const [schemaAssetLoadState, setSchemaAssetLoadState] =
@@ -5618,12 +5652,16 @@ export default function App() {
   const [studioSandboxTelemetryLoadState, setStudioSandboxTelemetryLoadState] =
     useState<PanelLoadState>({ kind: "idle", message: "Histórico de sandbox ainda não carregado." });
   const [llmAdapters, setLlmAdapters] = useState<LlmAdapterCatalogItem[]>([]);
+  const [llmModelCatalogs, setLlmModelCatalogs] = useState<Record<string, LlmModelCatalogResult>>({});
+  const [llmModelCatalogBusyKeys, setLlmModelCatalogBusyKeys] = useState<Record<string, boolean>>({});
   const [localLlmProviderStatus, setLocalLlmProviderStatus] = useState<LocalLlmProviderStatus | null>(null);
   const [localLlmProviderBusy, setLocalLlmProviderBusy] = useState(false);
   const [status, setStatus] = useState<StatusState>({
     kind: "idle",
     message: "Builder API aguardando ação.",
   });
+  const [textPromptDialog, setTextPromptDialog] = useState<TextPromptDialogState | null>(null);
+  const [textPromptValue, setTextPromptValue] = useState("");
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const fixtureInputRef = useRef<HTMLInputElement | null>(null);
   const secretPolicyProfileInputRef = useRef<HTMLInputElement | null>(null);
@@ -5641,9 +5679,27 @@ export default function App() {
   const safetyHarnessHistoryInputRef = useRef<HTMLInputElement | null>(null);
   const studioAnnotationQueueInputRef = useRef<HTMLInputElement | null>(null);
   const commandPaletteInputRef = useRef<HTMLInputElement | null>(null);
+  const textPromptInputRef = useRef<HTMLInputElement | null>(null);
   const firstPaletteButtonRef = useRef<HTMLButtonElement | null>(null);
   const reactFlowRef = useRef<ReactFlowInstance | null>(null);
   const studioEventStreamRef = useRef<EventSource | WebSocket | null>(null);
+  const requestTextPrompt = useCallback((options: Omit<TextPromptDialogState, "resolve">) => {
+    return new Promise<string | null>((resolve) => {
+      setTextPromptValue(options.defaultValue);
+      setTextPromptDialog({ ...options, resolve });
+    });
+  }, []);
+  const closeTextPromptDialog = useCallback(
+    (value: string | null) => {
+      if (!textPromptDialog) {
+        return;
+      }
+      const resolve = textPromptDialog.resolve;
+      setTextPromptDialog(null);
+      resolve(value);
+    },
+    [textPromptDialog],
+  );
   const selectedStudioSecretPolicyProfile = useMemo(
     () =>
       studioSecretPolicyProfiles.find((profile) => profile.id === normalizeStudioSecretPolicyProfileId(selectedStudioSecretPolicyProfileId)) ??
@@ -5665,6 +5721,32 @@ export default function App() {
     });
   }, [commandPaletteOpen]);
 
+  useEffect(() => {
+    if (!textPromptDialog) {
+      return;
+    }
+    const focusInput = (select = true) => {
+      window.requestAnimationFrame(() => {
+        const input = textPromptInputRef.current;
+        if (!input) {
+          return;
+        }
+        input.focus({ preventScroll: true });
+        if (select) {
+          input.select();
+        }
+      });
+    };
+    focusInput();
+    const retryTimers = [20, 120, 320].map((delay) => window.setTimeout(() => focusInput(false), delay));
+    const handleWindowFocus = () => focusInput(false);
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [textPromptDialog]);
+
   const refreshFlows = useCallback(async (silent = false) => {
     if (!silent) {
       setStatus({ kind: "busy", message: "Atualizando flows." });
@@ -5673,18 +5755,47 @@ export default function App() {
       const nextFlows = await listFlows();
       setFlows(nextFlows);
       const firstValid = nextFlows.find((item) => item.valid);
-      setSelectedFlowId((current) => current || firstValid?.id || nextFlows[0]?.id || "");
+      setSelectedFlowId((current) =>
+        current && nextFlows.some((item) => item.id === current) ? current : firstValid?.id || nextFlows[0]?.id || "",
+      );
       if (!silent) {
         setStatus({ kind: "ok", message: `${nextFlows.length} flow(s) encontrados.` });
       }
+      return nextFlows;
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
+      return [];
     }
   }, []);
 
   useEffect(() => {
     void refreshFlows();
   }, [refreshFlows]);
+
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      void refreshFlows(true);
+      if (!promptDirty && !schemaDirty) {
+        setAssetReloadToken((current) => current + 1);
+      }
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [promptDirty, refreshFlows, schemaDirty]);
+
+  useEffect(() => {
+    if (!draftFlow) {
+      return;
+    }
+    setSelectedPromptId((current) =>
+      current && draftFlow.prompts.some((prompt) => prompt.id === current) ? current : draftFlow.prompts[0]?.id ?? "",
+    );
+    setSelectedSchemaId((current) =>
+      current && draftFlow.schemas.some((schema) => schema.id === current) ? current : draftFlow.schemas[0]?.id ?? "",
+    );
+  }, [draftFlow]);
 
   useEffect(() => {
     async function run() {
@@ -7553,6 +7664,7 @@ export default function App() {
         setSchemaContent("");
         setPromptDirty(false);
         setSchemaDirty(false);
+        setAssetReloadToken((current) => current + 1);
         setFlowValidation(null);
         setArtifactListing(null);
         setArtifactContent(null);
@@ -7659,12 +7771,20 @@ export default function App() {
         if (!active) {
           return;
         }
+        const loadMessage = errorMessage(error);
         setLoadedFlow(null);
         setDraftFlow(null);
         setIsDirty(false);
         setCollapsedCanvasGroupIds(new Set());
         setSelectedNodeId("");
         setSelectedEdgeId("");
+        setSelectedPromptId("");
+        setSelectedSchemaId("");
+        setPromptContent("");
+        setSchemaContent("");
+        setPromptDirty(false);
+        setSchemaDirty(false);
+        setAssetReloadToken((current) => current + 1);
         setFlowValidation(null);
         setArtifactListing(null);
         setArtifactContent(null);
@@ -7779,14 +7899,25 @@ export default function App() {
         setStudioSecretPolicyDraftRequiredEnvNames("");
         setStudioSecretPolicyDraftProtectedEnvNames("");
         setLangGraphApprovalStatus(null);
-        setStatus({ kind: "error", message: errorMessage(error) });
+        setStatus({ kind: "error", message: loadMessage });
+        void refreshFlows(true).then((nextFlows) => {
+          if (!active || !nextFlows.length || nextFlows.some((item) => item.id === selectedFlowId)) {
+            return;
+          }
+          const fallback = nextFlows.find((item) => item.valid) ?? nextFlows[0];
+          setSelectedFlowId(fallback.id);
+          setStatus({
+            kind: "ok",
+            message: `Flow ${selectedFlowId} não está mais disponível; selecionando ${fallback.id}.`,
+          });
+        });
       }
     }
     void run();
     return () => {
       active = false;
     };
-  }, [selectedFlowId]);
+  }, [refreshFlows, selectedFlowId]);
 
   const refreshRuntimeJobsState = useCallback(
     async (
@@ -8025,7 +8156,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedFlowId, selectedPromptId]);
+  }, [assetReloadToken, selectedFlowId, selectedPromptId]);
 
   useEffect(() => {
     if (!selectedFlowId || !selectedSchemaId) {
@@ -8056,7 +8187,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedFlowId, selectedSchemaId]);
+  }, [assetReloadToken, selectedFlowId, selectedSchemaId]);
 
   const schemaAssetKey = useMemo(
     () => draftFlow?.schemas.map((schema) => `${schema.id}:${schema.path}`).join("|") ?? "",
@@ -8295,6 +8426,90 @@ export default function App() {
       .filter((node): node is FlowNode => Boolean(node)),
     [draftFlow, selectedCanvasNodeIds],
   );
+  const modelCatalogRequestForConfig = useCallback(
+    (config: LlmModelConfigLike, adapter?: LlmAdapterCatalogItem | null) => {
+      const baseUrlEnv = config.baseUrlEnv || adapter?.baseUrlEnv || "";
+      const configuredBaseUrl = baseUrlEnv ? readStudioLocalSecretValue(studioLocalSecrets, baseUrlEnv) : "";
+      return {
+        baseUrl: configuredBaseUrl || adapter?.defaultBaseUrl,
+        baseUrlEnv,
+        apiKeyEnv: config.apiKeyEnv || adapter?.apiKeyEnv,
+      };
+    },
+    [studioLocalSecrets],
+  );
+  const loadLlmModelCatalog = useCallback(
+    async (adapterId: string, options: { baseUrl?: string; baseUrlEnv?: string; apiKeyEnv?: string }) => {
+      const adapter = adapterId.trim();
+      if (!adapter) {
+        return;
+      }
+      const key = llmModelCatalogKey(adapter, options.baseUrlEnv);
+      if (llmModelCatalogs[key] || llmModelCatalogBusyKeys[key]) {
+        return;
+      }
+      setLlmModelCatalogBusyKeys((current) => ({ ...current, [key]: true }));
+      try {
+        const result = await listLlmAdapterModels({
+          adapter,
+          baseUrl: options.baseUrl,
+          baseUrlEnv: options.baseUrlEnv,
+          apiKeyEnv: options.apiKeyEnv,
+        });
+        setLlmModelCatalogs((current) => ({ ...current, [key]: result }));
+      } catch (error) {
+        setLlmModelCatalogs((current) => ({
+          ...current,
+          [key]: {
+            format: "agent-flow-builder.llm-model-catalog.v1",
+            adapter,
+            provider: "unsupported",
+            status: "error",
+            ok: false,
+            checkedAt: new Date().toISOString(),
+            baseUrl: options.baseUrl ?? null,
+            modelCount: 0,
+            models: [],
+            message: errorMessage(error),
+            nextActions: [],
+          },
+        }));
+      } finally {
+        setLlmModelCatalogBusyKeys((current) => ({ ...current, [key]: false }));
+      }
+    },
+    [llmModelCatalogBusyKeys, llmModelCatalogs],
+  );
+
+  useEffect(() => {
+    if (!draftFlow || !llmAdapters.length) {
+      return;
+    }
+    const flowAdapter = llmAdapters.find((adapter) => adapter.id === draftFlow.llm.adapter) ?? null;
+    void loadLlmModelCatalog(draftFlow.llm.adapter, modelCatalogRequestForConfig(draftFlow.llm, flowAdapter));
+
+    if (!selectedEditableNode || !isLlmNodeType(selectedEditableNode.type)) {
+      return;
+    }
+    const nodeConfig = llmConfigForNode(selectedEditableNode, draftFlow);
+    const nodeAdapter = llmAdapters.find((adapter) => adapter.id === nodeConfig.adapter) ?? flowAdapter;
+    void loadLlmModelCatalog(nodeConfig.adapter, modelCatalogRequestForConfig(nodeConfig, nodeAdapter));
+  }, [
+    draftFlow,
+    llmAdapters,
+    loadLlmModelCatalog,
+    modelCatalogRequestForConfig,
+    selectedEditableNode,
+  ]);
+
+  useEffect(() => {
+    const defaultLlm = runtimeManifestDraft?.defaultLlm;
+    if (!defaultLlm || !llmAdapters.length) {
+      return;
+    }
+    const adapter = llmAdapters.find((item) => item.id === defaultLlm.adapter) ?? null;
+    void loadLlmModelCatalog(defaultLlm.adapter, modelCatalogRequestForConfig(defaultLlm, adapter));
+  }, [llmAdapters, loadLlmModelCatalog, modelCatalogRequestForConfig, runtimeManifestDraft?.defaultLlm]);
   const selectedCanvasEdgeIndexes = useMemo(
     () => uniqueNumberList([
       ...selectedBlockEdgeIds.map(edgeIndexFromId),
@@ -8805,6 +9020,10 @@ export default function App() {
 
   function updateFlowField<K extends keyof Pick<AgentFlow, "name" | "version">>(key: K, value: AgentFlow[K]) {
     updateDraft((flow) => ({ ...flow, [key]: value }));
+  }
+
+  function updateFlowTriggers(triggers: FlowTrigger[]) {
+    updateDraft((flow) => ({ ...flow, triggers }));
   }
 
   function updateFlowLlmAdapter(adapterId: string) {
@@ -10452,9 +10671,19 @@ export default function App() {
     setInspectorTab(tab);
   }
 
+  async function requestNewFlowId(defaultValue: string, description = "O Studio criará um workspace vazio para montar o canvas do zero.") {
+    const rawId = await requestTextPrompt({
+      title: "Criar flow",
+      label: "ID do novo flow",
+      description,
+      defaultValue,
+      confirmLabel: "Criar flow",
+    });
+    return rawId?.trim() ?? "";
+  }
+
   async function handleCreateFlow() {
-    const rawId = window.prompt("ID do novo flow", "novo-agente");
-    const flowId = rawId?.trim();
+    const flowId = await requestNewFlowId("novo-agente");
     if (!flowId) {
       return;
     }
@@ -10465,6 +10694,35 @@ export default function App() {
       await refreshFlows(true);
       loadCreatedFlowWorkspace(created);
       setStatus({ kind: "ok", message: `Flow ${created.flow.id} criado em ${created.path}.` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
+  async function handleDeleteFlow(flow: FlowSummary) {
+    const label = flow.name ?? flow.id;
+    if (!window.confirm(`Excluir o flow "${label}"? Esta ação remove a pasta do flow do workspace.`)) {
+      return;
+    }
+    if (
+      flow.id === selectedFlowId &&
+      (isDirty || promptDirty || schemaDirty) &&
+      !window.confirm(`O flow "${label}" tem alterações não salvas. Excluir mesmo assim?`)
+    ) {
+      setStatus({ kind: "idle", message: "Exclusão cancelada." });
+      return;
+    }
+
+    setStatus({ kind: "busy", message: `Excluindo flow ${flow.id}.` });
+    try {
+      await deleteFlowWorkspace(flow.id);
+      const nextFlows = await refreshFlows(true);
+      if (flow.id === selectedFlowId) {
+        const nextSelectedFlowId = nextFlows.find((item) => item.valid)?.id ?? nextFlows[0]?.id ?? "";
+        preserveNextLoadedStatusRef.current = nextSelectedFlowId;
+        setSelectedFlowId(nextSelectedFlowId);
+      }
+      setStatus({ kind: "ok", message: `Flow ${flow.id} excluído.` });
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
     }
@@ -11862,8 +12120,10 @@ export default function App() {
   }
 
   async function handleCreateFlowFromCatalogTemplate(item: LocalCatalogItem) {
-    const rawId = window.prompt("ID do novo flow", `${item.id}-flow`);
-    const flowId = rawId?.trim();
+    const flowId = await requestNewFlowId(
+      `${item.id}-flow`,
+      `O Studio criará um flow a partir do template ${item.name || item.id}.`,
+    );
     if (!flowId) {
       return;
     }
@@ -18074,13 +18334,29 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     const turnIdempotencyKey = runtimeTurnIdempotencyKey.trim() || nextStudioTurnIdempotencyKey();
     setRuntimeTurnIdempotencyKey(turnIdempotencyKey);
     try {
-      startStudioEventStream(runtimeSession, nextRuntimeEventSeq(runtimeEventsData));
+      let activeSession = runtimeSession;
+      if (activeSession.status !== "active") {
+        setStudioTurnStream((current) => ({
+          ...current,
+          message: `Sessão ${activeSession.session_id} ainda está ${activeSession.status}; iniciando antes do turno.`,
+        }));
+        const started = await startRuntimeSession(
+          sandbox.url,
+          draftFlow.api.resourceName,
+          activeSession.session_id,
+          studioRuntimeApiKey,
+        );
+        activeSession = started.session;
+        setRuntimeSession(started.session);
+        setTranscript(started.messages);
+      }
+      startStudioEventStream(activeSession, nextRuntimeEventSeq(runtimeEventsData));
       const sendTurnStream =
         studioTurnStreamTransport === "websocket" ? sendRuntimeTurnStreamWebSocket : sendRuntimeTurnStream;
       const result = await sendTurnStream(
         sandbox.url,
         draftFlow.api.resourceName,
-        runtimeSession.session_id,
+        activeSession.session_id,
         payloadResult.payload,
         {
           onToken: (token: RuntimeTurnStreamToken) => {
@@ -18191,7 +18467,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     {
       id: "workspace-create",
       label: "Criar flow",
-      detail: "Cria um novo workspace de agente pelo template local.",
+      detail: "Cria um workspace vazio de agente para montar do zero.",
       group: "Workspace",
       keywords: ["novo", "agente", "flow"],
       run: () => {
@@ -18467,8 +18743,27 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
   ];
   const filteredCommandPaletteActions = filterCommandPaletteActions(commandPaletteActions, commandPaletteQuery);
 
+  const handleEditableFocusCapture = useCallback(
+    (event: FocusEvent<HTMLDivElement>) => {
+      const target = event.target;
+      if (!isEditableShortcutTarget(target)) {
+        return;
+      }
+      if (target instanceof HTMLElement && target.closest(".command-palette, .text-prompt-dialog")) {
+        return;
+      }
+      if (commandPaletteOpen) {
+        setCommandPaletteOpen(false);
+      }
+    },
+    [commandPaletteOpen],
+  );
+
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
+      if (textPromptDialog) {
+        return;
+      }
       const hasPrimaryModifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       if (hasPrimaryModifier && key === "k") {
@@ -18545,10 +18840,15 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
     selectedCanvasActionCount,
     selectedEdgeId,
     selectedNodeId,
+    textPromptDialog,
   ]);
 
   return (
-    <div className="app-shell" data-theme={theme}>
+    <div
+      className="app-shell"
+      data-theme={theme}
+      onFocusCapture={handleEditableFocusCapture}
+    >
       <header className="topbar">
         <div className="brand-block">
           <div className="brand-mark">
@@ -18785,130 +19085,149 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               void handleImportStudioAnnotationQueueFile(file);
             }}
           />
-          <label className="flow-select">
-            <span>Flow</span>
-            <select
-              value={selectedFlowId}
-              onChange={(event) => {
-                setSelectedFlowId(event.target.value);
-                event.currentTarget.blur();
-              }}
+          <div className="toolbar-flow-picker">
+            <label className="flow-select">
+              <span>Flow</span>
+              <select
+                value={selectedFlowId}
+                onChange={(event) => {
+                  setSelectedFlowId(event.target.value);
+                  event.currentTarget.blur();
+                }}
+              >
+                {flows.map((flow) => (
+                  <option value={flow.id} key={flow.id}>
+                    {flow.name ?? flow.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="icon-button" onClick={handleCreateFlow} title="Criar workflow" aria-label="Criar workflow">
+              <Plus size={17} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="toolbar-group">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={openCommandPalette}
+              title="Abrir paleta de comandos (Ctrl+K)"
+              aria-label="Abrir paleta de comandos"
             >
-              {flows.map((flow) => (
-                <option value={flow.id} key={flow.id}>
-                  {flow.name ?? flow.id}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-            title={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
-            aria-label={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
-          >
-            {theme === "dark" ? <Sun size={17} aria-hidden="true" /> : <Moon size={17} aria-hidden="true" />}
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={openCommandPalette}
-            title="Abrir paleta de comandos (Ctrl+K)"
-            aria-label="Abrir paleta de comandos"
-          >
-            <Search size={17} aria-hidden="true" />
-          </button>
-          <button type="button" className="icon-button" onClick={() => refreshFlows()} title="Atualizar flows">
-            <RefreshCw size={17} aria-hidden="true" />
-          </button>
-          <button type="button" className="icon-button" onClick={handleCreateFlow} title="Criar flow" aria-label="Criar flow">
-            <Plus size={17} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={handleExportFlow}
-            disabled={!selectedFlowId}
-            title="Exportar workspace"
-            aria-label="Exportar workspace"
-          >
-            <Download size={17} aria-hidden="true" />
-          </button>
-          <button type="button" className="icon-button" onClick={handleImportClick} title="Importar workspace" aria-label="Importar workspace">
-            <Upload size={17} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="command-button"
-            onClick={handleValidate}
-            disabled={!selectedFlowId}
-            title="Validar flow (Ctrl+Enter)"
-          >
-            <CheckCircle2 size={17} aria-hidden="true" />
-            Validar
-          </button>
-          <button
-            type="button"
-            className="command-button"
-            onClick={handleSaveWorkspace}
-            disabled={!selectedFlowId || !hasWorkspaceDirty}
-            title="Salvar workspace (Ctrl+S)"
-          >
-            <FileJson size={17} aria-hidden="true" />
-            {hasWorkspaceDirty ? "Salvar" : "Salvo"}
-          </button>
-          <button
-            type="button"
-            className="command-button"
-            onClick={handleGenerateLangGraphSandbox}
-            disabled={!selectedFlowId}
-            title="Gerar pacote LangGraph para LangSmith"
-          >
-            <GitBranch size={17} aria-hidden="true" />
-            LangGraph
-          </button>
-          <button
-            type="button"
-            className="command-button"
-            onClick={() => {
-              void handleApproveLangGraphSandbox();
-            }}
-            disabled={!selectedFlowId}
-            title="Aprovar o sandbox testado no LangSmith"
-          >
-            <UserCheck size={17} aria-hidden="true" />
-            Aprovar
-          </button>
-          <button
-            type="button"
-            className="command-button"
-            onClick={handleGenerateLangSmithCloudHandoff}
-            disabled={!selectedFlowId}
-            title="Gerar handoff opcional para LangSmith Cloud sem salvar token"
-          >
-            <GitBranch size={17} aria-hidden="true" />
-            Handoff
-          </button>
-          <button
-            type="button"
-            className="command-button primary"
-            onClick={handleGenerateApprovedRuntime}
-            disabled={!selectedFlowId || !canGenerateApprovedRuntime}
-            title={canGenerateApprovedRuntime ? "Gerar runtime FastAPI/Docker aprovado" : langGraphApprovalLabel}
-          >
-            <Terminal size={17} aria-hidden="true" />
-            API Docker
-          </button>
-          <span className={langGraphApprovalClass} title={langGraphApprovalStatus?.reason}>
-            {langGraphApprovalLabel}
-          </span>
-          <button type="button" className="command-button" onClick={handleStartSandbox} disabled={!selectedFlowId}>
-            <Send size={17} aria-hidden="true" />
-            Studio
-          </button>
+              <Search size={17} aria-hidden="true" />
+            </button>
+            <button type="button" className="icon-button" onClick={() => refreshFlows()} title="Atualizar flows">
+              <RefreshCw size={17} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={handleExportFlow}
+              disabled={!selectedFlowId}
+              title="Exportar workspace"
+              aria-label="Exportar workspace"
+            >
+              <Download size={17} aria-hidden="true" />
+            </button>
+            <button type="button" className="icon-button" onClick={handleImportClick} title="Importar workspace" aria-label="Importar workspace">
+              <Upload size={17} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="toolbar-group toolbar-primary-actions">
+            <button
+              type="button"
+              className="command-button"
+              onClick={handleValidate}
+              disabled={!selectedFlowId}
+              title="Validar flow (Ctrl+Enter)"
+            >
+              <CheckCircle2 size={17} aria-hidden="true" />
+              Validar
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={handleSaveWorkspace}
+              disabled={!selectedFlowId || !hasWorkspaceDirty}
+              title="Salvar workspace (Ctrl+S)"
+            >
+              <Save size={17} aria-hidden="true" />
+              {hasWorkspaceDirty ? "Salvar" : "Salvo"}
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={handleGenerateLangGraphSandbox}
+              disabled={!selectedFlowId}
+              title="Gerar pacote LangGraph para LangSmith"
+            >
+              <GitBranch size={17} aria-hidden="true" />
+              LangGraph
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={() => {
+                void handleApproveLangGraphSandbox();
+              }}
+              disabled={!selectedFlowId}
+              title="Aprovar o sandbox testado no LangSmith"
+            >
+              <UserCheck size={17} aria-hidden="true" />
+              Aprovar
+            </button>
+            <button
+              type="button"
+              className="command-button"
+              onClick={handleGenerateLangSmithCloudHandoff}
+              disabled={!selectedFlowId}
+              title="Gerar handoff opcional para LangSmith Cloud sem salvar token"
+            >
+              <GitBranch size={17} aria-hidden="true" />
+              Handoff
+            </button>
+            <button
+              type="button"
+              className="command-button primary"
+              onClick={handleGenerateApprovedRuntime}
+              disabled={!selectedFlowId || !canGenerateApprovedRuntime}
+              title={canGenerateApprovedRuntime ? "Gerar runtime FastAPI/Docker aprovado" : langGraphApprovalLabel}
+            >
+              <Terminal size={17} aria-hidden="true" />
+              API Docker
+            </button>
+            <span className={langGraphApprovalClass} title={langGraphApprovalStatus?.reason}>
+              {langGraphApprovalLabel}
+            </span>
+            <button type="button" className="command-button" onClick={handleStartSandbox} disabled={!selectedFlowId}>
+              <Send size={17} aria-hidden="true" />
+              Studio
+            </button>
+          </div>
+          <div className="toolbar-theme">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+              title={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
+              aria-label={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
+            >
+              {theme === "dark" ? <Sun size={17} aria-hidden="true" /> : <Moon size={17} aria-hidden="true" />}
+            </button>
+          </div>
         </div>
       </header>
+
+      {textPromptDialog ? (
+        <TextPromptDialog
+          dialog={textPromptDialog}
+          value={textPromptValue}
+          inputRef={textPromptInputRef}
+          onValueChange={setTextPromptValue}
+          onCancel={() => closeTextPromptDialog(null)}
+          onSubmit={() => closeTextPromptDialog(textPromptValue)}
+        />
+      ) : null}
 
       {commandPaletteOpen ? (
         <CommandPalette
@@ -18929,24 +19248,38 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
       ) : null}
 
       <main className="workspace">
-        <aside className="left-panel">
+        <aside className="left-panel nodrag nowheel">
           <section className="panel-section">
             <h2>Flows</h2>
             <div className="flow-list">
               {flows.map((flow) => (
-                <button
-                  type="button"
+                <div
                   key={flow.id}
-                  className={`flow-row ${flow.id === selectedFlowId ? "selected" : ""}`}
-                  onClick={() => setSelectedFlowId(flow.id)}
+                  className={`flow-row-shell ${flow.id === selectedFlowId ? "selected" : ""}`}
                 >
-                  <FileJson size={17} aria-hidden="true" />
-                  <span>
-                    <strong>{flow.name ?? flow.id}</strong>
-                    <small>{flow.valid ? flow.version : "inválido"}</small>
-                  </span>
-                  {!flow.valid ? <AlertCircle size={16} aria-hidden="true" /> : null}
-                </button>
+                  <button
+                    type="button"
+                    className={`flow-row ${flow.id === selectedFlowId ? "selected" : ""}`}
+                    onClick={() => setSelectedFlowId(flow.id)}
+                    title={flow.name ?? flow.id}
+                  >
+                    <FileJson size={17} aria-hidden="true" />
+                    <span>
+                      <strong>{flow.name ?? flow.id}</strong>
+                      <small>{flow.valid ? flow.version : "inválido"}</small>
+                    </span>
+                    {!flow.valid ? <AlertCircle size={16} aria-hidden="true" /> : null}
+                  </button>
+                  <button
+                    type="button"
+                    className="flow-delete-button icon-button danger"
+                    onClick={() => void handleDeleteFlow(flow)}
+                    title={`Excluir flow ${flow.name ?? flow.id}`}
+                    aria-label={`Excluir flow ${flow.name ?? flow.id}`}
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                  </button>
+                </div>
               ))}
             </div>
           </section>
@@ -19090,7 +19423,13 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               <span className="canvas-selection-label" title={selectedCanvasSummary}>
                 {selectedCanvasSummary}
               </span>
-              <button type="button" className="canvas-action-button" onClick={focusCanvasSelection}>
+              <button
+                type="button"
+                className="canvas-action-button"
+                onClick={focusCanvasSelection}
+                title="Focar seleção"
+                aria-label="Focar seleção"
+              >
                 <Search size={14} aria-hidden="true" />
                 <span>Focar seleção</span>
               </button>
@@ -19099,6 +19438,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={openInsertNodeCommands}
                 disabled={!canInsertConnectedNode}
+                aria-label="Inserir etapa"
                 title={
                   selectedInsertionContextLabel
                     ? `Inserir nova etapa conectada em ${selectedInsertionContextLabel}`
@@ -19113,6 +19453,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleDuplicateSelectedNode}
                 disabled={!selectedEditableNode}
+                aria-label="Duplicar nó"
                 title={selectedEditableNode ? "Duplicar nó selecionado" : "Selecione um nó editável"}
               >
                 <Copy size={14} aria-hidden="true" />
@@ -19123,6 +19464,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleDebugSelectedNodeInStudio}
                 disabled={!selectedDebugNodeId}
+                aria-label="Depurar"
                 title={selectedDebugNodeId ? `Abrir ${selectedDebugNodeId} no Studio Local` : "Selecione um nó para depurar"}
               >
                 <Gauge size={14} aria-hidden="true" />
@@ -19133,6 +19475,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleAlignSelectedNodes}
                 disabled={!canAlignCanvasNodes}
+                aria-label="Alinhar linha"
                 title={canAlignCanvasNodes ? "Alinhar nós selecionados pela linha média" : "Selecione ao menos dois nós"}
               >
                 <ArrowUp size={14} aria-hidden="true" />
@@ -19143,6 +19486,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleDistributeSelectedNodes}
                 disabled={!canDistributeCanvasNodes}
+                aria-label="Distribuir"
                 title={canDistributeCanvasNodes ? "Distribuir nós selecionados na horizontal" : "Selecione ao menos três nós"}
               >
                 <Boxes size={14} aria-hidden="true" />
@@ -19153,6 +19497,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleConnectSelectedNodesInSequence}
                 disabled={!canConnectCanvasSequence}
+                aria-label="Conectar sequência"
                 title={
                   canConnectCanvasSequence
                     ? "Criar conexões faltantes entre os nós selecionados pela ordem visual"
@@ -19167,6 +19512,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleApplyTagsToSelectedNodes}
                 disabled={!selectedCanvasNodeIds.length}
+                aria-label="Aplicar tags"
                 title={selectedCanvasNodeIds.length ? "Aplicar tags aos nós selecionados" : "Selecione ao menos um nó"}
               >
                 <Tag size={14} aria-hidden="true" />
@@ -19177,6 +19523,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleClearTagsFromSelectedNodes}
                 disabled={!selectedCanvasNodesHaveTags}
+                aria-label="Limpar tags"
                 title={selectedCanvasNodesHaveTags ? "Remover tags dos nós selecionados" : "Seleção sem tags"}
               >
                 <X size={14} aria-hidden="true" />
@@ -19187,6 +19534,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleOpenSelectedNodePrompt}
                 disabled={!selectedNodePromptExists}
+                aria-label="Abrir prompt"
                 title={selectedEditableNode?.promptId ? `Abrir prompt ${selectedEditableNode.promptId}` : "Nó sem prompt vinculado"}
               >
                 <FileText size={14} aria-hidden="true" />
@@ -19197,6 +19545,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button"
                 onClick={handleOpenSelectedNodeSchema}
                 disabled={!selectedNodeSchemaExists}
+                aria-label="Abrir schema"
                 title={selectedEditableNode?.outputSchema ? `Abrir schema ${selectedEditableNode.outputSchema}` : "Nó sem schema vinculado"}
               >
                 <FileJson size={14} aria-hidden="true" />
@@ -19207,6 +19556,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 className="canvas-action-button danger"
                 onClick={handleDeleteCanvasSelection}
                 disabled={!selectedCanvasActionCount}
+                title="Remover seleção"
+                aria-label="Remover seleção"
               >
                 <Trash2 size={14} aria-hidden="true" />
                 <span>Remover seleção</span>
@@ -19252,7 +19603,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
           </ReactFlow>
         </section>
 
-        <aside className="right-panel">
+        <aside className="right-panel nodrag nowheel">
           <div className="tabs" role="tablist" aria-label="Inspector">
             <button
               type="button"
@@ -19359,6 +19710,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                   debugContext={selectedNodeDebugContext}
                   debugPinStatus={selectedNodeDebugPinStatus}
                   llmAdapters={llmAdapters}
+                  llmModelCatalogs={llmModelCatalogs}
+                  llmModelCatalogBusyKeys={llmModelCatalogBusyKeys}
                   localLlmProviderStatus={localLlmProviderStatus}
                   localLlmProviderBusy={localLlmProviderBusy}
                   safetyPolicyProfiles={safetyPolicyProfiles}
@@ -19377,6 +19730,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                   vmRunnerCheck={selectedNode ? vmRunnerChecks[selectedNode.id] ?? null : null}
                   vmRunnerCheckBusy={selectedNode ? vmRunnerCheckBusyNodeId === selectedNode.id : false}
                   onFlowFieldChange={updateFlowField}
+                  onFlowTriggersChange={updateFlowTriggers}
                   onFlowLlmAdapterChange={updateFlowLlmAdapter}
                   onFlowLlmFieldChange={updateFlowLlmField}
                   onCheckLocalLlmProvider={handleCheckLocalLlmProvider}
@@ -19659,6 +20013,8 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
               dirty={runtimeManifestDirty}
               flows={flows}
               llmAdapters={llmAdapters}
+              llmModelCatalogs={llmModelCatalogs}
+              llmModelCatalogBusyKeys={llmModelCatalogBusyKeys}
               loadState={runtimeManifestLoadState}
               validation={manifestValidation}
               generation={manifestGeneration}
@@ -20075,6 +20431,79 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
         <Send size={16} aria-hidden="true" />
         <span>{status.message}</span>
       </footer>
+    </div>
+  );
+}
+
+function TextPromptDialog({
+  dialog,
+  value,
+  inputRef,
+  onValueChange,
+  onCancel,
+  onSubmit,
+}: {
+  dialog: TextPromptDialogState;
+  value: string;
+  inputRef: RefObject<HTMLInputElement | null>;
+  onValueChange: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  const trimmedValue = value.trim();
+
+  return (
+    <div className="text-prompt-backdrop nodrag nowheel" role="presentation" onMouseDown={onCancel}>
+      <form
+        className="text-prompt-dialog nodrag nowheel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="text-prompt-dialog-title"
+        aria-describedby={dialog.description ? "text-prompt-dialog-description" : undefined}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (trimmedValue) {
+            onSubmit();
+          }
+        }}
+      >
+        <div className="text-prompt-dialog-header">
+          <div>
+            <h2 id="text-prompt-dialog-title">{dialog.title}</h2>
+            {dialog.description ? <p id="text-prompt-dialog-description">{dialog.description}</p> : null}
+          </div>
+          <button type="button" className="icon-button" onClick={onCancel} aria-label="Fechar diálogo">
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+        <label className="text-prompt-field">
+          <span>{dialog.label}</span>
+          <input
+            ref={inputRef}
+            type="text"
+            autoFocus
+            value={value}
+            onChange={(event) => onValueChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                onCancel();
+              }
+            }}
+          />
+        </label>
+        <div className="text-prompt-actions">
+          <button type="button" className="command-button" onClick={onCancel}>
+            Cancelar
+          </button>
+          <button type="submit" className="command-button primary" disabled={!trimmedValue}>
+            {dialog.confirmLabel}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -23039,12 +23468,204 @@ function StudioNodeRunComparisonCard({
   );
 }
 
+function makeFlowTriggerId(triggers: FlowTrigger[]): string {
+  const existing = new Set(triggers.map((trigger) => trigger.id));
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `flow_trigger_${index}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `flow_trigger_${Date.now()}`;
+}
+
+function createDefaultFlowTrigger(triggers: FlowTrigger[]): FlowTrigger {
+  return {
+    id: makeFlowTriggerId(triggers),
+    label: "Worker periódico",
+    kind: "interval",
+    enabled: true,
+    intervalSeconds: 300,
+    userMessage: "Executar rotina agendada.",
+    input: {},
+    maxTurns: 3,
+    maxAttempts: 3,
+    autoFinish: false,
+  };
+}
+
+function parseObjectJson(value: string): Record<string, unknown> | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const parsed = JSON.parse(trimmed);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+}
+
+function FlowTriggersEditor({ flow, onChange }: { flow: AgentFlow; onChange: (triggers: FlowTrigger[]) => void }) {
+  const triggers = [...(flow.triggers ?? [])];
+  const updateTrigger = (triggerId: string, patch: Partial<FlowTrigger>) => {
+    onChange(triggers.map((trigger) => (trigger.id === triggerId ? { ...trigger, ...patch } : trigger)));
+  };
+  const removeTrigger = (triggerId: string) => {
+    onChange(triggers.filter((trigger) => trigger.id !== triggerId));
+  };
+  return (
+    <section className="flow-trigger-editor">
+      <div className="flow-trigger-editor-header">
+        <div>
+          <strong>Workers do flow</strong>
+          <span>Executam sessões em background quando o runtime/worker estiver rodando.</span>
+        </div>
+        <button type="button" className="icon-button" onClick={() => onChange([...triggers, createDefaultFlowTrigger(triggers)])} title="Adicionar worker">
+          <Plus size={15} aria-hidden="true" />
+        </button>
+      </div>
+      {triggers.length ? (
+        <div className="flow-trigger-list">
+          {triggers.map((trigger) => (
+            <div className="flow-trigger-card" key={trigger.id}>
+              <div className="flow-trigger-card-title">
+                <label className="flow-trigger-enabled">
+                  <input
+                    type="checkbox"
+                    checked={trigger.enabled !== false}
+                    onChange={(event) => updateTrigger(trigger.id, { enabled: event.target.checked })}
+                  />
+                  <span>{trigger.label || trigger.id}</span>
+                </label>
+                <button type="button" className="icon-button danger" onClick={() => removeTrigger(trigger.id)} title="Remover worker">
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              </div>
+              <label>
+                <span>ID</span>
+                <input value={trigger.id} onChange={(event) => updateTrigger(trigger.id, { id: event.target.value })} />
+              </label>
+              <label>
+                <span>Label</span>
+                <input value={trigger.label ?? ""} onChange={(event) => updateTrigger(trigger.id, { label: event.target.value })} />
+              </label>
+              <label>
+                <span>Tipo</span>
+                <select value={trigger.kind} onChange={(event) => updateTrigger(trigger.id, { kind: event.target.value as FlowTrigger["kind"] })}>
+                  <option value="interval">Intervalo</option>
+                  <option value="cron">Cron</option>
+                  <option value="event">Evento</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              {trigger.kind === "interval" ? (
+                <label>
+                  <span>Intervalo (s)</span>
+                  <input
+                    type="number"
+                    min={60}
+                    value={trigger.intervalSeconds ?? 300}
+                    onChange={(event) => updateTrigger(trigger.id, { intervalSeconds: Number(event.target.value) || 300 })}
+                  />
+                </label>
+              ) : null}
+              {trigger.kind === "cron" ? (
+                <label>
+                  <span>Cron</span>
+                  <input
+                    value={trigger.cronExpression ?? ""}
+                    placeholder="*/15 * * * *"
+                    onChange={(event) => updateTrigger(trigger.id, { cronExpression: event.target.value })}
+                  />
+                </label>
+              ) : null}
+              {trigger.kind === "event" ? (
+                <label>
+                  <span>Evento</span>
+                  <input
+                    value={trigger.eventType ?? ""}
+                    placeholder="catalog.updated"
+                    onChange={(event) => updateTrigger(trigger.id, { eventType: event.target.value })}
+                  />
+                </label>
+              ) : null}
+              <label>
+                <span>Mensagem</span>
+                <textarea
+                  value={trigger.userMessage ?? ""}
+                  rows={2}
+                  onChange={(event) => updateTrigger(trigger.id, { userMessage: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Input JSON</span>
+                <textarea
+                  key={`${trigger.id}-input-${JSON.stringify(trigger.input ?? {})}`}
+                  defaultValue={JSON.stringify(trigger.input ?? {}, null, 2)}
+                  rows={3}
+                  onBlur={(event) => {
+                    try {
+                      const parsed = parseObjectJson(event.currentTarget.value);
+                      if (!parsed) {
+                        event.currentTarget.setCustomValidity("Use um objeto JSON.");
+                        event.currentTarget.reportValidity();
+                        return;
+                      }
+                      event.currentTarget.setCustomValidity("");
+                      updateTrigger(trigger.id, { input: parsed });
+                    } catch {
+                      event.currentTarget.setCustomValidity("JSON inválido.");
+                      event.currentTarget.reportValidity();
+                    }
+                  }}
+                />
+              </label>
+              <div className="flow-trigger-grid">
+                <label>
+                  <span>Max turns</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={trigger.maxTurns ?? 3}
+                    onChange={(event) => updateTrigger(trigger.id, { maxTurns: Number(event.target.value) || 3 })}
+                  />
+                </label>
+                <label>
+                  <span>Tentativas</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={trigger.maxAttempts ?? 3}
+                    onChange={(event) => updateTrigger(trigger.id, { maxAttempts: Number(event.target.value) || 3 })}
+                  />
+                </label>
+              </div>
+              <label className="flow-trigger-enabled">
+                <input
+                  type="checkbox"
+                  checked={Boolean(trigger.autoFinish)}
+                  onChange={(event) => updateTrigger(trigger.id, { autoFinish: event.target.checked })}
+                />
+                <span>Finalizar sessão automaticamente</span>
+              </label>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="flow-trigger-empty">Nenhum worker configurado.</span>
+      )}
+    </section>
+  );
+}
+
 function NodeInspector({
   flow,
   node,
   debugContext,
   debugPinStatus,
   llmAdapters,
+  llmModelCatalogs,
+  llmModelCatalogBusyKeys,
   localLlmProviderStatus,
   localLlmProviderBusy,
   safetyPolicyProfiles,
@@ -23060,6 +23681,7 @@ function NodeInspector({
   vmRunnerCheck,
   vmRunnerCheckBusy,
   onFlowFieldChange,
+  onFlowTriggersChange,
   onFlowLlmAdapterChange,
   onFlowLlmFieldChange,
   onCheckLocalLlmProvider,
@@ -23106,6 +23728,8 @@ function NodeInspector({
   debugContext: StudioNodeDebugContext | null;
   debugPinStatus: StudioToolManagerItem["pinStatus"];
   llmAdapters: LlmAdapterCatalogItem[];
+  llmModelCatalogs: Record<string, LlmModelCatalogResult>;
+  llmModelCatalogBusyKeys: Record<string, boolean>;
   localLlmProviderStatus: LocalLlmProviderStatus | null;
   localLlmProviderBusy: boolean;
   safetyPolicyProfiles: SafetyPolicyProfile[];
@@ -23121,6 +23745,7 @@ function NodeInspector({
   vmRunnerCheck: VmRunnerCheckResult | null;
   vmRunnerCheckBusy: boolean;
   onFlowFieldChange: <K extends keyof Pick<AgentFlow, "name" | "version">>(key: K, value: AgentFlow[K]) => void;
+  onFlowTriggersChange: (triggers: FlowTrigger[]) => void;
   onFlowLlmAdapterChange: (adapterId: string) => void;
   onFlowLlmFieldChange: (key: keyof AgentFlow["llm"], value: string) => void;
   onCheckLocalLlmProvider: () => Promise<void>;
@@ -23171,8 +23796,12 @@ function NodeInspector({
     );
   }
   const adapterOptions = llmAdapterOptions(llmAdapters, flow.llm.adapter);
-  const nodeAdapterOptions = llmAdapterOptions(llmAdapters, String(node.llm?.adapter ?? flow.llm.adapter));
+  const nodeLlmConfig = llmConfigForNode(node, flow);
+  const nodeAdapterOptions = llmAdapterOptions(llmAdapters, nodeLlmConfig.adapter);
   const selectedFlowAdapter = adapterOptions.find((adapter) => adapter.id === flow.llm.adapter);
+  const selectedNodeAdapter = nodeAdapterOptions.find((adapter) => adapter.id === nodeLlmConfig.adapter);
+  const flowModelCatalogKey = llmModelCatalogKey(flow.llm.adapter, flow.llm.baseUrlEnv || selectedFlowAdapter?.baseUrlEnv);
+  const nodeModelCatalogKey = llmModelCatalogKey(nodeLlmConfig.adapter, nodeLlmConfig.baseUrlEnv || selectedNodeAdapter?.baseUrlEnv);
   const isLlmNode = node.type === "llm_prompt" || node.type === "llm_structured";
   const isCodeNode = node.type === "code";
   const isSafetyNode = node.type === "safety_gate";
@@ -23318,7 +23947,12 @@ function NodeInspector({
         ) : null}
         <label>
           <span>Modelo LLM</span>
-          <input value={flow.llm.model} onChange={(event) => onFlowLlmFieldChange("model", event.target.value)} />
+          <LlmModelField
+            value={flow.llm.model}
+            catalog={llmModelCatalogs[flowModelCatalogKey]}
+            busy={Boolean(llmModelCatalogBusyKeys[flowModelCatalogKey])}
+            onChange={(value) => onFlowLlmFieldChange("model", value)}
+          />
         </label>
         <label>
           <span>API key env</span>
@@ -23333,6 +23967,7 @@ function NodeInspector({
           <input value={flow.llm.mockEnv ?? ""} onChange={(event) => onFlowLlmFieldChange("mockEnv", event.target.value)} />
         </label>
       </div>
+      <FlowTriggersEditor flow={flow} onChange={onFlowTriggersChange} />
       <div className="node-title">
         <strong>{node.id}</strong>
         <span>{node.type}</span>
@@ -23410,7 +24045,7 @@ function NodeInspector({
               <label>
                 <span>Adapter do nó</span>
                 <select
-                  value={String(node.llm?.adapter ?? flow.llm.adapter)}
+                  value={nodeLlmConfig.adapter}
                   onChange={(event) => onNodeLlmAdapterChange(node.id, event.target.value)}
                 >
                   {nodeAdapterOptions.map((adapter) => (
@@ -23423,9 +24058,11 @@ function NodeInspector({
               </label>
               <label>
                 <span>Modelo do nó</span>
-                <input
-                  value={String(node.llm?.model ?? flow.llm.model)}
-                  onChange={(event) => onNodeLlmFieldChange(node.id, "model", event.target.value)}
+                <LlmModelField
+                  value={nodeLlmConfig.model}
+                  catalog={llmModelCatalogs[nodeModelCatalogKey]}
+                  busy={Boolean(llmModelCatalogBusyKeys[nodeModelCatalogKey])}
+                  onChange={(value) => onNodeLlmFieldChange(node.id, "model", value)}
                 />
               </label>
             </>
@@ -24546,6 +25183,16 @@ function NodeInspector({
           {isDatabaseQueryNode ? (
             <>
               <label>
+                <span>Modo SQL</span>
+                <select value={(node.sqlMode ?? "auto") as SqlMode} onChange={(event) => onNodeFieldChange(node.id, "sqlMode", event.target.value)}>
+                  {sqlModeOptions.map((option) => (
+                    <option value={option.value} key={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 <span>Query SQL</span>
                 <textarea value={node.query ?? ""} onChange={(event) => onNodeFieldChange(node.id, "query", event.target.value)} rows={4} />
               </label>
@@ -24567,6 +25214,16 @@ function NodeInspector({
           ) : null}
           {isDatabaseSaveNode ? (
             <>
+              <label>
+                <span>Modo SQL</span>
+                <select value={(node.sqlMode ?? "auto") as SqlMode} onChange={(event) => onNodeFieldChange(node.id, "sqlMode", event.target.value)}>
+                  {sqlModeOptions.map((option) => (
+                    <option value={option.value} key={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 <span>Tabela</span>
                 <input value={node.table ?? ""} onChange={(event) => onNodeFieldChange(node.id, "table", event.target.value)} />
@@ -24989,12 +25646,17 @@ function AssetsPanel({
             </button>
           </div>
         ) : null}
-        <textarea
-          className="asset-editor prompt-editor"
-          value={promptContent}
-          onChange={(event) => onPromptChange(event.target.value)}
-          spellCheck={false}
-        />
+        <label className="asset-editor-field">
+          <span>Conteúdo do prompt</span>
+          <textarea
+            className="asset-editor prompt-editor"
+            value={promptContent}
+            onChange={(event) => onPromptChange(event.target.value)}
+            placeholder={selectedPrompt ? "Edite aqui o texto do prompt selecionado." : "Selecione ou crie um prompt para editar."}
+            disabled={!selectedPrompt}
+            spellCheck={false}
+          />
+        </label>
         <button type="button" className="command-button primary full-width" onClick={onPromptSave} disabled={!selectedPromptId || !promptDirty}>
           Salvar prompt
         </button>
@@ -25093,12 +25755,17 @@ function AssetsPanel({
         {selectedSchema ? (
           <SchemaVisualEditor flow={flow} schemaRef={selectedSchema} content={schemaContent} onChange={onSchemaChange} />
         ) : null}
-        <textarea
-          className="asset-editor schema-editor"
-          value={schemaContent}
-          onChange={(event) => onSchemaChange(event.target.value)}
-          spellCheck={false}
-        />
+        <label className="asset-editor-field">
+          <span>Conteúdo do schema JSON</span>
+          <textarea
+            className="asset-editor schema-editor"
+            value={schemaContent}
+            onChange={(event) => onSchemaChange(event.target.value)}
+            placeholder={selectedSchema ? "Edite aqui o JSON do schema selecionado." : "Selecione ou crie um schema para editar."}
+            disabled={!selectedSchema}
+            spellCheck={false}
+          />
+        </label>
         <button type="button" className="command-button primary full-width" onClick={onSchemaSave} disabled={!selectedSchemaId || !schemaDirty}>
           Salvar schema
         </button>
@@ -31856,6 +32523,69 @@ function CatalogPanel({
           <span>{catalog?.path ?? ".agent-flow/catalog/registry.json"}</span>
         </div>
         <PanelNotice state={loadState} />
+        <div className="catalog-toolbar catalog-search-toolbar">
+          <label className="catalog-search">
+            <span>Busca</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Nome, descrição ou tag"
+              aria-label="Buscar no catálogo"
+            />
+          </label>
+          <label>
+            <span>Tipo</span>
+            <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as LocalCatalogItemKind | "")}>
+              <option value="">Todos</option>
+              {catalogKindOptions.map((kind) => (
+                <option value={kind} key={kind}>
+                  {catalogKindLabel(kind)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Origem</span>
+            <select
+              value={sourceFilter}
+              aria-label="Filtrar origem do catálogo"
+              onChange={(event) => setSourceFilter(event.target.value as LocalCatalogItem["source"] | "")}
+            >
+              <option value="">Todas</option>
+              <option value="builtin">Embutidos</option>
+              <option value="local">Locais</option>
+            </select>
+          </label>
+          <label>
+            <span>Tag</span>
+            <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+              <option value="">Todas</option>
+              {availableTags.map((tag) => (
+                <option value={tag} key={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="command-button" onClick={onRefresh}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Atualizar
+          </button>
+          <button
+            type="button"
+            className="command-button"
+            onClick={() => {
+              setKindFilter("");
+              setSourceFilter("");
+              setTagFilter("");
+              setQuery("");
+            }}
+            disabled={!kindFilter && !sourceFilter && !tagFilter && !query}
+          >
+            <Search size={16} aria-hidden="true" />
+            Limpar
+          </button>
+        </div>
         {libraryGovernanceReport ? (
           <CatalogLibraryGovernancePanel
             report={libraryGovernanceReport}
@@ -32066,69 +32796,6 @@ function CatalogPanel({
             </div>
           </div>
         ) : null}
-        <div className="catalog-toolbar">
-          <label className="catalog-search">
-            <span>Busca</span>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Nome, descrição ou tag"
-              aria-label="Buscar no catálogo"
-            />
-          </label>
-          <label>
-            <span>Tipo</span>
-            <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as LocalCatalogItemKind | "")}>
-              <option value="">Todos</option>
-              {catalogKindOptions.map((kind) => (
-                <option value={kind} key={kind}>
-                  {catalogKindLabel(kind)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Origem</span>
-            <select
-              value={sourceFilter}
-              aria-label="Filtrar origem do catálogo"
-              onChange={(event) => setSourceFilter(event.target.value as LocalCatalogItem["source"] | "")}
-            >
-              <option value="">Todas</option>
-              <option value="builtin">Embutidos</option>
-              <option value="local">Locais</option>
-            </select>
-          </label>
-          <label>
-            <span>Tag</span>
-            <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
-              <option value="">Todas</option>
-              {availableTags.map((tag) => (
-                <option value={tag} key={tag}>
-                  {tag}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className="command-button" onClick={onRefresh}>
-            <RefreshCw size={16} aria-hidden="true" />
-            Atualizar
-          </button>
-          <button
-            type="button"
-            className="command-button"
-            onClick={() => {
-              setKindFilter("");
-              setSourceFilter("");
-              setTagFilter("");
-              setQuery("");
-            }}
-            disabled={!kindFilter && !sourceFilter && !tagFilter && !query}
-          >
-            <Search size={16} aria-hidden="true" />
-            Limpar
-          </button>
-        </div>
         <div className="catalog-toolbar">
           <button type="button" className="command-button" onClick={onSavePrompt} disabled={!selectedPromptId}>
             <Save size={16} aria-hidden="true" />
@@ -37281,6 +37948,8 @@ function RuntimeManifestPanel({
   dirty,
   flows,
   llmAdapters,
+  llmModelCatalogs,
+  llmModelCatalogBusyKeys,
   loadState,
   validation,
   generation,
@@ -37314,6 +37983,8 @@ function RuntimeManifestPanel({
   dirty: boolean;
   flows: FlowSummary[];
   llmAdapters: LlmAdapterCatalogItem[];
+  llmModelCatalogs: Record<string, LlmModelCatalogResult>;
+  llmModelCatalogBusyKeys: Record<string, boolean>;
   loadState: PanelLoadState;
   validation: RuntimeManifestValidationResult | null;
   generation: RuntimeManifestGenerateResult | null;
@@ -37377,6 +38048,12 @@ function RuntimeManifestPanel({
   const defaultLlm = manifest.defaultLlm;
   const defaultLlmEnabled = Boolean(defaultLlm);
   const adapterOptions = llmAdapterOptions(llmAdapters, defaultLlm?.adapter ?? "");
+  const selectedDefaultLlmAdapter = defaultLlm
+    ? adapterOptions.find((adapter) => adapter.id === defaultLlm.adapter)
+    : null;
+  const defaultLlmModelCatalogKey = defaultLlm
+    ? llmModelCatalogKey(defaultLlm.adapter, defaultLlm.baseUrlEnv || selectedDefaultLlmAdapter?.baseUrlEnv)
+    : "";
   const generatedAgents = generation?.agents ?? [];
   const bundleAgents = buildRuntimeBundleAgentViews(manifest, validation, flows);
   const compositionRecommendations = buildRuntimeManifestCompositionRecommendations(manifest, flows);
@@ -37471,7 +38148,12 @@ function RuntimeManifestPanel({
             </label>
             <label>
               <span>Modelo</span>
-              <input value={defaultLlm.model} onChange={(event) => onManifestLlmFieldChange("model", event.target.value)} />
+              <LlmModelField
+                value={defaultLlm.model}
+                catalog={llmModelCatalogs[defaultLlmModelCatalogKey]}
+                busy={Boolean(llmModelCatalogBusyKeys[defaultLlmModelCatalogKey])}
+                onChange={(value) => onManifestLlmFieldChange("model", value)}
+              />
             </label>
             <label>
               <span>API key env</span>
@@ -50240,6 +50922,9 @@ function toReactFlowGraph(
   staleTopology: StaleTopology,
 ): { nodes: Node[]; edges: Edge[] } {
   if (!flow) {
+    return { nodes: [], edges: [] };
+  }
+  if (!flow.nodes.length && !flow.edges.length) {
     return { nodes: [], edges: [] };
   }
   const nodeStates = inferNodeExecutionStates(events);
@@ -63497,15 +64182,26 @@ function dockerProgressMatchesLevel(step: DockerRuntimeProgressEvent, level: Doc
   return step.status === "info" || step.status === "running";
 }
 
-function isEditableShortcutTarget(target: EventTarget | null): boolean {
+const editableControlSelector = [
+  "input:not(.visually-hidden)",
+  "textarea",
+  "select",
+  "[contenteditable='true']",
+  "[role='textbox']",
+].join(",");
+
+function closestEditableControl(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof HTMLElement)) {
-    return false;
+    return null;
   }
   if (target.isContentEditable) {
-    return true;
+    return target;
   }
-  const tagName = target.tagName.toLowerCase();
-  return tagName === "input" || tagName === "textarea" || tagName === "select";
+  return target.closest<HTMLElement>(editableControlSelector);
+}
+
+function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  return Boolean(closestEditableControl(target));
 }
 
 function catalogKindLabel(kind: LocalCatalogItemKind): string {
@@ -64307,6 +65003,73 @@ function formatBytes(sizeBytes: number): string {
 
 function artifactBaseName(outDir: string): string {
   return outDir.split(/[\\/]/).filter(Boolean).at(-1) || "runtime-artifact";
+}
+
+interface LlmModelConfigLike {
+  adapter: string;
+  model: string;
+  apiKeyEnv?: string;
+  baseUrlEnv?: string;
+}
+
+function LlmModelField({
+  value,
+  catalog,
+  busy,
+  onChange,
+}: {
+  value: string;
+  catalog: LlmModelCatalogResult | undefined;
+  busy: boolean;
+  onChange: (value: string) => void;
+}) {
+  const models = catalog?.models ?? [];
+  const hasCurrentValue = value.trim() && models.some((model) => model.id === value);
+  const statusText = busy ? "Carregando modelos..." : catalog?.message ?? "Aguardando catálogo de modelos.";
+  return (
+    <div className="llm-model-field">
+      {models.length ? (
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          {!hasCurrentValue && value.trim() ? <option value={value}>{value}</option> : null}
+          {!value.trim() ? <option value="">Escolher modelo...</option> : null}
+          {models.map((model) => (
+            <option value={model.id} key={`${catalog?.adapter ?? "adapter"}-${model.id}`} title={model.description}>
+              {model.label === model.id ? model.id : `${model.label} - ${model.id}`}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input value={value} onChange={(event) => onChange(event.target.value)} />
+      )}
+      {statusText ? (
+        <small className={catalog && !catalog.ok ? "warning" : ""}>
+          {statusText}
+        </small>
+      ) : null}
+    </div>
+  );
+}
+
+function llmModelCatalogKey(adapterId: string, baseUrlEnv?: string): string {
+  return `${adapterId.trim().toLowerCase()}::${(baseUrlEnv ?? "").trim()}`;
+}
+
+function llmConfigForNode(node: FlowNode, flow: AgentFlow): LlmModelConfigLike {
+  const llm = isRecord(node.llm) ? node.llm : {};
+  return {
+    adapter: stringFromUnknown(llm.adapter) || flow.llm.adapter,
+    model: stringFromUnknown(llm.model) || flow.llm.model,
+    apiKeyEnv: stringFromUnknown(llm.apiKeyEnv) || flow.llm.apiKeyEnv,
+    baseUrlEnv: stringFromUnknown(llm.baseUrlEnv) || flow.llm.baseUrlEnv,
+  };
+}
+
+function isLlmNodeType(type: string): boolean {
+  return type === "llm_prompt" || type === "llm_structured";
+}
+
+function stringFromUnknown(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function llmAdapterOptions(adapters: LlmAdapterCatalogItem[], selectedAdapter: string): LlmAdapterCatalogItem[] {

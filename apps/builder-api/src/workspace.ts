@@ -355,6 +355,12 @@ export interface CreateFlowWorkspaceResult {
   schemas: FlowAssetContent[];
 }
 
+export interface DeleteFlowWorkspaceResult {
+  flowId: string;
+  flowPath: string;
+  flowRoot: string;
+}
+
 export interface SaveFlowResult {
   flow: AgentFlow;
   flowPath: string;
@@ -1041,7 +1047,7 @@ export async function listFlows(workspaceRoot: string): Promise<FlowSummary[]> {
 
 export async function createFlowWorkspace(workspaceRoot: string, value: unknown): Promise<CreateFlowWorkspaceResult> {
   const input = parseCreateFlowInput(value);
-  const flow = starterFlow(input);
+  const flow = blankFlow(input);
   const prompt: FlowAssetContent = {
     id: "system",
     path: "prompts/system.md",
@@ -1053,6 +1059,30 @@ export async function createFlowWorkspace(workspaceRoot: string, value: unknown)
     content: `${JSON.stringify(starterStateSchema(input.name), null, 2)}\n`,
   };
   return createFlowWorkspaceFromAssets(workspaceRoot, flow, [prompt], [stateSchema], "create");
+}
+
+export async function deleteFlowWorkspace(workspaceRoot: string, flowId: string): Promise<DeleteFlowWorkspaceResult> {
+  const root = normalizeWorkspaceRoot(workspaceRoot);
+  const summary = (await listFlows(root)).find((item) => item.id === flowId);
+  if (!summary) {
+    throw new WorkspaceError(`Flow não encontrado: ${flowId}`, 404);
+  }
+
+  const absoluteFlowPath = safeResolve(root, summary.path);
+  const flowRoot = path.dirname(absoluteFlowPath);
+  const flowsDir = safeResolve(root, "flows");
+  const normalizedFlowRoot = flowRoot.toLowerCase();
+  const normalizedFlowsDir = flowsDir.toLowerCase();
+  if (normalizedFlowRoot === normalizedFlowsDir || !normalizedFlowRoot.startsWith(`${normalizedFlowsDir}${path.sep}`)) {
+    throw new WorkspaceError(`Diretório de flow inválido para remoção: ${summary.path}`, 400);
+  }
+
+  await rm(flowRoot, { recursive: true, force: true });
+  return {
+    flowId: summary.id,
+    flowPath: summary.path,
+    flowRoot: toWorkspaceRelative(root, flowRoot),
+  };
 }
 
 async function createFlowWorkspaceFromAssets(
@@ -5331,6 +5361,15 @@ function toolBundleCatalogContent(nodes: AgentFlow["nodes"], edges: AgentFlow["e
   return `${JSON.stringify({ format: TOOL_BUNDLE_FORMAT, nodes, edges }, null, 2)}\n`;
 }
 
+function blankFlow(input: CreateFlowInput): AgentFlow {
+  const flow = starterFlow(input);
+  return {
+    ...flow,
+    nodes: [],
+    edges: [],
+  };
+}
+
 function starterFlow(input: CreateFlowInput): AgentFlow {
   return {
     id: input.id,
@@ -7068,6 +7107,7 @@ export async function generateRuntime(
 ): Promise<GenerateResult> {
   const root = normalizeWorkspaceRoot(workspaceRoot);
   const loaded = await loadFlowById(root, flowId);
+  assertFlowReadyForGeneration(loaded.flow);
   const outDir = requestedOutDir?.trim() || `generated/${loaded.flow.id}-runtime`;
   const absoluteOutDir = safeResolve(root, outDir);
   await mkdir(path.dirname(absoluteOutDir), { recursive: true });
@@ -7091,6 +7131,7 @@ export async function generateLangGraphSandboxArtifact(
 ): Promise<GenerateResult> {
   const root = normalizeWorkspaceRoot(workspaceRoot);
   const loaded = await loadFlowById(root, flowId);
+  assertFlowReadyForGeneration(loaded.flow);
   const outDir = requestedOutDir?.trim() || `generated/${loaded.flow.id}-langgraph-sandbox`;
   const absoluteOutDir = safeResolve(root, outDir);
   await mkdir(path.dirname(absoluteOutDir), { recursive: true });
@@ -7105,6 +7146,16 @@ export async function generateLangGraphSandboxArtifact(
     outDir: toWorkspaceRelative(root, absoluteOutDir),
     absoluteOutDir,
   };
+}
+
+function assertFlowReadyForGeneration(flow: AgentFlow): void {
+  if (flow.nodes.length && flow.edges.length) {
+    return;
+  }
+  throw new WorkspaceError(
+    `Flow ${flow.id} ainda não está pronto para geração. Adicione nós e conexões ao canvas antes de gerar o runtime.`,
+    422,
+  );
 }
 
 export async function approveLangGraphSandbox(
@@ -7711,6 +7762,9 @@ export async function generateRuntimeManifest(
   const root = normalizeWorkspaceRoot(workspaceRoot);
   const loaded = await loadRuntimeManifest(root);
   const agents = await resolveManifestAgents(root, loaded.manifest);
+  for (const agent of agents) {
+    assertFlowReadyForGeneration(agent.flow);
+  }
   const outDir = requestedOutDir?.trim() || `generated/${loaded.manifest.id}-bundle`;
   const absoluteOutDir = safeResolve(root, outDir);
   await mkdir(path.dirname(absoluteOutDir), { recursive: true });

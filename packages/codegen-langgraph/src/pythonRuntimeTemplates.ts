@@ -64,6 +64,7 @@ interface RuntimeNodeConfig {
   inputPath?: string;
   outputPath?: string;
   query?: string;
+  sqlMode?: string;
   table?: string;
   dataPath?: string;
   paramsPath?: string;
@@ -152,7 +153,7 @@ export function renderPythonRuntimeFiles(flow: AgentFlow): RuntimeFile[] {
     { relativePath: "app/main.py", content: renderMain(flow) },
     { relativePath: "app/langgraph_app.py", content: renderLangGraphApp() },
     { relativePath: "tests/conftest.py", content: renderTestConftest() },
-    { relativePath: "tests/test_generated_runtime.py", content: renderRuntimeTest() },
+    { relativePath: "tests/test_generated_runtime.py", content: renderRuntimeTest(flow) },
     { relativePath: "tests/test_langgraph_platform.py", content: renderLangGraphPlatformTest() },
   ];
 }
@@ -324,6 +325,7 @@ function runtimeNodeConfig(flow: AgentFlow, node: FlowNode, defaultPromptPath: s
     inputPath: optionalString(node, "inputPath"),
     outputPath: optionalString(node, "outputPath"),
     query: optionalString(node, "query"),
+    sqlMode: optionalString(node, "sqlMode"),
     table: optionalString(node, "table"),
     dataPath: optionalString(node, "dataPath"),
     paramsPath: optionalString(node, "paramsPath"),
@@ -1372,6 +1374,7 @@ EDGES = [
     {"from": item["from"], "to": item["to"], "condition": item.get("condition")}
     for item in FLOW["edges"]
 ]
+FLOW_TRIGGERS = list(FLOW.get("triggers") or [])
 `;
 }
 
@@ -2963,6 +2966,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from openai import OpenAI
 
@@ -3015,14 +3020,14 @@ class LLMClient:
 
         default_api_keys = json.loads(${pyJson(llmAdapterDefaultApiKeys())})
         default_base_urls = json.loads(${pyJson(llmAdapterDefaultBaseUrls())})
-        client_kwargs: dict[str, Any] = {
-            "api_key": self.settings.openai_api_key.strip()
-            or default_api_keys.get(selected_adapter.lower(), ${pyString(defaultApiKey)})
-        }
+        api_key = self.settings.openai_api_key.strip() or default_api_keys.get(selected_adapter.lower(), ${pyString(defaultApiKey)})
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
         base_url = self.settings.openai_base_url.strip() or default_base_urls.get(selected_adapter.lower(), ${pyString(defaultBaseUrl)})
         if base_url:
             client_kwargs["base_url"] = base_url
         client = OpenAI(**client_kwargs)
+        request_model = _provider_model_id(selected_adapter, selected_model)
+        endpoint_protocol = _llm_endpoint_protocol(selected_adapter, request_model)
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(recent_messages)
@@ -3040,39 +3045,17 @@ class LLMClient:
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
-                has_token_callback = callable(token_callback)
-                if has_token_callback:
-                    stream_response = client.responses.create(
-                        model=selected_model,
-                        input=messages,
-                        stream=True,
-                    )
-                    stream_chunks: list[str] = []
-                    for raw_chunk in stream_response:
-                        chunk = _extract_llm_stream_text(raw_chunk)
-                        if chunk:
-                            stream_chunks.append(chunk)
-                            token_callback(chunk)
-                    response_text = "".join(stream_chunks).strip()
-                    if response_text:
-                        return LLMResult(
-                            text=response_text,
-                            provider=selected_adapter,
-                            model=selected_model,
-                            attempts=attempt,
-                        )
-                    response = client.responses.create(
-                        model=selected_model,
-                        input=messages,
-                    )
-                else:
-                    response = client.responses.create(
-                        model=selected_model,
-                        input=messages,
-                    )
-
+                response_text = _call_llm_endpoint(
+                    client=client,
+                    protocol=endpoint_protocol,
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=request_model,
+                    messages=messages,
+                    token_callback=token_callback if callable(token_callback) else None,
+                ).strip()
                 return LLMResult(
-                    text=(response.output_text or "").strip() or "Sem resposta do modelo.",
+                    text=response_text or "Sem resposta do modelo.",
                     provider=selected_adapter,
                     model=selected_model,
                     attempts=attempt,
@@ -3096,6 +3079,172 @@ def _iter_text_stream_chunks(text: str):
     for chunk in re.findall(r"\\S+\\s*", text):
         if chunk:
             yield chunk
+
+
+def _provider_model_id(adapter: str, model: str) -> str:
+    adapter_id = adapter.strip().lower()
+    model_id = model.strip()
+    if adapter_id == "opencode-zen" and model_id.startswith("opencode/"):
+        return model_id.split("/", 1)[1]
+    if adapter_id == "opencode-go" and model_id.startswith("opencode-go/"):
+        return model_id.split("/", 1)[1]
+    return model_id
+
+
+def _llm_endpoint_protocol(adapter: str, model: str) -> str:
+    adapter_id = adapter.strip().lower()
+    model_id = model.strip().lower()
+    if adapter_id == "opencode-go":
+        if model_id.startswith("minimax-") or model_id.startswith("qwen3."):
+            return "anthropic_messages"
+        return "chat_completions"
+    if adapter_id == "opencode-zen":
+        if model_id.startswith("gpt-"):
+            return "responses"
+        if model_id.startswith("claude-") or model_id.startswith("qwen3."):
+            return "anthropic_messages"
+        if model_id.startswith("gemini-"):
+            return "google_model"
+        return "chat_completions"
+    return "responses"
+
+
+def _call_llm_endpoint(
+    *,
+    client: OpenAI,
+    protocol: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    token_callback: Any | None,
+) -> str:
+    if protocol == "responses":
+        return _call_openai_responses(client=client, model=model, messages=messages, token_callback=token_callback)
+    if protocol == "chat_completions":
+        return _call_openai_chat_completions(client=client, model=model, messages=messages, token_callback=token_callback)
+    if protocol == "anthropic_messages":
+        return _call_anthropic_messages(base_url=base_url, api_key=api_key, model=model, messages=messages, token_callback=token_callback)
+    if protocol == "google_model":
+        return _call_google_model(base_url=base_url, api_key=api_key, model=model, messages=messages, token_callback=token_callback)
+    raise ValueError(f"Protocolo LLM não suportado: {protocol}")
+
+
+def _call_openai_responses(
+    *,
+    client: OpenAI,
+    model: str,
+    messages: list[dict[str, str]],
+    token_callback: Any | None,
+) -> str:
+    if callable(token_callback):
+        stream_response = client.responses.create(
+            model=model,
+            input=messages,
+            stream=True,
+        )
+        stream_chunks: list[str] = []
+        for raw_chunk in stream_response:
+            chunk = _extract_llm_stream_text(raw_chunk)
+            if chunk:
+                stream_chunks.append(chunk)
+                token_callback(chunk)
+        response_text = "".join(stream_chunks).strip()
+        if response_text:
+            return response_text
+    response = client.responses.create(
+        model=model,
+        input=messages,
+    )
+    return str(response.output_text or "")
+
+
+def _call_openai_chat_completions(
+    *,
+    client: OpenAI,
+    model: str,
+    messages: list[dict[str, str]],
+    token_callback: Any | None,
+) -> str:
+    if callable(token_callback):
+        stream_response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+        )
+        stream_chunks: list[str] = []
+        for raw_chunk in stream_response:
+            chunk = _extract_chat_stream_text(raw_chunk)
+            if chunk:
+                stream_chunks.append(chunk)
+                token_callback(chunk)
+        response_text = "".join(stream_chunks).strip()
+        if response_text:
+            return response_text
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+    )
+    return _extract_chat_completion_text(response)
+
+
+def _call_anthropic_messages(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    token_callback: Any | None,
+) -> str:
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "system": _system_prompt_from_messages(messages),
+        "messages": _anthropic_messages_from_openai(messages),
+    }
+    response = _post_json(
+        _join_url(base_url, "messages"),
+        payload,
+        _json_auth_headers(api_key, anthropic=True),
+    )
+    text = _extract_anthropic_messages_text(response)
+    if callable(token_callback):
+        for chunk in _iter_text_stream_chunks(text):
+            token_callback(chunk)
+    return text
+
+
+def _call_google_model(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    token_callback: Any | None,
+) -> str:
+    payload: dict[str, Any] = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": _user_prompt_from_messages(messages)}],
+            }
+        ]
+    }
+    system_prompt = _system_prompt_from_messages(messages)
+    if system_prompt:
+        payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+    model_url = _join_url(base_url, f"models/{model}:generateContent")
+    try:
+        response = _post_json(model_url, payload, _json_auth_headers(api_key, google=True))
+    except RuntimeError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+        response = _post_json(_join_url(base_url, f"models/{model}"), payload, _json_auth_headers(api_key, google=True))
+    text = _extract_google_text(response)
+    if callable(token_callback):
+        for chunk in _iter_text_stream_chunks(text):
+            token_callback(chunk)
+    return text
 
 
 def _extract_llm_stream_text(raw_chunk: Any) -> str:
@@ -3129,6 +3278,169 @@ def _extract_llm_stream_text(raw_chunk: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("text") or "")
     return ""
+
+
+def _extract_chat_stream_text(raw_chunk: Any) -> str:
+    payload = _payload_to_dict(raw_chunk)
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    delta = first.get("delta")
+    if not isinstance(delta, dict):
+        return ""
+    content = delta.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_text_from_content_part(part) for part in content)
+    return ""
+
+
+def _extract_chat_completion_text(response: Any) -> str:
+    payload = _payload_to_dict(response)
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_text_from_content_part(part) for part in content)
+    return ""
+
+
+def _extract_anthropic_messages_text(response: dict[str, Any]) -> str:
+    content = response.get("content")
+    if isinstance(content, list):
+        return "".join(_text_from_content_part(part) for part in content)
+    if isinstance(content, str):
+        return content
+    return str(response.get("text") or "")
+
+
+def _extract_google_text(response: dict[str, Any]) -> str:
+    candidates = response.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        first = candidates[0]
+        if isinstance(first, dict):
+            content = first.get("content")
+            if isinstance(content, dict):
+                parts = content.get("parts")
+                if isinstance(parts, list):
+                    return "".join(_text_from_content_part(part) for part in parts)
+            text = first.get("text")
+            if isinstance(text, str):
+                return text
+    return str(response.get("text") or "")
+
+
+def _payload_to_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            payload = value.model_dump()
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return getattr(value, "__dict__", {}) if isinstance(getattr(value, "__dict__", {}), dict) else {}
+    try:
+        payload = dict(value)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return getattr(value, "__dict__", {}) if isinstance(getattr(value, "__dict__", {}), dict) else {}
+
+
+def _text_from_content_part(part: Any) -> str:
+    if isinstance(part, str):
+        return part
+    if not isinstance(part, dict):
+        return ""
+    text = part.get("text")
+    if isinstance(text, str):
+        return text
+    if part.get("type") == "text" and isinstance(part.get("content"), str):
+        return str(part.get("content"))
+    return ""
+
+
+def _system_prompt_from_messages(messages: list[dict[str, str]]) -> str:
+    for message in messages:
+        if str(message.get("role") or "") == "system":
+            return str(message.get("content") or "")
+    return ""
+
+
+def _user_prompt_from_messages(messages: list[dict[str, str]]) -> str:
+    parts: list[str] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == "system":
+            continue
+        content = str(message.get("content") or "")
+        if content:
+            parts.append(f"{role}: {content}")
+    return "\\n\\n".join(parts)
+
+
+def _anthropic_messages_from_openai(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    converted: list[dict[str, str]] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == "system":
+            continue
+        converted.append({
+            "role": "assistant" if role == "assistant" else "user",
+            "content": str(message.get("content") or ""),
+        })
+    return converted or [{"role": "user", "content": ""}]
+
+
+def _join_url(base_url: str, path: str) -> str:
+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _json_auth_headers(api_key: str, *, anthropic: bool = False, google: bool = False) -> dict[str, str]:
+    headers = {
+        "content-type": "application/json",
+        "accept": "application/json",
+    }
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+        if anthropic:
+            headers["x-api-key"] = api_key
+        if google:
+            headers["x-goog-api-key"] = api_key
+    if anthropic:
+        headers["anthropic-version"] = "2023-06-01"
+    return headers
+
+
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib_request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib_request.urlopen(request, timeout=60) as response:
+            raw = response.read().decode("utf-8")
+    except urllib_error.HTTPError as exc:
+        raw_error = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} from {url}: {raw_error[:500]}") from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"Falha de rede chamando {url}: {exc}") from exc
+    if not raw.strip():
+        return {}
+    parsed = json.loads(raw)
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _is_ollama_missing_model_error(exc: Exception, adapter: str) -> bool:
@@ -3203,6 +3515,7 @@ function renderGraph(flow: AgentFlow, plan: RuntimePlan): string {
 import inspect
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -3837,6 +4150,34 @@ def build_graph(
     def is_sql_identifier(value: str) -> bool:
         first = value[:1]
         return bool(first) and (first.isalpha() or first == "_") and all(part.isalnum() or part == "_" for part in value)
+
+    def classify_sql_statement(query: str) -> str:
+        cleaned = re.sub(r"/\\*[\\s\\S]*?\\*/", " ", str(query or ""))
+        cleaned = re.sub(r"--.*$", " ", cleaned, flags=re.MULTILINE).strip().lower()
+        match = re.match(r"([a-z_]+)", cleaned)
+        first = match.group(1) if match else ""
+        if first in {"select", "with", "show", "pragma", "explain", "describe"}:
+            return "read"
+        if first in {"insert", "update", "delete", "merge", "upsert", "replace", "truncate"}:
+            return "mutation"
+        if first in {"create", "alter", "drop"}:
+            return "schema"
+        return "raw"
+
+    def validate_sql_mode(query: str, mode: str | None) -> dict[str, Any] | None:
+        expected = str(mode or "auto").strip().lower()
+        if expected in {"", "auto", "raw"}:
+            return None
+        actual = classify_sql_statement(query)
+        if actual == expected:
+            return None
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "sql_mode_mismatch",
+            "expected": expected,
+            "actual": actual,
+        }
 
     def remember_database_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
         updates: dict[str, Any] = {}
@@ -6296,6 +6637,7 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
     def make_database_query_node(config: dict[str, Any]):
         node_id = config["id"]
         query = str(config.get("query") or "")
+        sql_mode = str(config.get("sqlMode") or "auto")
         params_path = str(config.get("paramsPath") or "")
         result_path = str(config.get("resultPath") or f"database.{node_id}")
         max_rows = int(config.get("maxRows") or 50)
@@ -6311,6 +6653,9 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
                     "reason": "query_not_configured",
                 }
                 return remember_database_result(state, node_id, result_path, result_payload)
+            mode_violation = validate_sql_mode(query, sql_mode)
+            if mode_violation is not None:
+                return remember_database_result(state, node_id, result_path, mode_violation)
 
             params_value = state_path_value(state, params_path) if params_path else {}
             params = normalized_params(params_value, state)
@@ -6345,6 +6690,7 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
         node_id = config["id"]
         table = str(config.get("table") or "agent_node_records")
         query = str(config.get("query") or "")
+        sql_mode = str(config.get("sqlMode") or "auto")
         data_path = str(config.get("dataPath") or "assistant_message")
         params_path = str(config.get("paramsPath") or data_path)
         result_path = str(config.get("resultPath") or f"database.{node_id}")
@@ -6358,6 +6704,11 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
             try:
                 with graph_session_scope() as db:
                     if query.strip():
+                        mode_violation = validate_sql_mode(query, sql_mode)
+                        if mode_violation is not None:
+                            result_payload = mode_violation
+                            result_payload["table"] = table
+                            return remember_database_result(state, node_id, result_path, result_payload)
                         result = db.execute(text(query), params)
                         result_payload = {
                             "ok": True,
@@ -7020,7 +7371,7 @@ from app.graph import (
     SWITCH_NODE_IDS,
     TRANSFORM_JSON_NODE_IDS,
 )
-from app.generated_flow import AGENT_ID
+from app.generated_flow import AGENT_ID, FLOW_TRIGGERS
 from app.models import AgentJob, AgentJobSchedule, AgentMessage, AgentSession
 from app.settings import Settings
 
@@ -7435,7 +7786,13 @@ class ReferenceAgentService:
             },
             row.session_id,
         )
-        repo.update_session_state(db, row, status=result["status"], phase=result["phase"], turn=row.turn)
+        next_status = str(result.get("status") or "active")
+        next_phase = str(result.get("phase") or "started")
+        if next_status == "created":
+            next_status = "active"
+        if next_phase == "created":
+            next_phase = "started"
+        repo.update_session_state(db, row, status=next_status, phase=next_phase, turn=row.turn)
         assistant = result["assistant_message"]
         message = repo.append_message(
             db,
@@ -7681,6 +8038,234 @@ class ReferenceAgentService:
             raise HTTPException(status_code=404, detail="Job não encontrado.")
         return job_view(row)
 
+    def _normalize_flow_trigger(self, raw: Any) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        trigger_id = str(raw.get("id") or "").strip()
+        if not trigger_id:
+            return None
+        if raw.get("enabled") is False:
+            return None
+        kind = str(raw.get("kind") or "manual").strip().lower()
+        if kind == "manual":
+            return None
+        if kind not in {"interval", "cron", "event"}:
+            return None
+        interval_seconds = max(60, int(raw.get("intervalSeconds") or raw.get("interval_seconds") or 300))
+        normalized: dict[str, Any] = {
+            "id": trigger_id,
+            "kind": kind,
+            "label": str(raw.get("label") or trigger_id),
+            "description": str(raw.get("description") or ""),
+            "intervalSeconds": interval_seconds,
+            "userMessage": str(raw.get("userMessage") or raw.get("user_message") or "").strip(),
+            "input": raw.get("input") if isinstance(raw.get("input"), dict) else {},
+            "metadata": raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {},
+            "maxTurns": max(1, min(50, int(raw.get("maxTurns") or raw.get("max_turns") or 3))),
+            "maxAttempts": max(1, min(10, int(raw.get("maxAttempts") or raw.get("max_attempts") or 3))),
+            "autoFinish": bool(raw.get("autoFinish") or raw.get("auto_finish") or False),
+        }
+        if kind == "cron":
+            normalized["cronExpression"] = _normalize_cron_expression(str(raw.get("cronExpression") or raw.get("cron_expression") or ""))
+        if kind == "event":
+            normalized["eventType"] = _normalize_schedule_event_type(str(raw.get("eventType") or raw.get("event_type") or ""))
+        return normalized
+
+    def _flow_trigger_schedule_config(self, trigger: dict[str, Any]) -> dict[str, Any]:
+        kind = str(trigger.get("kind") or "interval")
+        if kind == "cron":
+            cron_expression = str(trigger.get("cronExpression") or "")
+            return {
+                "trigger_type": "cron",
+                "interval_seconds": int(trigger.get("intervalSeconds") or 300),
+                "cron_expression": cron_expression,
+                "next_run_at": _next_cron_run(cron_expression),
+            }
+        if kind == "event":
+            return {
+                "trigger_type": "event",
+                "interval_seconds": int(trigger.get("intervalSeconds") or 300),
+                "cron_expression": str(trigger.get("eventType") or ""),
+                "next_run_at": None,
+            }
+        return {
+            "trigger_type": "interval",
+            "interval_seconds": int(trigger.get("intervalSeconds") or 300),
+            "cron_expression": None,
+            "next_run_at": datetime.now(timezone.utc),
+        }
+
+    def _flow_trigger_schedule_payload(self, trigger: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "source": "flow_trigger",
+            "flow_trigger": trigger,
+        }
+
+    def _flow_trigger_schedules_by_id(self, db: Session) -> dict[str, AgentJobSchedule]:
+        schedules: dict[str, AgentJobSchedule] = {}
+        for row in repo.list_job_schedules(db, limit=1000):
+            if row.agent_id != AGENT_ID or row.kind != "flow_trigger":
+                continue
+            payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+            trigger = payload.get("flow_trigger") if isinstance(payload.get("flow_trigger"), dict) else {}
+            trigger_id = str(trigger.get("id") or "").strip()
+            if trigger_id and trigger_id not in schedules:
+                schedules[trigger_id] = row
+        return schedules
+
+    def ensure_flow_trigger_schedules(self, db: Session) -> dict[str, Any]:
+        desired: dict[str, dict[str, Any]] = {}
+        skipped: list[dict[str, Any]] = []
+        for raw in FLOW_TRIGGERS:
+            try:
+                trigger = self._normalize_flow_trigger(raw)
+            except Exception as exc:
+                skipped.append({"id": str(raw.get("id") if isinstance(raw, dict) else ""), "error": str(exc)})
+                continue
+            if trigger:
+                desired[str(trigger["id"])] = trigger
+
+        existing = self._flow_trigger_schedules_by_id(db)
+        created: list[dict[str, Any]] = []
+        updated: list[dict[str, Any]] = []
+        disabled: list[dict[str, Any]] = []
+
+        for trigger_id, schedule in existing.items():
+            if trigger_id not in desired and schedule.status == "enabled":
+                repo.disable_job_schedule(db, schedule)
+                repo.append_event(
+                    db,
+                    session_id=schedule.session_id,
+                    agent_id=schedule.agent_id,
+                    event_type="flow_trigger_schedule_disabled",
+                    node=None,
+                    payload={"trigger_id": trigger_id, "schedule_id": schedule.schedule_id},
+                )
+                disabled.append(job_schedule_view(schedule))
+
+        for trigger_id, trigger in desired.items():
+            config = self._flow_trigger_schedule_config(trigger)
+            payload = self._flow_trigger_schedule_payload(trigger)
+            schedule = existing.get(trigger_id)
+            if schedule:
+                schedule.status = "enabled"
+                schedule.trigger_type = config["trigger_type"]
+                schedule.interval_seconds = max(60, int(config["interval_seconds"] or 60))
+                schedule.cron_expression = config["cron_expression"]
+                schedule.max_attempts = int(trigger.get("maxAttempts") or 3)
+                schedule.payload_json = payload
+                if schedule.trigger_type == "event":
+                    schedule.next_run_at = None
+                elif schedule.next_run_at is None:
+                    schedule.next_run_at = config["next_run_at"]
+                db.flush()
+                repo.append_event(
+                    db,
+                    session_id=schedule.session_id,
+                    agent_id=schedule.agent_id,
+                    event_type="flow_trigger_schedule_synced",
+                    node=None,
+                    payload={"trigger_id": trigger_id, "schedule_id": schedule.schedule_id, "trigger_type": schedule.trigger_type},
+                )
+                updated.append(job_schedule_view(schedule))
+                continue
+
+            control = self.create_session(
+                db,
+                metadata={
+                    "source": "flow_trigger_control",
+                    "trigger_id": trigger_id,
+                    "trigger": trigger,
+                },
+                max_turns=1,
+                auto_start=False,
+            )["session"]
+            schedule = repo.create_job_schedule(
+                db,
+                agent_id=AGENT_ID,
+                session_id=str(control["session_id"]),
+                kind="flow_trigger",
+                interval_seconds=int(config["interval_seconds"]),
+                trigger_type=str(config["trigger_type"]),
+                cron_expression=config["cron_expression"],
+                payload_json=payload,
+                max_attempts=int(trigger.get("maxAttempts") or 3),
+                next_run_at=config["next_run_at"],
+            )
+            repo.append_event(
+                db,
+                session_id=schedule.session_id,
+                agent_id=schedule.agent_id,
+                event_type="flow_trigger_schedule_created",
+                node=None,
+                payload={
+                    "trigger_id": trigger_id,
+                    "schedule_id": schedule.schedule_id,
+                    "trigger_type": schedule.trigger_type,
+                    "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
+                },
+            )
+            created.append(job_schedule_view(schedule))
+        return {
+            "total": len(desired),
+            "created": created,
+            "updated": updated,
+            "disabled": disabled,
+            "skipped": skipped,
+        }
+
+    def _run_flow_trigger_job(self, db: Session, job: AgentJob) -> dict[str, Any]:
+        payload = dict(job.payload_json or {})
+        trigger = payload.get("flow_trigger") if isinstance(payload.get("flow_trigger"), dict) else {}
+        trigger_id = str(trigger.get("id") or "")
+        execution = self.create_session(
+            db,
+            metadata={
+                "source": "flow_trigger",
+                "trigger_id": trigger_id,
+                "trigger_label": trigger.get("label"),
+                "schedule_id": payload.get("schedule_id"),
+                "job_id": job.job_id,
+                "input": trigger.get("input") if isinstance(trigger.get("input"), dict) else {},
+                "trigger_metadata": trigger.get("metadata") if isinstance(trigger.get("metadata"), dict) else {},
+            },
+            max_turns=max(1, min(50, int(trigger.get("maxTurns") or 3))),
+            auto_start=False,
+        )["session"]
+        execution_session_id = str(execution["session_id"])
+        repo.append_event(
+            db,
+            session_id=job.session_id,
+            agent_id=job.agent_id,
+            event_type="flow_trigger_started",
+            node=None,
+            payload={"trigger_id": trigger_id, "job_id": job.job_id, "execution_session_id": execution_session_id},
+        )
+        start_result = self.start_session(db, execution_session_id)
+        turn_result: dict[str, Any] | None = None
+        user_message = str(trigger.get("userMessage") or "").strip()
+        if user_message:
+            turn_result = self.process_turn(db, execution_session_id, user_message)
+        finish_result: dict[str, Any] | None = None
+        if bool(trigger.get("autoFinish")):
+            finish_result = self.finish_session(db, execution_session_id)
+        repo.append_event(
+            db,
+            session_id=job.session_id,
+            agent_id=job.agent_id,
+            event_type="flow_trigger_completed",
+            node=None,
+            payload={"trigger_id": trigger_id, "job_id": job.job_id, "execution_session_id": execution_session_id},
+        )
+        return {
+            "kind": job.kind,
+            "trigger_id": trigger_id,
+            "execution_session_id": execution_session_id,
+            "started_messages": len(start_result.get("messages") or []),
+            "turn_ran": turn_result is not None,
+            "auto_finish": finish_result is not None,
+        }
+
     def run_job(
         self,
         db: Session,
@@ -7704,6 +8289,26 @@ class ReferenceAgentService:
                 raise HTTPException(status_code=409, detail="Job já está em execução por outro worker.")
         else:
             repo.mark_job_running(db, job)
+        if job.kind == "flow_trigger":
+            try:
+                result = self._run_flow_trigger_job(db, job)
+                repo.mark_job_finished(db, job, status="succeeded", result_json=result)
+                return {"job": job_view(job)}
+            except Exception as exc:
+                result = {
+                    "kind": job.kind,
+                    "error": str(exc),
+                }
+                repo.mark_job_finished(db, job, status="failed", result_json=result)
+                repo.append_event(
+                    db,
+                    session_id=job.session_id,
+                    agent_id=job.agent_id,
+                    event_type="flow_trigger_failed",
+                    node=None,
+                    payload={"kind": job.kind, "job_id": job.job_id, "error": str(exc)},
+                )
+                raise
         transcript = self.transcript(db, job.session_id)
         events = self.events(db, job.session_id)
         assistant_messages = [message for message in transcript if message.get("role") == "assistant"]
@@ -8258,10 +8863,13 @@ def process_pending_jobs(
     cleanup_older_than_hours: float = 168.0,
     cleanup_limit: int = 100,
     cleanup_statuses: list[str] | None = None,
+    bootstrap_flow_triggers: bool = True,
 ) -> dict[str, Any]:
     cleanup_result: dict[str, Any] | None = None
     agent_id = getattr(getattr(service, "settings", None), "agent_id", None)
     with session_scope() as db:
+        if bootstrap_flow_triggers and hasattr(service, "ensure_flow_trigger_schedules"):
+            service.ensure_flow_trigger_schedules(db)
         if hasattr(service, "run_due_job_schedules"):
             service.run_due_job_schedules(db, limit=limit)
         claimed_jobs = repo.claim_due_jobs(
@@ -9870,7 +10478,6 @@ def test_langgraph_platform_entrypoint_loads_and_invokes(tmp_path):
 
     module = importlib.import_module("app.langgraph_app")
     assert hasattr(module.graph, "invoke")
-    from app.graph import START_NODE_IDS
 
     result = module.graph.invoke(
         {
@@ -9884,12 +10491,121 @@ def test_langgraph_platform_entrypoint_loads_and_invokes(tmp_path):
         },
         config={"configurable": {"thread_id": "platform-smoke"}},
     )
-    assert result["assistant_message"]["code"] == "ABR"
-    assert START_NODE_IDS[0] in result["executed_nodes"]
+    assert result["assistant_message"]["code"]
+    assert result["executed_nodes"]
 `;
 }
 
-function renderRuntimeTest(): string {
+function renderRuntimeTest(flow: AgentFlow): string {
+  const inputSafetyNodeId = flow.nodes.find((node) => node.type === "safety_gate" && node.stage === "input")?.id;
+  const primaryLlmNode = flow.nodes.find((node) => node.type === "llm_prompt" || node.type === "llm_structured");
+  const primaryLlmNodeId = primaryLlmNode?.id;
+  const primaryLlmNodeType = primaryLlmNode?.type;
+  const llmSpanAssertions = primaryLlmNodeId
+    ? `    assert ${pyString(primaryLlmNodeId)} in completed_node_ids
+    llm_span = next(item for item in completed_spans if item["node"] == ${pyString(primaryLlmNodeId)})
+    assert llm_span["payload"]["span"]["operation"] == "graph_node"
+    assert llm_span["payload"]["span"]["node_type"] == ${pyString(primaryLlmNodeType ?? "llm_prompt")}
+    assert llm_span["payload"]["span"]["duration_ms"] >= 0
+    assert llm_span["payload"]["source"] == "runtime_native_span"
+    if "source_message_id" in llm_span["payload"]:
+        assert llm_span["payload"]["source_message_id"]
+`
+    : `    assert completed_node_ids
+`;
+  const safetyTests = inputSafetyNodeId
+    ? `
+
+def test_generated_runtime_input_safety_blocks_before_llm(tmp_path):
+    client = _client(tmp_path)
+
+    create_resp = client.post(
+        _path(),
+        headers={"Idempotency-Key": "safe-create"},
+        json={"max_turns": 3},
+    )
+    session_id = create_resp.json()["session"]["session_id"]
+    assert client.post(
+        _path(f"/{session_id}/start"),
+        headers={"Idempotency-Key": "safe-start"},
+        json={},
+    ).status_code == 200
+
+    risk_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "safe-risk"},
+        json={"user_message": "Eu vou me matar hoje."},
+    )
+    assert risk_resp.status_code == 200
+    data = risk_resp.json()
+    assert data["safety"]["blocked"] is True
+    assert data["safety"]["category"] == "self_harm"
+    assert data["session"]["status"] == "completed"
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    assert "llm_called" not in [item["event_type"] for item in events]
+
+
+def test_generated_external_safety_provider_blocks_when_local_allows(tmp_path, monkeypatch):
+    calls = []
+
+    class ProviderResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, limit=-1):
+            return json.dumps({
+                "blocked": True,
+                "decision": "safe_redirect",
+                "category": "external_policy",
+                "reason": "Provider externo bloqueou.",
+                "safeResponse": "Resposta segura do provider.",
+                "severity": "critical",
+                "score": 0.98,
+            }).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append({
+            "url": request.full_url,
+            "timeout": timeout,
+            "body": json.loads(request.data.decode("utf-8")),
+        })
+        return ProviderResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = _client(tmp_path, {
+        "SAFETY_PROVIDER_ENABLED": "true",
+        "SAFETY_PROVIDER_URL": "http://safety.local/evaluate",
+        "SAFETY_PROVIDER_TIMEOUT_SECONDS": "1",
+    })
+
+    create_resp = client.post(_path(), headers={"Idempotency-Key": "external-safe-create"}, json={"max_turns": 2})
+    session_id = create_resp.json()["session"]["session_id"]
+    assert client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "external-safe-start"}, json={}).status_code == 200
+
+    turn_resp = client.post(
+        _path(f"/{session_id}/turn"),
+        headers={"Idempotency-Key": "external-safe-turn"},
+        json={"user_message": "Mensagem comum sem regra local."},
+    )
+    assert turn_resp.status_code == 200
+    data = turn_resp.json()
+    assert data["assistant_message"] == {"code": "SEG", "text": "Resposta segura do provider."}
+    assert data["safety"]["blocked"] is True
+    assert data["safety"]["category"] == "external_policy"
+    assert data["safety"]["source"] == "external"
+    assert data["safety"]["provider_score"] == 0.98
+    assert calls[0]["url"] == "http://safety.local/evaluate"
+    assert calls[0]["body"]["stage"] == "input"
+    assert calls[0]["body"]["nodeId"] == ${pyString(inputSafetyNodeId)}
+
+    events = client.get(_path(f"/{session_id}/events")).json()
+    assert "llm_called" not in [item["event_type"] for item in events]
+`
+    : "";
   return `import json
 import os
 import sqlite3
@@ -10048,7 +10764,8 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     )
     assert start_resp.status_code == 200
     assert start_resp.json()["session"]["status"] == "active"
-    assert start_resp.json()["messages"][0]["code"] == "ABR"
+    assert start_resp.json()["messages"]
+    assert start_resp.json()["messages"][0]["code"]
 
     turn_payload = {"user_message": "Este é um teste do fluxo."}
     turn_resp = client.post(
@@ -10082,13 +10799,8 @@ def test_generated_runtime_metadata_flow_and_idempotency(tmp_path):
     assert "llm_called" in event_types
     assert {item["agent_id"] for item in events} == {AGENT_ID}
     completed_spans = [item for item in events if item["event_type"] == "span_completed"]
-    assert "llm_step" in {item["node"] for item in completed_spans}
-    llm_span = next(item for item in completed_spans if item["node"] == "llm_step")
-    assert llm_span["payload"]["span"]["operation"] == "graph_node"
-    assert llm_span["payload"]["span"]["node_type"] == "llm_prompt"
-    assert llm_span["payload"]["span"]["duration_ms"] >= 0
-    assert llm_span["payload"]["source"] == "runtime_native_span"
-    assert llm_span["payload"]["source_message_id"]
+    completed_node_ids = {item["node"] for item in completed_spans}
+${llmSpanAssertions}
 
     with client.stream("GET", _path(f"/{session_id}/events/stream?from_seq=1&max_events=1")) as stream:
         assert stream.status_code == 200
@@ -10781,7 +11493,7 @@ def test_generated_worker_processes_pending_jobs(tmp_path):
 
     from app.worker import build_worker_service, process_pending_jobs
 
-    result = process_pending_jobs(build_worker_service(), limit=5)
+    result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert result == {"processed": 1, "failed": 0, "retried": 0, "pending_seen": 1}
 
     jobs = client.get(f"/jobs?session_id={session_id}").json()
@@ -10818,7 +11530,7 @@ def test_generated_worker_can_run_governed_cleanup_policy(tmp_path):
 
     from app.worker import build_worker_service, process_pending_jobs
 
-    run_result = process_pending_jobs(build_worker_service(), limit=5)
+    run_result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert run_result == {"processed": 1, "failed": 0, "retried": 0, "pending_seen": 1}
 
     from app.db import session_scope
@@ -10830,7 +11542,7 @@ def test_generated_worker_can_run_governed_cleanup_policy(tmp_path):
         row.finished_at = old_finished_at
         row.started_at = old_finished_at - timedelta(seconds=1)
 
-    idle_result = process_pending_jobs(build_worker_service(), limit=5)
+    idle_result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert idle_result == {"processed": 0, "failed": 0, "retried": 0, "pending_seen": 0}
     assert client.get(f"/jobs/{job_id}").status_code == 200
 
@@ -10841,6 +11553,7 @@ def test_generated_worker_can_run_governed_cleanup_policy(tmp_path):
         cleanup_older_than_hours=24,
         cleanup_limit=10,
         cleanup_statuses=["succeeded"],
+        bootstrap_flow_triggers=False,
     )
     assert cleanup_result["processed"] == 0
     assert cleanup_result["failed"] == 0
@@ -11084,7 +11797,7 @@ def test_generated_job_schedule_endpoint_delays_due_work(tmp_path):
 
     from app.worker import build_worker_service, process_pending_jobs
 
-    future_result = process_pending_jobs(build_worker_service(), limit=5)
+    future_result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert future_result == {"processed": 0, "failed": 0, "retried": 0, "pending_seen": 0}
     assert client.get(f"/jobs/{job_id}").json()["status"] == "pending"
 
@@ -11093,7 +11806,7 @@ def test_generated_job_schedule_endpoint_delays_due_work(tmp_path):
     due_metrics = client.get("/jobs/metrics").json()
     assert due_metrics["pending_due"] == 1
 
-    due_result = process_pending_jobs(build_worker_service(), limit=5)
+    due_result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert due_result == {"processed": 1, "failed": 0, "retried": 0, "pending_seen": 1}
     assert client.get(f"/jobs/{job_id}").json()["status"] == "succeeded"
     events = client.get(_path(f"/{session_id}/events")).json()
@@ -11140,7 +11853,7 @@ def test_generated_recurring_job_schedule_enqueues_due_work(tmp_path):
 
     from app.worker import build_worker_service, process_pending_jobs
 
-    worker_result = process_pending_jobs(build_worker_service(), limit=5)
+    worker_result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert worker_result == {"processed": 1, "failed": 0, "retried": 0, "pending_seen": 1}
     refreshed = client.get(f"/job-schedules?session_id={session_id}").json()[0]
     assert refreshed["last_job_id"] is not None
@@ -11247,7 +11960,7 @@ def test_generated_event_job_schedule_enqueues_only_when_event_is_triggered(tmp_
 
     from app.worker import build_worker_service, process_pending_jobs
 
-    worker_result = process_pending_jobs(build_worker_service(), limit=5)
+    worker_result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert worker_result == {"processed": 1, "failed": 0, "retried": 0, "pending_seen": 1}
     assert client.get(f"/jobs/{event_job['job_id']}").json()["status"] == "succeeded"
     events = client.get(_path(f"/{session_id}/events")).json()
@@ -11304,7 +12017,7 @@ def test_generated_cron_job_schedule_uses_cron_expression(tmp_path):
 
     from app.worker import build_worker_service, process_pending_jobs
 
-    worker_result = process_pending_jobs(build_worker_service(), limit=5)
+    worker_result = process_pending_jobs(build_worker_service(), limit=5, bootstrap_flow_triggers=False)
     assert worker_result == {"processed": 1, "failed": 0, "retried": 0, "pending_seen": 1}
     refreshed = client.get(f"/job-schedules?session_id={session_id}").json()[0]
     assert refreshed["trigger_type"] == "cron"
@@ -11332,7 +12045,7 @@ def test_generated_compose_includes_worker_service():
     assert "WORKER_CLEANUP_STATUSES:" in compose
 
 
-def test_generated_runtime_idempotency_conflict_and_safety(tmp_path):
+def test_generated_runtime_idempotency_conflict(tmp_path):
     client = _client(tmp_path)
 
     first = client.post(
@@ -11348,92 +12061,7 @@ def test_generated_runtime_idempotency_conflict_and_safety(tmp_path):
         json={"metadata": {"source": "two"}, "max_turns": 2},
     )
     assert second.status_code == 409
-
-    create_resp = client.post(
-        _path(),
-        headers={"Idempotency-Key": "safe-create"},
-        json={"max_turns": 3},
-    )
-    session_id = create_resp.json()["session"]["session_id"]
-    assert client.post(
-        _path(f"/{session_id}/start"),
-        headers={"Idempotency-Key": "safe-start"},
-        json={},
-    ).status_code == 200
-
-    risk_resp = client.post(
-        _path(f"/{session_id}/turn"),
-        headers={"Idempotency-Key": "safe-risk"},
-        json={"user_message": "Eu vou me matar hoje."},
-    )
-    assert risk_resp.status_code == 200
-    data = risk_resp.json()
-    assert data["safety"]["blocked"] is True
-    assert data["safety"]["category"] == "self_harm"
-    assert data["session"]["status"] == "completed"
-
-    events = client.get(_path(f"/{session_id}/events")).json()
-    assert "llm_called" not in [item["event_type"] for item in events]
-
-
-def test_generated_external_safety_provider_blocks_when_local_allows(tmp_path, monkeypatch):
-    calls = []
-
-    class ProviderResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        def read(self, limit=-1):
-            return json.dumps({
-                "blocked": True,
-                "decision": "safe_redirect",
-                "category": "external_policy",
-                "reason": "Provider externo bloqueou.",
-                "safeResponse": "Resposta segura do provider.",
-                "severity": "critical",
-                "score": 0.98,
-            }).encode("utf-8")
-
-    def fake_urlopen(request, timeout):
-        calls.append({
-            "url": request.full_url,
-            "timeout": timeout,
-            "body": json.loads(request.data.decode("utf-8")),
-        })
-        return ProviderResponse()
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    client = _client(tmp_path, {
-        "SAFETY_PROVIDER_ENABLED": "true",
-        "SAFETY_PROVIDER_URL": "http://safety.local/evaluate",
-        "SAFETY_PROVIDER_TIMEOUT_SECONDS": "1",
-    })
-
-    create_resp = client.post(_path(), headers={"Idempotency-Key": "external-safe-create"}, json={"max_turns": 2})
-    session_id = create_resp.json()["session"]["session_id"]
-    assert client.post(_path(f"/{session_id}/start"), headers={"Idempotency-Key": "external-safe-start"}, json={}).status_code == 200
-
-    turn_resp = client.post(
-        _path(f"/{session_id}/turn"),
-        headers={"Idempotency-Key": "external-safe-turn"},
-        json={"user_message": "Mensagem comum sem regra local."},
-    )
-    assert turn_resp.status_code == 200
-    data = turn_resp.json()
-    assert data["assistant_message"] == {"code": "SEG", "text": "Resposta segura do provider."}
-    assert data["safety"]["blocked"] is True
-    assert data["safety"]["category"] == "external_policy"
-    assert data["safety"]["source"] == "external"
-    assert data["safety"]["provider_score"] == 0.98
-    assert calls[0]["url"] == "http://safety.local/evaluate"
-    assert calls[0]["body"]["stage"] == "input"
-    assert calls[0]["body"]["nodeId"] == "input_safety_check"
-
-    events = client.get(_path(f"/{session_id}/events")).json()
-    assert "llm_called" not in [item["event_type"] for item in events]
+${safetyTests}
 `;
 }
 

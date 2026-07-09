@@ -1,0 +1,48 @@
+{
+  "id": "novo-agente",
+  "name": "Novo Agente",
+  "version": "0.1.0",
+  "runtime": "langgraph-python",
+  "api": {
+    "contract": "sessions-v1",
+    "resourceName": "sessions",
+    "autoStartOnCreate": false
+  },
+  "persistence": {
+    "checkpointer": "postgres",
+    "publicStore": "postgres",
+    "cache": "redis"
+  },
+  "llm": {
+    "adapter": "openai",
+    "model": "gpt-4.1-mini",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "baseUrlEnv": "OPENAI_BASE_URL",
+    "mockEnv": "MOCK_LLM"
+  },
+  "state": {
+    "schemaRef": "session_state"
+  },
+  "prompts": [
+    {
+      "id": "system",
+      "path": "prompts/system.md",
+      "version": "v1",
+      "variables": [
+        "session_id",
+        "turn",
+        "max_turns",
+        "user_message",
+        "recent_messages"
+      ]
+    }
+  ],
+  "schemas": [
+    {
+      "id": "session_state",
+      "path": "schemas/session_state.schema.json"
+    }
+  ],
+  "nodes": [],
+  "edges": []
+}

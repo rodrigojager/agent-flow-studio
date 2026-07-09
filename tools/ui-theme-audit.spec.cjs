@@ -1873,8 +1873,10 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
 
   await openInspectorTab(page, "Catálogo");
   const questionAgent = page.locator(".catalog-card", { hasText: "Agente gerador de perguntas por conteúdo" });
-  page.once("dialog", (dialog) => dialog.accept("catalog-template-ui-agent"));
   await questionAgent.getByRole("button", { name: /^Criar flow$/ }).click();
+  const createFlowDialog = page.getByRole("dialog", { name: "Criar flow" });
+  await createFlowDialog.getByLabel("ID do novo flow").fill("catalog-template-ui-agent");
+  await createFlowDialog.getByRole("button", { name: "Criar flow" }).click();
   await expect(page.locator("footer[role='status']")).toContainText("Flow catalog-template-ui-agent criado a partir", {
     timeout: 10_000,
   });

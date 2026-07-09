@@ -48,6 +48,8 @@ import {
 import { evaluateExternalEvaluator } from "./evaluators.ts";
 import {
   checkLocalLlmProviderStatus,
+  listLlmAdapterModels,
+  type LlmModelCatalogQuery,
   type LocalLlmProviderStatusQuery,
 } from "./llm-local-provider.ts";
 import { SandboxManager } from "./sandbox.ts";
@@ -205,6 +207,7 @@ import {
   createFlowWorkspace,
   createPrompt,
   createSchemaAsset,
+  deleteFlowWorkspace,
   deletePrompt,
   deleteSchemaAsset,
   exportLocalCatalogItem,
@@ -423,6 +426,10 @@ interface BuilderAuthKeyParams {
   keyId: string;
 }
 
+interface LlmAdapterParams {
+  adapterId: string;
+}
+
 interface CollaborationConflictOverviewQuery {
   flowId?: string;
   area?: string;
@@ -630,6 +637,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
 
   app.get<{ Querystring: LocalLlmProviderStatusQuery }>("/llm-adapters/local-provider-status", async (request) =>
     checkLocalLlmProviderStatus(request.query),
+  );
+
+  app.get<{ Params: LlmAdapterParams; Querystring: LlmModelCatalogQuery }>("/llm-adapters/:adapterId/models", async (request) =>
+    listLlmAdapterModels(request.params.adapterId, request.query),
   );
 
   app.get("/runtime-manifest-schema", async () => runtimeManifestJsonSchema());
@@ -881,6 +892,17 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       flow: result.flow,
       prompts: result.prompts,
       schemas: result.schemas,
+    };
+  });
+
+  app.delete<{ Params: FlowParams }>("/flows/:flowId", async (request) => {
+    await assertWorkspaceGovernanceAuthorized(workspaceRoot, request, "runtime_delivery", "write");
+    const result = await deleteFlowWorkspace(workspaceRoot, request.params.flowId);
+    return {
+      status: "ok",
+      flowId: result.flowId,
+      path: result.flowPath,
+      root: result.flowRoot,
     };
   });
 

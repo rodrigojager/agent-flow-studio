@@ -2,7 +2,7 @@
 
 Este tutorial mostra o caminho visual para criar um agente simples no Agent Flow Studio, ajustar o prompt dele e exportar uma API FastAPI/Docker pronta para rodar fora do Builder.
 
-O exemplo cria um agente de conversa chamado `atendimento-simples`. Ele usa o template inicial do Studio, que ja vem com:
+O exemplo cria um agente de conversa chamado `atendimento-simples`. Ele usa o template `Agente de conversa guiada` do Catalogo, que ja vem com:
 
 - endpoint de sessoes (`sessions`);
 - prompt `system`;
@@ -38,18 +38,18 @@ http://127.0.0.1:5173
 
 Na tela principal do Builder:
 
-1. No topo da tela, encontre o seletor `Flow`.
-2. Ao lado do seletor, clique no botao com icone `+`.
-   - O tooltip/rotulo do botao e `Criar flow`.
-   - Alternativa: pressione `Ctrl+K`, digite `Criar flow` e selecione a acao `Criar flow`.
-3. O navegador abre um prompt com o texto `ID do novo flow`.
-4. Preencha:
+1. Abra a aba `Catalogo`.
+   - Alternativa: pressione `Ctrl+K`, digite `Abrir Catalogo` e selecione `Abrir Catalogo`.
+2. Encontre o template `Agente de conversa guiada`.
+3. No card do template, clique em `Criar flow`.
+4. O Studio abre o dialogo `Criar flow` com o campo `ID do novo flow`.
+5. Preencha:
 
 ```text
 atendimento-simples
 ```
 
-5. Confirme o prompt.
+6. Confirme em `Criar flow`.
 
 O Studio cria automaticamente:
 
@@ -60,6 +60,8 @@ flows/atendimento-simples/schemas/session_state.schema.json
 ```
 
 O nome visivel vira `Atendimento Simples`. O recurso da API fica como `sessions`, que e o padrao para agentes simples de conversa.
+
+Observacao: o botao `+` ao lado do seletor `Flow` cria um flow em branco para montar o canvas do zero. Para seguir este tutorial com um agente conversacional pronto para validar e exportar, use o template do Catalogo.
 
 ## 3. Editar o comportamento do agente
 
@@ -228,7 +230,7 @@ Nao coloque chaves no `agent.flow.json`, em prompts, schemas ou arquivos version
 
 Use esta ordem quando quiser repetir o processo:
 
-1. `+` / `Criar flow`
+1. `Catalogo` > `Agente de conversa guiada` > `Criar flow`
 2. preencher `ID do novo flow`
 3. `Arquivos` > `Prompt` > editar `system`
 4. `Salvar prompt`

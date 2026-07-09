@@ -4,6 +4,7 @@ import type {
   EventView,
   FlowAssetContent,
   FlowAssetDeleteResult,
+  FlowDeleteResult,
   FlowAssetMutationResult,
   FlowSummary,
   FlowWorkspaceExport,
@@ -68,6 +69,7 @@ import type {
   LocalCatalogSharedLibraryPackage,
   LocalCatalogSharedSyncResult,
   LlmAdapterCatalogResult,
+  LlmModelCatalogResult,
   LocalLlmProviderStatus,
   LoadedFlow,
   LangGraphSandboxApprovalStatus,
@@ -202,8 +204,34 @@ export async function createFlowWorkspace(id: string): Promise<CreatedFlowWorksp
   });
 }
 
+export async function deleteFlowWorkspace(flowId: string): Promise<FlowDeleteResult> {
+  return request<FlowDeleteResult>(`/flows/${encodeURIComponent(flowId)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function listLlmAdapters(): Promise<LlmAdapterCatalogResult> {
   return request<LlmAdapterCatalogResult>("/llm-adapters");
+}
+
+export async function listLlmAdapterModels(input: {
+  adapter: string;
+  baseUrl?: string;
+  baseUrlEnv?: string;
+  apiKeyEnv?: string;
+}): Promise<LlmModelCatalogResult> {
+  const params = new URLSearchParams();
+  if (input.baseUrl?.trim()) {
+    params.set("baseUrl", input.baseUrl.trim());
+  }
+  if (input.baseUrlEnv?.trim()) {
+    params.set("baseUrlEnv", input.baseUrlEnv.trim());
+  }
+  if (input.apiKeyEnv?.trim()) {
+    params.set("apiKeyEnv", input.apiKeyEnv.trim());
+  }
+  const query = params.toString();
+  return request<LlmModelCatalogResult>(`/llm-adapters/${encodeURIComponent(input.adapter)}/models${query ? `?${query}` : ""}`);
 }
 
 export async function checkLocalLlmProviderStatus(input: {

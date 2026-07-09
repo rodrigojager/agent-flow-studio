@@ -6426,6 +6426,101 @@ test("Builder API checks local Ollama status and blocks remote provider URLs", a
   assert.equal(remote.statusCode, 200);
   assert.equal(remote.json().status, "blocked");
   assert.equal(remote.json().ok, false);
+
+  const localCatalog = await app.inject({
+    method: "GET",
+    url:
+      "/llm-adapters/ollama/models?" +
+      new URLSearchParams({
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      }).toString(),
+  });
+  assert.equal(localCatalog.statusCode, 200);
+  assert.equal(localCatalog.json().format, "agent-flow-builder.llm-model-catalog.v1");
+  assert.equal(localCatalog.json().status, "ok");
+  assert.equal(localCatalog.json().provider, "ollama");
+  assert.deepEqual(
+    localCatalog.json().models.map((model: any) => model.id),
+    ["llama3.1:8b", "qwen3:8b"],
+  );
+});
+
+test("Builder API lists OpenAI-compatible provider models from /models", async (t) => {
+  const workspaceRoot = await createWorkspaceFixture();
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const app = buildApp({ workspaceRoot });
+  t.after(() => app.close());
+
+  const providerServer = createServer((request, response) => {
+    if (request.url === "/api/v1/models" || request.url === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          data: [
+            {
+              id: "openai/gpt-4.1-mini",
+              name: "GPT 4.1 Mini",
+              description: "Modelo oficial retornado pelo provider.",
+              context_length: 128000,
+            },
+            {
+              id: "anthropic/claude-sonnet-4",
+              name: "Claude Sonnet 4",
+              context_length: 200000,
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise<void>((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
+  t.after(() => providerServer.close());
+  const address = providerServer.address() as AddressInfo;
+
+  const openRouterCatalog = await app.inject({
+    method: "GET",
+    url:
+      "/llm-adapters/openrouter/models?" +
+      new URLSearchParams({
+        baseUrl: `http://127.0.0.1:${address.port}/api/v1`,
+      }).toString(),
+  });
+  assert.equal(openRouterCatalog.statusCode, 200);
+  assert.equal(openRouterCatalog.json().format, "agent-flow-builder.llm-model-catalog.v1");
+  assert.equal(openRouterCatalog.json().status, "ok");
+  assert.equal(openRouterCatalog.json().provider, "openrouter");
+  assert.deepEqual(
+    openRouterCatalog.json().models.map((model: any) => model.id),
+    ["anthropic/claude-sonnet-4", "openai/gpt-4.1-mini"],
+  );
+  assert.equal(openRouterCatalog.json().models[1].contextLength, 128000);
+
+  const opencodeCatalog = await app.inject({
+    method: "GET",
+    url:
+      "/llm-adapters/opencode-zen/models?" +
+      new URLSearchParams({
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      }).toString(),
+  });
+  assert.equal(opencodeCatalog.statusCode, 200);
+  assert.equal(opencodeCatalog.json().status, "ok");
+  assert.equal(opencodeCatalog.json().provider, "openai-compatible");
+  assert.equal(opencodeCatalog.json().modelCount, 2);
+
+  const adapters = await app.inject({
+    method: "GET",
+    url: "/llm-adapters",
+  });
+  assert.equal(adapters.statusCode, 200);
+  const opencodeGo = adapters.json().adapters.find((adapter: any) => adapter.id === "opencode-go");
+  const opencodeZen = adapters.json().adapters.find((adapter: any) => adapter.id === "opencode-zen");
+  assert.equal(opencodeGo.defaultBaseUrl, "https://opencode.ai/zen/go/v1");
+  assert.equal(opencodeZen.defaultBaseUrl, "https://opencode.ai/zen/v1");
 });
 
 test("Builder API prepares local Ollama models through the Docker runtime profile", async (t) => {
@@ -7574,7 +7669,7 @@ test("Builder API validates VM runner and image manifests without executing user
   );
 });
 
-test("Builder API creates a new flow workspace from the starter template", async (t) => {
+test("Builder API creates a blank new flow workspace", async (t) => {
   const workspaceRoot = await createWorkspaceFixture();
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
 
@@ -7590,8 +7685,8 @@ test("Builder API creates a new flow workspace from the starter template", async
   assert.equal(created.statusCode, 200);
   assert.equal(created.json().flow.id, "new-agent");
   assert.equal(created.json().flow.name, "Novo Agente");
-  assert.equal(created.json().flow.nodes.some((node: { type: string }) => node.type === "switch"), true);
-  assert.equal(created.json().flow.nodes.some((node: { type: string }) => node.type === "human_input"), true);
+  assert.deepEqual(created.json().flow.nodes, []);
+  assert.deepEqual(created.json().flow.edges, []);
   await access(path.join(workspaceRoot, "flows", "new-agent", "agent.flow.json"));
   await access(path.join(workspaceRoot, "flows", "new-agent", "prompts", "system.md"));
   await access(path.join(workspaceRoot, "flows", "new-agent", "schemas", "session_state.schema.json"));
@@ -7605,8 +7700,8 @@ test("Builder API creates a new flow workspace from the starter template", async
 
   const validated = await app.inject({ method: "POST", url: "/flows/new-agent/validate" });
   assert.equal(validated.statusCode, 200);
-  assert.equal(validated.json().status, "ok");
-  assert.equal(validated.json().summary.errors, 0);
+  assert.equal(validated.json().status, "error");
+  assert.ok(validated.json().summary.errors > 0);
 
   const generated = await app.inject({
     method: "POST",
@@ -7614,8 +7709,9 @@ test("Builder API creates a new flow workspace from the starter template", async
     headers: { "content-type": "application/json" },
     payload: { outDir: "generated/new-agent-runtime" },
   });
-  assert.equal(generated.statusCode, 200);
-  await access(path.join(workspaceRoot, "generated", "new-agent-runtime", "app", "graph.py"));
+  assert.equal(generated.statusCode, 422);
+  assert.equal(generated.json().error, "workspace_error");
+  assert.match(generated.json().message, /ainda não está pronto para geração/);
 
   const duplicate = await app.inject({
     method: "POST",
@@ -7634,6 +7730,25 @@ test("Builder API creates a new flow workspace from the starter template", async
   });
   assert.equal(invalid.statusCode, 422);
   assert.equal(invalid.json().error, "workspace_error");
+
+  const deleted = await app.inject({ method: "DELETE", url: "/flows/new-agent" });
+  assert.equal(deleted.statusCode, 200);
+  assert.equal(deleted.json().flowId, "new-agent");
+  assert.equal(deleted.json().path, "flows/new-agent/agent.flow.json");
+  await assert.rejects(access(path.join(workspaceRoot, "flows", "new-agent", "agent.flow.json")));
+
+  await mkdir(path.join(workspaceRoot, "flows", "broken-flow"), { recursive: true });
+  await writeFile(path.join(workspaceRoot, "flows", "broken-flow", "agent.flow.json"), "{", "utf-8");
+  const listedWithInvalid = await app.inject({ method: "GET", url: "/flows" });
+  assert.equal(listedWithInvalid.json().flows.some((flow: { id: string; valid: boolean }) => flow.id === "broken-flow" && !flow.valid), true);
+  const deletedInvalid = await app.inject({ method: "DELETE", url: "/flows/broken-flow" });
+  assert.equal(deletedInvalid.statusCode, 200);
+  assert.equal(deletedInvalid.json().flowId, "broken-flow");
+  await assert.rejects(access(path.join(workspaceRoot, "flows", "broken-flow", "agent.flow.json")));
+
+  const missingDelete = await app.inject({ method: "DELETE", url: "/flows/new-agent" });
+  assert.equal(missingDelete.statusCode, 404);
+  assert.equal(missingDelete.json().error, "workspace_error");
 });
 
 test("Builder API reads, validates and generates a runtime manifest bundle", async (t) => {
@@ -7653,9 +7768,13 @@ test("Builder API reads, validates and generates a runtime manifest bundle", asy
 
   const supportFlow = await app.inject({
     method: "POST",
-    url: "/flows",
+    url: "/catalog/agent-templates/create-flow",
     headers: { "content-type": "application/json" },
-    payload: { id: "support-agent", name: "Support Agent" },
+    payload: {
+      itemId: "guided-conversation-agent",
+      id: "support-agent",
+      name: "Support Agent",
+    },
   });
   assert.equal(supportFlow.statusCode, 200);
 
@@ -8202,6 +8321,11 @@ test("Builder API saves and applies local catalog items", async (t) => {
     catalog
       .json()
       .items.some((item: { kind: string; id: string }) => item.kind === "agent_template" && item.id === "content-question-generator-agent"),
+  );
+  assert.ok(
+    catalog
+      .json()
+      .items.some((item: { kind: string; id: string }) => item.kind === "agent_template" && item.id === "guided-conversation-agent"),
   );
   const builtinComplexAgentTemplate = catalog
     .json()
