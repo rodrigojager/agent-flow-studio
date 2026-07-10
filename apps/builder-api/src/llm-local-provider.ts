@@ -338,6 +338,20 @@ async function listOpenAiCompatibleModelCatalog(
   }
 
   const apiKey = resolveAdapterApiKey(adapter, query);
+  if (!apiKey && providerModelCatalogRequiresApiKey(adapter, baseUrl)) {
+    const apiKeyEnv = query.apiKeyEnv?.trim() || adapter.apiKeyEnv || "a variável de API key do provider";
+    return modelCatalogResult({
+      adapter,
+      provider: openAiCompatibleProvider(adapter),
+      status: "blocked",
+      ok: false,
+      checkedAt,
+      baseUrl,
+      models: fallbackModels(adapter),
+      message: `Configure ${apiKeyEnv} para listar modelos.`,
+      nextActions: [`Configure ${apiKeyEnv} no ambiente do Builder ou mantenha o modelo informado manualmente.`],
+    });
+  }
   const headers: Record<string, string> = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
   try {
     const response = await fetchJsonWithTimeout<OpenAiCompatibleModelsResponse>(modelsUrl, 5000, headers);
@@ -520,6 +534,19 @@ function openAiCompatibleModelsUrl(baseUrl: string): string {
     throw new Error("Unsupported URL protocol");
   }
   return new URL("models", parsed).toString();
+}
+
+function providerModelCatalogRequiresApiKey(adapter: LlmAdapterCatalogItem, baseUrl: string): boolean {
+  let hostname = "";
+  try {
+    hostname = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return (
+    (adapter.id === "openai" && hostname === "api.openai.com") ||
+    (adapter.id === "openrouter" && (hostname === "openrouter.ai" || hostname.endsWith(".openrouter.ai")))
+  );
 }
 
 function openAiCompatibleProvider(adapter: LlmAdapterCatalogItem): LlmModelCatalogResult["provider"] {

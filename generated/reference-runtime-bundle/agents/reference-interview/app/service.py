@@ -28,7 +28,7 @@ from app.graph import (
     SWITCH_NODE_IDS,
     TRANSFORM_JSON_NODE_IDS,
 )
-from app.generated_flow import AGENT_ID
+from app.generated_flow import AGENT_ID, FLOW_TRIGGERS
 from app.models import AgentJob, AgentJobSchedule, AgentMessage, AgentSession
 from app.settings import Settings
 
@@ -443,7 +443,13 @@ class ReferenceAgentService:
             },
             row.session_id,
         )
-        repo.update_session_state(db, row, status=result["status"], phase=result["phase"], turn=row.turn)
+        next_status = str(result.get("status") or "active")
+        next_phase = str(result.get("phase") or "started")
+        if next_status == "created":
+            next_status = "active"
+        if next_phase == "created":
+            next_phase = "started"
+        repo.update_session_state(db, row, status=next_status, phase=next_phase, turn=row.turn)
         assistant = result["assistant_message"]
         message = repo.append_message(
             db,
@@ -689,6 +695,234 @@ class ReferenceAgentService:
             raise HTTPException(status_code=404, detail="Job não encontrado.")
         return job_view(row)
 
+    def _normalize_flow_trigger(self, raw: Any) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        trigger_id = str(raw.get("id") or "").strip()
+        if not trigger_id:
+            return None
+        if raw.get("enabled") is False:
+            return None
+        kind = str(raw.get("kind") or "manual").strip().lower()
+        if kind == "manual":
+            return None
+        if kind not in {"interval", "cron", "event"}:
+            return None
+        interval_seconds = max(60, int(raw.get("intervalSeconds") or raw.get("interval_seconds") or 300))
+        normalized: dict[str, Any] = {
+            "id": trigger_id,
+            "kind": kind,
+            "label": str(raw.get("label") or trigger_id),
+            "description": str(raw.get("description") or ""),
+            "intervalSeconds": interval_seconds,
+            "userMessage": str(raw.get("userMessage") or raw.get("user_message") or "").strip(),
+            "input": raw.get("input") if isinstance(raw.get("input"), dict) else {},
+            "metadata": raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {},
+            "maxTurns": max(1, min(50, int(raw.get("maxTurns") or raw.get("max_turns") or 3))),
+            "maxAttempts": max(1, min(10, int(raw.get("maxAttempts") or raw.get("max_attempts") or 3))),
+            "autoFinish": bool(raw.get("autoFinish") or raw.get("auto_finish") or False),
+        }
+        if kind == "cron":
+            normalized["cronExpression"] = _normalize_cron_expression(str(raw.get("cronExpression") or raw.get("cron_expression") or ""))
+        if kind == "event":
+            normalized["eventType"] = _normalize_schedule_event_type(str(raw.get("eventType") or raw.get("event_type") or ""))
+        return normalized
+
+    def _flow_trigger_schedule_config(self, trigger: dict[str, Any]) -> dict[str, Any]:
+        kind = str(trigger.get("kind") or "interval")
+        if kind == "cron":
+            cron_expression = str(trigger.get("cronExpression") or "")
+            return {
+                "trigger_type": "cron",
+                "interval_seconds": int(trigger.get("intervalSeconds") or 300),
+                "cron_expression": cron_expression,
+                "next_run_at": _next_cron_run(cron_expression),
+            }
+        if kind == "event":
+            return {
+                "trigger_type": "event",
+                "interval_seconds": int(trigger.get("intervalSeconds") or 300),
+                "cron_expression": str(trigger.get("eventType") or ""),
+                "next_run_at": None,
+            }
+        return {
+            "trigger_type": "interval",
+            "interval_seconds": int(trigger.get("intervalSeconds") or 300),
+            "cron_expression": None,
+            "next_run_at": datetime.now(timezone.utc),
+        }
+
+    def _flow_trigger_schedule_payload(self, trigger: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "source": "flow_trigger",
+            "flow_trigger": trigger,
+        }
+
+    def _flow_trigger_schedules_by_id(self, db: Session) -> dict[str, AgentJobSchedule]:
+        schedules: dict[str, AgentJobSchedule] = {}
+        for row in repo.list_job_schedules(db, limit=1000):
+            if row.agent_id != AGENT_ID or row.kind != "flow_trigger":
+                continue
+            payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+            trigger = payload.get("flow_trigger") if isinstance(payload.get("flow_trigger"), dict) else {}
+            trigger_id = str(trigger.get("id") or "").strip()
+            if trigger_id and trigger_id not in schedules:
+                schedules[trigger_id] = row
+        return schedules
+
+    def ensure_flow_trigger_schedules(self, db: Session) -> dict[str, Any]:
+        desired: dict[str, dict[str, Any]] = {}
+        skipped: list[dict[str, Any]] = []
+        for raw in FLOW_TRIGGERS:
+            try:
+                trigger = self._normalize_flow_trigger(raw)
+            except Exception as exc:
+                skipped.append({"id": str(raw.get("id") if isinstance(raw, dict) else ""), "error": str(exc)})
+                continue
+            if trigger:
+                desired[str(trigger["id"])] = trigger
+
+        existing = self._flow_trigger_schedules_by_id(db)
+        created: list[dict[str, Any]] = []
+        updated: list[dict[str, Any]] = []
+        disabled: list[dict[str, Any]] = []
+
+        for trigger_id, schedule in existing.items():
+            if trigger_id not in desired and schedule.status == "enabled":
+                repo.disable_job_schedule(db, schedule)
+                repo.append_event(
+                    db,
+                    session_id=schedule.session_id,
+                    agent_id=schedule.agent_id,
+                    event_type="flow_trigger_schedule_disabled",
+                    node=None,
+                    payload={"trigger_id": trigger_id, "schedule_id": schedule.schedule_id},
+                )
+                disabled.append(job_schedule_view(schedule))
+
+        for trigger_id, trigger in desired.items():
+            config = self._flow_trigger_schedule_config(trigger)
+            payload = self._flow_trigger_schedule_payload(trigger)
+            schedule = existing.get(trigger_id)
+            if schedule:
+                schedule.status = "enabled"
+                schedule.trigger_type = config["trigger_type"]
+                schedule.interval_seconds = max(60, int(config["interval_seconds"] or 60))
+                schedule.cron_expression = config["cron_expression"]
+                schedule.max_attempts = int(trigger.get("maxAttempts") or 3)
+                schedule.payload_json = payload
+                if schedule.trigger_type == "event":
+                    schedule.next_run_at = None
+                elif schedule.next_run_at is None:
+                    schedule.next_run_at = config["next_run_at"]
+                db.flush()
+                repo.append_event(
+                    db,
+                    session_id=schedule.session_id,
+                    agent_id=schedule.agent_id,
+                    event_type="flow_trigger_schedule_synced",
+                    node=None,
+                    payload={"trigger_id": trigger_id, "schedule_id": schedule.schedule_id, "trigger_type": schedule.trigger_type},
+                )
+                updated.append(job_schedule_view(schedule))
+                continue
+
+            control = self.create_session(
+                db,
+                metadata={
+                    "source": "flow_trigger_control",
+                    "trigger_id": trigger_id,
+                    "trigger": trigger,
+                },
+                max_turns=1,
+                auto_start=False,
+            )["session"]
+            schedule = repo.create_job_schedule(
+                db,
+                agent_id=AGENT_ID,
+                session_id=str(control["session_id"]),
+                kind="flow_trigger",
+                interval_seconds=int(config["interval_seconds"]),
+                trigger_type=str(config["trigger_type"]),
+                cron_expression=config["cron_expression"],
+                payload_json=payload,
+                max_attempts=int(trigger.get("maxAttempts") or 3),
+                next_run_at=config["next_run_at"],
+            )
+            repo.append_event(
+                db,
+                session_id=schedule.session_id,
+                agent_id=schedule.agent_id,
+                event_type="flow_trigger_schedule_created",
+                node=None,
+                payload={
+                    "trigger_id": trigger_id,
+                    "schedule_id": schedule.schedule_id,
+                    "trigger_type": schedule.trigger_type,
+                    "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
+                },
+            )
+            created.append(job_schedule_view(schedule))
+        return {
+            "total": len(desired),
+            "created": created,
+            "updated": updated,
+            "disabled": disabled,
+            "skipped": skipped,
+        }
+
+    def _run_flow_trigger_job(self, db: Session, job: AgentJob) -> dict[str, Any]:
+        payload = dict(job.payload_json or {})
+        trigger = payload.get("flow_trigger") if isinstance(payload.get("flow_trigger"), dict) else {}
+        trigger_id = str(trigger.get("id") or "")
+        execution = self.create_session(
+            db,
+            metadata={
+                "source": "flow_trigger",
+                "trigger_id": trigger_id,
+                "trigger_label": trigger.get("label"),
+                "schedule_id": payload.get("schedule_id"),
+                "job_id": job.job_id,
+                "input": trigger.get("input") if isinstance(trigger.get("input"), dict) else {},
+                "trigger_metadata": trigger.get("metadata") if isinstance(trigger.get("metadata"), dict) else {},
+            },
+            max_turns=max(1, min(50, int(trigger.get("maxTurns") or 3))),
+            auto_start=False,
+        )["session"]
+        execution_session_id = str(execution["session_id"])
+        repo.append_event(
+            db,
+            session_id=job.session_id,
+            agent_id=job.agent_id,
+            event_type="flow_trigger_started",
+            node=None,
+            payload={"trigger_id": trigger_id, "job_id": job.job_id, "execution_session_id": execution_session_id},
+        )
+        start_result = self.start_session(db, execution_session_id)
+        turn_result: dict[str, Any] | None = None
+        user_message = str(trigger.get("userMessage") or "").strip()
+        if user_message:
+            turn_result = self.process_turn(db, execution_session_id, user_message)
+        finish_result: dict[str, Any] | None = None
+        if bool(trigger.get("autoFinish")):
+            finish_result = self.finish_session(db, execution_session_id)
+        repo.append_event(
+            db,
+            session_id=job.session_id,
+            agent_id=job.agent_id,
+            event_type="flow_trigger_completed",
+            node=None,
+            payload={"trigger_id": trigger_id, "job_id": job.job_id, "execution_session_id": execution_session_id},
+        )
+        return {
+            "kind": job.kind,
+            "trigger_id": trigger_id,
+            "execution_session_id": execution_session_id,
+            "started_messages": len(start_result.get("messages") or []),
+            "turn_ran": turn_result is not None,
+            "auto_finish": finish_result is not None,
+        }
+
     def run_job(
         self,
         db: Session,
@@ -712,6 +946,26 @@ class ReferenceAgentService:
                 raise HTTPException(status_code=409, detail="Job já está em execução por outro worker.")
         else:
             repo.mark_job_running(db, job)
+        if job.kind == "flow_trigger":
+            try:
+                result = self._run_flow_trigger_job(db, job)
+                repo.mark_job_finished(db, job, status="succeeded", result_json=result)
+                return {"job": job_view(job)}
+            except Exception as exc:
+                result = {
+                    "kind": job.kind,
+                    "error": str(exc),
+                }
+                repo.mark_job_finished(db, job, status="failed", result_json=result)
+                repo.append_event(
+                    db,
+                    session_id=job.session_id,
+                    agent_id=job.agent_id,
+                    event_type="flow_trigger_failed",
+                    node=None,
+                    payload={"kind": job.kind, "job_id": job.job_id, "error": str(exc)},
+                )
+                raise
         transcript = self.transcript(db, job.session_id)
         events = self.events(db, job.session_id)
         assistant_messages = [message for message in transcript if message.get("role") == "assistant"]

@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     auth_audit_path: str = ""
     auto_create_tables: bool = True
     log_level: str = "INFO"
+    worker_interval_seconds: float = 5.0
+    worker_limit: int = 20
+    worker_retry_delay_seconds: float = 5.0
+    worker_lease_seconds: float = 60.0
+    worker_cleanup_enabled: bool = False
+    worker_cleanup_older_than_hours: float = 168.0
+    worker_cleanup_limit: int = 100
+    worker_cleanup_statuses: str = "succeeded,failed"
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
     langsmith_project: str = ""

@@ -5,6 +5,7 @@ const appUrl = process.env.BUILDER_UI_URL ?? "http://127.0.0.1:5273";
 const apiUrl = process.env.BUILDER_API_URL ?? "http://127.0.0.1:3433";
 const viewports = [
   { name: "desktop", width: 1440, height: 900 },
+  { name: "electron", width: 1180, height: 800 },
   { name: "compact", width: 390, height: 844 },
 ];
 const themes = ["light", "dark"];
@@ -760,7 +761,7 @@ test("canvas batch editor updates advanced node families", async ({ page }, test
   await openBuilder(page, "light", viewports[0]);
 
   const createdIds = [];
-  for (const paletteLabel of ["Transform", "DB Query", "DB Save", "Arquivo", "RAG", "Approval", "Scoring", "Analytics"]) {
+  for (const paletteLabel of ["Transform", "SQL Query", "DB Save", "Arquivo", "RAG", "Approval", "Scoring", "Analytics"]) {
     await page.locator(".palette-item", { hasText: paletteLabel }).click();
     await expect(page.locator("footer[role='status']")).toContainText("criado");
     const nodeId = await page.locator(".react-flow__node.selected").getAttribute("data-id");
@@ -907,7 +908,7 @@ test("canvas batch editor updates advanced node families", async ({ page }, test
   await expect(nodeLabel("Result path").locator("input")).toHaveValue("analytics.batch");
 
   const presetTargetIds = [];
-  for (const paletteLabel of ["Transform", "DB Query"]) {
+  for (const paletteLabel of ["Transform", "SQL Query"]) {
     await page.locator(".palette-item", { hasText: paletteLabel }).click();
     await expect(page.locator("footer[role='status']")).toContainText("criado");
     const nodeId = await page.locator(".react-flow__node.selected").getAttribute("data-id");
@@ -1163,7 +1164,7 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   expect(storedSchemaPatternLibrary.items[0].schema.properties.messages).toBeTruthy();
   await expect(schemaPatterns).toContainText("Rascunho");
   await schemaPatterns.getByRole("button", { name: "Aprovar Sessão entrevista enriquecida" }).click();
-  await expect(schemaPatterns).toContainText('Padrão local "Sessão entrevista enriquecida" aprovado.');
+  await expect(schemaPatterns).toContainText('Revisão "Aprovar" registrada em "Sessão entrevista enriquecida".');
   const approvedSchemaPatternLibrary = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("agent-flow-builder.schema-pattern-library.v1") || "null"),
   );
@@ -1365,7 +1366,7 @@ test("assets panel edits prompt and schema metadata visually", async ({ page }) 
   await expect(schemaPatterns).toContainText("histórico sincronizada");
   await expect(schemaPatterns).toContainText("Conflitos compartilhados: 1 aberto");
   await schemaPatterns.getByLabel("Nome do curador local de padrões de schema").fill("schema-curator");
-  await schemaPatterns.getByRole("button", { name: /^Marcar resolvido$/ }).click();
+  await schemaPatterns.getByRole("button", { name: /^Aceitar atual$/ }).click();
   await expect(schemaPatterns).toContainText("resolvido por schema-curator");
   await expect(schemaPatterns).toContainText("Conflitos compartilhados: 0 aberto");
   await expect(schemaPatterns).toContainText("último por schema-curator");
@@ -1483,6 +1484,9 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
   const originalFlowResponse = await request.get(`${apiUrl}/flows/reference-interview`);
   await expectApiOk(originalFlowResponse, "load original reference flow before catalog test");
   const originalFlow = (await originalFlowResponse.json()).flow;
+  const originalRuntimeManifestResponse = await request.get(`${apiUrl}/runtime-manifest`);
+  await expectApiOk(originalRuntimeManifestResponse, "load original runtime manifest before catalog test");
+  const originalRuntimeManifest = (await originalRuntimeManifestResponse.json()).manifest;
   const firstRevision = await request.post(`${apiUrl}/catalog/items`, {
     data: {
       kind: "prompt",
@@ -1897,6 +1901,14 @@ test("catalog panel saves local assets and applies a tool", async ({ page, reque
     await request.put(`${apiUrl}/flows/reference-interview`, { data: originalFlow }),
     "restore original reference flow after catalog test",
   );
+  await expectApiOk(
+    await request.put(`${apiUrl}/runtime-manifest`, { data: originalRuntimeManifest }),
+    "restore original runtime manifest after catalog test",
+  );
+  await expectApiOk(
+    await request.delete(`${apiUrl}/flows/catalog-template-ui-agent`),
+    "remove temporary catalog flow after catalog test",
+  );
   expect(pageErrors, "Unexpected browser errors while using local catalog").toEqual([]);
 });
 
@@ -2025,7 +2037,8 @@ test("runtime manifest editor saves visual changes", async ({ page }) => {
   await expect(runtimePanel.getByText("Mapa do bundle multiagente")).toBeVisible();
   await expect(runtimePanel.getByText("/reference-interview/sessions")).toBeVisible();
   await expect(runtimePanel.getByText("agents/reference-interview")).toBeVisible();
-  await expect(runtimePanel.getByText("Validado contra o flow do workspace.")).toBeVisible();
+  const referenceAgentCard = runtimePanel.locator(".bundle-agent-card", { hasText: "agents/reference-interview" });
+  await expect(referenceAgentCard.getByText("Validado contra o flow do workspace.")).toBeVisible();
   await page.request.post(`${apiUrl}/flows/reference-interview/generate-langgraph-sandbox`, {
     data: { outDir: "generated/reference-interview-langgraph-sandbox" },
   });
@@ -4447,7 +4460,7 @@ async function openBuilder(page, theme, viewport) {
 
   await expect(page.getByText("Agent Flow Builder")).toBeVisible();
   await page.locator("label.flow-select select").selectOption("reference-interview");
-  await expect(page.getByRole("button", { name: /Agente de Referência/ })).toBeVisible();
+  await expect(page.locator(".flow-row", { hasText: "Agente de Referência" })).toBeVisible();
   await expect(page.locator(".canvas-node-chip").first()).toBeVisible();
   await expect(page.locator(".app-shell")).toHaveAttribute("data-theme", theme);
 }

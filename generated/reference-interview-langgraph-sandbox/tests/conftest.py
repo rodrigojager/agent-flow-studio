@@ -32,6 +32,14 @@ def set_test_env(db_path: str) -> None:
     os.environ["SAFETY_PROVIDER_FAIL_CLOSED"] = "false"
     os.environ["SAFETY_PROVIDER_HEADERS_JSON"] = ""
     os.environ["AUTO_CREATE_TABLES"] = "true"
+    os.environ["WORKER_INTERVAL_SECONDS"] = "5"
+    os.environ["WORKER_LIMIT"] = "20"
+    os.environ["WORKER_RETRY_DELAY_SECONDS"] = "5"
+    os.environ["WORKER_LEASE_SECONDS"] = "60"
+    os.environ["WORKER_CLEANUP_ENABLED"] = "false"
+    os.environ["WORKER_CLEANUP_OLDER_THAN_HOURS"] = "168"
+    os.environ["WORKER_CLEANUP_LIMIT"] = "100"
+    os.environ["WORKER_CLEANUP_STATUSES"] = "succeeded,failed"
     os.environ["LANGSMITH_TRACING"] = "false"
 
     from app.settings import get_settings

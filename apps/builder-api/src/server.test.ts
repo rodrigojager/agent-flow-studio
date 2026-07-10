@@ -34,6 +34,23 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : {};
 }
 
+test("Builder API preserves Fastify client error status codes", async (t) => {
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "agent-builder-api-errors-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+  const app = buildApp({ workspaceRoot });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/flows/missing/validate",
+    headers: { "content-type": "application/xml" },
+    payload: "unsupported",
+  });
+
+  assert.equal(response.statusCode, 415);
+  assert.equal(response.json().error, "request_error");
+});
+
 test("Builder API shares Studio node pins with secret-like fields redacted", async (t) => {
   const workspaceRoot = await createWorkspaceFixture();
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
@@ -6480,6 +6497,24 @@ test("Builder API lists OpenAI-compatible provider models from /models", async (
   await new Promise<void>((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
   t.after(() => providerServer.close());
   const address = providerServer.address() as AddressInfo;
+
+  const previousOpenAiKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => {
+    if (previousOpenAiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = previousOpenAiKey;
+    }
+  });
+
+  const openAiWithoutKey = await app.inject({
+    method: "GET",
+    url: "/llm-adapters/openai/models",
+  });
+  assert.equal(openAiWithoutKey.statusCode, 200);
+  assert.equal(openAiWithoutKey.json().status, "blocked");
+  assert.match(openAiWithoutKey.json().message, /OPENAI_API_KEY/);
 
   const openRouterCatalog = await app.inject({
     method: "GET",

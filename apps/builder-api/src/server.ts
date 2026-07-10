@@ -515,6 +515,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         details: serializeErrorDetails(error.details),
       });
     }
+    const clientStatusCode = isRecord(error) && typeof error.statusCode === "number" ? error.statusCode : null;
+    if (clientStatusCode !== null && clientStatusCode >= 400 && clientStatusCode < 500) {
+      request.log.warn(error);
+      return reply.status(clientStatusCode).send({
+        error: "request_error",
+        message: error instanceof Error ? error.message : "Requisição inválida para a Builder API.",
+      });
+    }
     request.log.error(error);
     return reply.status(500).send({
       error: "internal_error",

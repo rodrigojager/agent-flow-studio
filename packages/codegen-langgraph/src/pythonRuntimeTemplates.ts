@@ -153,7 +153,7 @@ export function renderPythonRuntimeFiles(flow: AgentFlow): RuntimeFile[] {
     { relativePath: "app/main.py", content: renderMain(flow) },
     { relativePath: "app/langgraph_app.py", content: renderLangGraphApp() },
     { relativePath: "tests/conftest.py", content: renderTestConftest() },
-    { relativePath: "tests/test_generated_runtime.py", content: renderRuntimeTest(flow) },
+    { relativePath: "tests/test_generated_runtime.py", content: `${renderRuntimeTest(flow).trimEnd()}\n` },
     { relativePath: "tests/test_langgraph_platform.py", content: renderLangGraphPlatformTest() },
   ];
 }

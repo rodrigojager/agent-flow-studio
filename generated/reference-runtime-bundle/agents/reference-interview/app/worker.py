@@ -66,10 +66,13 @@ def process_pending_jobs(
     cleanup_older_than_hours: float = 168.0,
     cleanup_limit: int = 100,
     cleanup_statuses: list[str] | None = None,
+    bootstrap_flow_triggers: bool = True,
 ) -> dict[str, Any]:
     cleanup_result: dict[str, Any] | None = None
     agent_id = getattr(getattr(service, "settings", None), "agent_id", None)
     with session_scope() as db:
+        if bootstrap_flow_triggers and hasattr(service, "ensure_flow_trigger_schedules"):
+            service.ensure_flow_trigger_schedules(db)
         if hasattr(service, "run_due_job_schedules"):
             service.run_due_job_schedules(db, limit=limit)
         claimed_jobs = repo.claim_due_jobs(

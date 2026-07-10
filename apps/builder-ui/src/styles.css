@@ -8598,6 +8598,98 @@ button:disabled {
   background: color-mix(in srgb, var(--warning-soft) 54%, var(--panel-bg));
 }
 
+@media (min-width: 761px) and (max-width: 1350px) {
+  .app-shell {
+    grid-template-rows: auto minmax(0, 1fr) 36px;
+  }
+
+  .topbar {
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+    gap: 12px;
+    padding: 8px 12px;
+  }
+
+  .brand-block span {
+    display: none;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 7px;
+    overflow: visible;
+  }
+
+  .toolbar-flow-picker {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .toolbar > .toolbar-group:not(.toolbar-primary-actions) {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .toolbar-primary-actions {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    overflow-x: auto;
+    padding-bottom: 1px;
+  }
+
+  .toolbar-theme {
+    grid-column: 3;
+    grid-row: 1;
+    margin-left: 0;
+  }
+
+  .flow-select {
+    width: 100%;
+  }
+
+  .flow-select select {
+    width: min(100%, 240px);
+  }
+
+  .toolbar .command-button {
+    min-width: 0;
+    padding-inline: 10px;
+  }
+
+  .workspace {
+    grid-template-columns: 260px minmax(460px, 1fr) 340px;
+  }
+
+  .tabs {
+    grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  }
+
+  .canvas-toolbar {
+    grid-template-columns: minmax(120px, 1fr) minmax(96px, 116px) auto auto auto;
+  }
+
+  .canvas-clear-button,
+  .canvas-layout-button {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+  }
+
+  .canvas-clear-button {
+    font-size: 0;
+  }
+
+  .canvas-clear-button::after {
+    content: "×";
+    font-size: 17px;
+    line-height: 1;
+  }
+
+  .canvas-layout-button span {
+    display: none;
+  }
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     min-width: 0;

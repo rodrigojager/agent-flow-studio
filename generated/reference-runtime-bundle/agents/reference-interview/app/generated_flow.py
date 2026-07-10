@@ -17,3 +17,4 @@ EDGES = [
     {"from": item["from"], "to": item["to"], "condition": item.get("condition")}
     for item in FLOW["edges"]
 ]
+FLOW_TRIGGERS = list(FLOW.get("triggers") or [])

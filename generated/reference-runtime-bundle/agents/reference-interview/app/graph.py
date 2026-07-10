@@ -2,6 +2,7 @@ import atexit
 import inspect
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -636,6 +637,34 @@ def build_graph(
     def is_sql_identifier(value: str) -> bool:
         first = value[:1]
         return bool(first) and (first.isalpha() or first == "_") and all(part.isalnum() or part == "_" for part in value)
+
+    def classify_sql_statement(query: str) -> str:
+        cleaned = re.sub(r"/\*[\s\S]*?\*/", " ", str(query or ""))
+        cleaned = re.sub(r"--.*$", " ", cleaned, flags=re.MULTILINE).strip().lower()
+        match = re.match(r"([a-z_]+)", cleaned)
+        first = match.group(1) if match else ""
+        if first in {"select", "with", "show", "pragma", "explain", "describe"}:
+            return "read"
+        if first in {"insert", "update", "delete", "merge", "upsert", "replace", "truncate"}:
+            return "mutation"
+        if first in {"create", "alter", "drop"}:
+            return "schema"
+        return "raw"
+
+    def validate_sql_mode(query: str, mode: str | None) -> dict[str, Any] | None:
+        expected = str(mode or "auto").strip().lower()
+        if expected in {"", "auto", "raw"}:
+            return None
+        actual = classify_sql_statement(query)
+        if actual == expected:
+            return None
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "sql_mode_mismatch",
+            "expected": expected,
+            "actual": actual,
+        }
 
     def remember_database_result(state: ReferenceState, node_id: str, result_path: str, result: dict[str, Any]) -> ReferenceState:
         updates: dict[str, Any] = {}
@@ -3095,6 +3124,7 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
     def make_database_query_node(config: dict[str, Any]):
         node_id = config["id"]
         query = str(config.get("query") or "")
+        sql_mode = str(config.get("sqlMode") or "auto")
         params_path = str(config.get("paramsPath") or "")
         result_path = str(config.get("resultPath") or f"database.{node_id}")
         max_rows = int(config.get("maxRows") or 50)
@@ -3110,6 +3140,9 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
                     "reason": "query_not_configured",
                 }
                 return remember_database_result(state, node_id, result_path, result_payload)
+            mode_violation = validate_sql_mode(query, sql_mode)
+            if mode_violation is not None:
+                return remember_database_result(state, node_id, result_path, mode_violation)
 
             params_value = state_path_value(state, params_path) if params_path else {}
             params = normalized_params(params_value, state)
@@ -3144,6 +3177,7 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
         node_id = config["id"]
         table = str(config.get("table") or "agent_node_records")
         query = str(config.get("query") or "")
+        sql_mode = str(config.get("sqlMode") or "auto")
         data_path = str(config.get("dataPath") or "assistant_message")
         params_path = str(config.get("paramsPath") or data_path)
         result_path = str(config.get("resultPath") or f"database.{node_id}")
@@ -3157,6 +3191,11 @@ print(json.dumps(response, ensure_ascii=False, default=_json_default))
             try:
                 with graph_session_scope() as db:
                     if query.strip():
+                        mode_violation = validate_sql_mode(query, sql_mode)
+                        if mode_violation is not None:
+                            result_payload = mode_violation
+                            result_payload["table"] = table
+                            return remember_database_result(state, node_id, result_path, result_payload)
                         result = db.execute(text(query), params)
                         result_payload = {
                             "ok": True,

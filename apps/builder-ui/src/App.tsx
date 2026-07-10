@@ -4975,6 +4975,7 @@ const inspectorCommandTabs: { tab: InspectorTab; label: string; detail: string; 
 const palette = nodeTypeOptions;
 const schemaPropertyTypeOptions = ["string", "integer", "number", "boolean", "object", "array"] as const;
 const themeStorageKey = "agent-flow-builder.theme";
+const selectedFlowStorageKey = "agent-flow-builder.selected-flow.v1";
 const scenarioStorageKeyPrefix = "agent-flow-builder.studio-scenarios.";
 const scenarioEvaluatorLibraryStorageKey = "agent-flow-builder.scenario-evaluators.v1";
 const scenarioDatasetStorageKeyPrefix = "agent-flow-builder.studio-datasets.";
@@ -5316,7 +5317,7 @@ export default function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
   const [flows, setFlows] = useState<FlowSummary[]>([]);
-  const [selectedFlowId, setSelectedFlowId] = useState<string>("");
+  const [selectedFlowId, setSelectedFlowId] = useState<string>(() => readStoredSelectedFlowId());
   const preserveNextLoadedStatusRef = useRef<string>("");
   const [loadedFlow, setLoadedFlow] = useState<LoadedFlow | null>(null);
   const [draftFlow, setDraftFlow] = useState<AgentFlow | null>(null);
@@ -5710,6 +5711,14 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem(themeStorageKey, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (selectedFlowId) {
+      window.localStorage.setItem(selectedFlowStorageKey, selectedFlowId);
+    } else {
+      window.localStorage.removeItem(selectedFlowStorageKey);
+    }
+  }, [selectedFlowId]);
 
   useEffect(() => {
     if (!commandPaletteOpen) {
@@ -19684,7 +19693,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                 onDeleteEdge={handleDeleteEdge}
               />
             ) : (
-              <>
+              <div className="right-panel-content">
                 {selectedCanvasNodes.length > 1 ? (
                   <CanvasBatchInspector
                     flow={draftFlow}
@@ -19772,7 +19781,7 @@ function buildDockerHistoryQuery(filters: DockerHistoryFilterForm): { limit: num
                   onOpenNodeDebug={openNodeDebugInStudio}
                   onDeleteNode={handleDeleteNode}
                 />
-              </>
+              </div>
             )
           ) : inspectorTab === "overview" ? (
             <AgentOverviewPanel
@@ -64198,6 +64207,13 @@ function closestEditableControl(target: EventTarget | null): HTMLElement | null 
     return target;
   }
   return target.closest<HTMLElement>(editableControlSelector);
+}
+
+function readStoredSelectedFlowId(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return window.localStorage.getItem(selectedFlowStorageKey)?.trim() ?? "";
 }
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {

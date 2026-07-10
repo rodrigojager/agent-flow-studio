@@ -2395,9 +2395,15 @@ export async function evaluateExternalEvaluator(payload: ExternalEvaluatorReques
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
+  const method = (init?.method ?? "GET").toUpperCase();
+  const body = init?.body ?? (method === "POST" ? "{}" : undefined);
+  if (body !== undefined && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
   applyBuilderApiKeyHeader(headers);
   const response = await fetch(`${builderApiUrl()}${path}`, {
     ...init,
+    body,
     headers,
   });
   return parseResponse<T>(response);

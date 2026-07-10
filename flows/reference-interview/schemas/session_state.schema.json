@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "session_state.schema.json",
+  "title": "ReferenceSessionState",
+  "type": "object",
+  "properties": {
+    "session_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["created", "active", "completed"] },
+    "phase": { "type": "string" },
+    "turn": { "type": "integer", "minimum": 0 },
+    "max_turns": { "type": "integer", "minimum": 1 },
+    "user_message": { "type": "string" },
+    "recent_messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": { "type": "string" },
+          "content": { "type": "string" }
+        },
+        "required": ["role", "content"]
+      }
+    }
+  },
+  "required": ["session_id", "status", "phase", "turn", "max_turns"]
+}
